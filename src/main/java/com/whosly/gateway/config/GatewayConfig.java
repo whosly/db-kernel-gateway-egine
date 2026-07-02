@@ -49,11 +49,8 @@ public class GatewayConfig {
                 return createMySqlProtocolAdapter();
             case "postgresql":
                 return createPostgreSQLProtocolAdapter();
-            case "oracle":
-                // 未来可以支持Oracle
-                return createMySqlProtocolAdapter(); // 临时返回MySQL适配器
             default:
-                return createMySqlProtocolAdapter();
+                throw new IllegalArgumentException("Unsupported gateway proxy database protocol: " + proxyDbType);
         }
     }
     

@@ -24,6 +24,7 @@ build/
 .vscode/
 .trae/
 .codebuddy/
+.cursor/
 *.iws
 *.iml
 *.ipr

@@ -1,0 +1,50 @@
+---
+description: Database wire-protocol rules for MySQL, PostgreSQL, and future protocol adapters
+globs:
+  - "src/main/java/com/whosly/gateway/adapter/**/*.java"
+  - "src/main/java/com/whosly/gateway/parser/**/*.java"
+  - "src/main/java/com/whosly/gateway/service/**/*.java"
+  - "src/main/java/com/whosly/gateway/config/**/*.java"
+  - "src/test/java/com/whosly/gateway/**/*.java"
+alwaysApply: false
+---
+
+# Database Wire-Protocol Rules
+
+Read these before changing protocol code:
+
+- `docs/rules/database-protocol-rules.md`
+- `docs/rules/ai-error-handling-rules.md`
+
+Hard rules:
+
+- Treat every database protocol as an explicit state machine.
+- Implement protocol frame/message codecs before command handlers.
+- Validate frame length, endian, message type, command type, sequence id, and
+  legal state transition before mutating session state.
+- Keep startup, capability negotiation, authentication, query execution,
+  streaming, cancellation, and termination as separate protocol phases.
+- Do not log plaintext passwords, auth responses, SCRAM proof, salts, tokens, or
+  credential-bearing URLs.
+- Do not hand-build wire packets with ad hoc string concatenation.
+- Do not parse PostgreSQL StartupMessage as a normal typed message.
+- Do not parse MySQL SSLRequest as a normal Handshake Response.
+- Do not implement a future database protocol by returning the MySQL or
+  PostgreSQL adapter as a placeholder.
+- Add or update tests before changing frame, startup, handshake, auth, command,
+  result, transaction-state, or error behavior.
+- On compile, test, runtime, protocol-spec, or user-feedback failures, follow
+  `docs/rules/ai-error-handling-rules.md`: classify, find root cause, fix one
+  cause, verify narrow-to-wide, and update rules/tests when a gap is found.
+
+Current first-phase scope:
+
+- MySQL: packet header, little-endian primitives, length-encoded values,
+  Connection Phase, HandshakeV10, SSLRequest handling, authentication exchange,
+  Command Phase, COM_QUERY, COM_INIT_DB, COM_QUIT, COM_PING, OK/ERR/EOF,
+  text resultset, status flags, SQLSTATE mapping.
+- PostgreSQL: untyped startup messages, big-endian typed messages, SSLRequest,
+  StartupMessage, authentication cycle, ParameterStatus, BackendKeyData,
+  ReadyForQuery transaction status, Simple Query, Extended Query skeleton,
+  ErrorResponse/NoticeResponse, RowDescription/DataRow, CommandComplete, Sync
+  error recovery.

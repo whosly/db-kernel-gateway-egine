@@ -1,244 +1,91 @@
-# Multi-Protocol Database Gateway Engine
+# 数据库内核网关引擎
 
-This is a proxy gateway engine that implements multiple database protocols. It uses SQL parsing and is developed in Java 17.
+这是一个 Java 17 + Spring Boot 实现的多协议数据库网关项目，目标是在网关层接入
+数据库客户端协议，并把请求转发到后端数据库。
 
-## Overview
+当前仓库正在建设 MySQL Client/Server Protocol 与 PostgreSQL
+Frontend/Backend Protocol 的协议基础。请注意：这里的 MySQL、PostgreSQL 仍在
+按 wire protocol 分阶段完善中，不能把当前实现描述为完整协议兼容。
 
-The Multi-Protocol Database Gateway Engine provides unified access to various database systems through different protocols. It acts as an intermediary layer that translates client requests from various protocols into native database queries and routes them to the appropriate backend databases.
+## 当前状态
 
-## Key Features
+- 已有 Spring Boot 启动入口、网关配置、协议适配器基础接口。
+- 已有 MySQL 与 PostgreSQL 适配器包，以及共享协议抽象包。
+- 已有 MySQL packet codec、PostgreSQL message codec、协议会话状态和错误映射的
+  单元测试基础。
+- SQL 解析使用 Alibaba Druid。
+- 当前只允许配置 `mysql` 或 `postgresql`；不支持的协议必须快速失败，不能映射到
+  其他适配器占位。
 
-- Full MySQL protocol implementation for client connections
-- SQL parsing and translation using Alibaba Druid
-- Database connection proxy based on user-provided authentication
-- Support for multiple database backends (MySQL, PostgreSQL, Oracle, SQL Server)
-- Security controls and monitoring capabilities
-- Connection pooling and load balancing
+## 文档入口
 
-## Documentation
+- [项目概览](docs/PROJECT_OVERVIEW.md)：目标、架构、配置和扩展边界。
+- [数据库协议规则](docs/rules/database-protocol-rules.md)：开发数据库 wire
+  protocol 前必须遵守。
+- [AI Coding 错误处理规则](docs/rules/ai-error-handling-rules.md)：遇到失败时的
+  自动处理和沉淀规则。
+- [仓库规则](AGENTS.md)：面向 coding agent 的仓库入口规则。
 
-- [README.md](README.md) - This file, containing quick start information
-- [docs/COMPREHENSIVE_DOCUMENTATION.md](docs/COMPREHENSIVE_DOCUMENTATION.md) - Complete project documentation
-- [docs/PROJECT_OBJECTIVES.md](docs/PROJECT_OBJECTIVES.md) - Project goals and objectives
-- [docs/HIGH_LEVEL_DESIGN.md](docs/HIGH_LEVEL_DESIGN.md) - High-level architecture design
-- [docs/DETAILED_DESIGN.md](docs/DETAILED_DESIGN.md) - Detailed technical design
-- [docs/ENVIRONMENT_DOCUMENTATION.md](docs/ENVIRONMENT_DOCUMENTATION.md) - Environment setup guide
+## 快速开始
 
-## Quick Start
+环境要求：
 
-### Prerequisites
+- Java 17 或兼容的更高版本 JDK。
+- Maven 3.6+。
+- 如需运行真实代理链路，需要本地或远端 MySQL/PostgreSQL 后端数据库。
 
-- Java 17 (configured at C:\Users\parker\.jdks\azul-17.0.14)
-- Maven 3.6+ (configured at D:\devlops\apache-maven-3.9.9)
-- Target database systems (MySQL, PostgreSQL, etc.)
-
-### Building and Running
+运行测试：
 
 ```bash
-# Build the project
-D:\devlops\apache-maven-3.9.9\bin\mvn clean package
-
-# Run the application
-java -jar target/muti-protocol-gateway-egine-1.0.0-SNAPSHOT.jar
+mvn test
 ```
 
-Or use the provided batch script:
+构建：
+
 ```bash
-start-gateway.bat
+mvn clean package
 ```
 
-## Usage
+启动：
 
-### Configuration
+```bash
+java -jar target/db-kernel-gateway-egine-1.0.0-SNAPSHOT.jar
+```
 
-Edit `src/main/resources/application.yml` to configure the gateway:
+## 配置
+
+主要配置位于 `src/main/resources/application.yml`：
 
 ```yaml
 gateway:
-  # Database type: mysql or postgresql
   proxy-db-type: postgresql
-  # Proxy port
   proxy-port: 5433
-
-  # Target database configuration
   target:
     host: localhost
     port: 5432
     username: postgres
-    password: your_password
-    database: your_database
+    password: change-me
+    database: demo
 ```
 
-### Connecting to the Gateway
+开发和提交时不要把真实密码、认证 payload、token 或带凭据的连接串写入日志或文档。
 
-#### MySQL Gateway
+## 协议开发约束
 
-```bash
-# Connect using MySQL client
-mysql -h localhost -P 3307 -u root -p
+修改协议代码前必须先阅读 `docs/rules/database-protocol-rules.md`。第一阶段以
+MySQL 和 PostgreSQL 为主，新增协议需要先定义自己的 frame/message codec、状态机、
+认证流程、结果集格式、错误格式和测试边界。
 
-# Enter the target database password when prompted
-```
+包边界：
 
-#### PostgreSQL Gateway
+- `com.whosly.gateway.adapter.protocol`：共享协议抽象。
+- `com.whosly.gateway.adapter.mysql`：MySQL 专属协议代码。
+- `com.whosly.gateway.adapter.postgresql`：PostgreSQL 专属协议代码。
+- `com.whosly.gateway.parser`：SQL 解析。
+- `com.whosly.gateway.service`：后端数据库连接与执行服务。
 
-```bash
-# Connect using psql client
-psql -h localhost -p 5433 -U postgres -d your_database
+## 测试
 
-# Or using connection string
-psql "postgresql://postgres:password@localhost:5433/your_database"
-```
-
-### Example Usage
-
-#### MySQL Example
-
-```bash
-# Connect to MySQL gateway
-mysql -h localhost -P 3307 -u root -p
-
-# Execute queries
-mysql> SHOW DATABASES;
-mysql> USE demo;
-mysql> SELECT * FROM users;
-mysql> INSERT INTO users (name, age) VALUES ('Alice', 25);
-```
-
-#### PostgreSQL Example
-
-```bash
-# Connect to PostgreSQL gateway
-psql -h localhost -p 5433 -U postgres -d dmp
-
-# Execute queries
-dmp=# \dt
-dmp=# SELECT * FROM users;
-dmp=# INSERT INTO users (name, age) VALUES ('Bob', 30);
-dmp=# CREATE TABLE test (id SERIAL PRIMARY KEY, name VARCHAR(100));
-```
-
-## Protocol Implementations
-
-### MySQL Protocol
-
-The gateway implements a substantial portion of the MySQL client-server protocol, including:
-
-#### Handshake Phase
-- Server greeting packet with protocol version, server version, and connection ID
-- Authentication packet parsing with capability flags and character set support
-- Secure password scrambling using MySQL 4.1+ authentication method
-
-#### Command Phase
-- SQL statement execution with result set handling
-- Column definition packets for metadata transmission
-- Row data packets for result transmission
-- OK and Error packet responses
-- EOF packet signaling
-
-#### Supported Features
-- Text protocol result sets
-- Basic data type mapping between MySQL and JDBC
-- Connection state management
-- Graceful connection termination
-
-#### Limitations
-- Prepared statements are not yet implemented
-- SSL/TLS encryption is not yet supported
-- Advanced MySQL protocol features like compression are not implemented
-- Only basic authentication is supported
-
-### PostgreSQL Protocol
-
-The gateway implements the PostgreSQL wire protocol (version 3.0), including:
-
-#### Startup Phase
-- Startup message parsing with protocol version and parameters
-- SSL request handling (currently rejected)
-- Authentication flow (simplified, direct authentication)
-- Parameter status messages
-- Backend key data
-- ReadyForQuery messages
-
-#### Query Phase
-- Simple Query protocol for direct SQL execution
-- Extended Query protocol (Parse, Bind, Execute, Describe, Close, Sync)
-- Result set handling with RowDescription and DataRow messages
-- CommandComplete messages for DML/DDL operations
-- Error response messages
-
-#### Supported Features
-- SELECT queries with full result set support
-- INSERT, UPDATE, DELETE operations
-- DDL operations (CREATE, DROP, ALTER)
-- Multiple data types mapping (JDBC to PostgreSQL OID)
-- NULL value handling
-- Transaction status reporting
-
-#### Limitations
-- SSL/TLS encryption is not yet supported
-- Authentication is simplified (password verification skipped)
-- Extended query protocol is partially implemented
-- Transaction management is basic
-- Prepared statement caching is not implemented
-
-## Project Structure
-
-```
-src/
-├── main/
-│   ├── java/
-│   │   └── com.whosly.gateway/
-│   │       ├── adapter/           # Protocol adapters for different database protocols
-│   │       │   ├── mysql/         # MySQL protocol specific classes
-│   │       │   │   ├── MySQLPacket.java       # MySQL packet handling
-│   │       │   │   ├── MySQLHandshake.java    # MySQL handshake and authentication
-│   │       │   │   └── MySQLResultSet.java    # MySQL result set handling
-│   │       │   ├── postgresql/    # PostgreSQL protocol specific classes
-│   │       │   │   ├── PostgreSQLPacket.java      # PostgreSQL packet handling
-│   │       │   │   ├── PostgreSQLHandshake.java   # PostgreSQL handshake and authentication
-│   │       │   │   └── PostgreSQLResultSet.java   # PostgreSQL result set handling
-│   │       │   ├── AbstractProtocolAdapter.java   # Abstract base class for adapters
-│   │       │   ├── MySqlProtocolAdapter.java      # MySQL protocol implementation
-│   │       │   ├── PostgreSQLProtocolAdapter.java # PostgreSQL protocol implementation
-│   │       │   └── ProtocolAdapter.java           # Protocol adapter interface
-│   │       ├── parser/            # SQL parsing functionality using Alibaba Druid
-│   │       │   ├── DruidSqlParser.java        # Druid-based SQL parser
-│   │       │   ├── SqlDialect.java            # SQL dialect enum
-│   │       │   ├── SqlParseException.java     # SQL parsing exception
-│   │       │   └── SqlParser.java             # SQL parser interface
-│   │       ├── service/           # Database connection services
-│   │       │   └── DatabaseConnectionService.java # Database connection management
-│   │       ├── config/            # Configuration classes
-│   │       │   └── GatewayConfig.java         # Spring configuration
-│   │       ├── controller/        # REST controllers
-│   │       │   └── GatewayController.java     # Gateway REST controller
-│   │       ├── Application.java   # Main Spring Boot application class
-│   │       ├── ParserDemo.java    # Simple demo class for testing SQL parser
-│   │       └── CommandLineInterface.java # CLI for gateway control
-│   └── resources/
-│       └── application.yml        # Configuration file
-└── test/
-    └── java/
-        └── com.whosly.gateway/
-            ├── adapter/
-            │   └── MySqlProtocolAdapterTest.java  # Unit tests for MySQL protocol adapter
-            └── parser/
-                └── DruidSqlParserTest.java  # Unit tests for SQL parser
-```
-
-## Testing
-
-Unit tests can be run with:
-
-```bash
-D:\devlops\apache-maven-3.9.9\bin\mvn test
-```
-
-## License
-
-This project is licensed under the MIT License - see the LICENSE file for details.
-
-## Support
-
-For support, please open an issue in the repository.
+协议变更必须先补或更新聚焦测试，至少覆盖相关 codec、状态迁移、认证、命令、结果、
+事务状态或错误映射。单元测试不依赖真实数据库；需要真实客户端或后端数据库的验证应
+归类为集成测试。
