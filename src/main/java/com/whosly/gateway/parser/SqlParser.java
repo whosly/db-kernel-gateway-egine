@@ -7,6 +7,9 @@ import com.alibaba.druid.sql.ast.SQLStatement;
  * 
  * This interface defines the contract for parsing SQL statements using
  * Alibaba Druid parser and performing various analysis operations.
+ *
+ * @author yueny09@163.com codealy
+ * @since 2026-07-02
  */
 public interface SqlParser {
 

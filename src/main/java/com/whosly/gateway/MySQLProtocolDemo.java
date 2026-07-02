@@ -7,6 +7,9 @@ import org.slf4j.LoggerFactory;
 /**
  * MySQL协议适配器演示程序
  * 展示如何启动和使用MySQL协议适配器
+ *
+ * @author yueny09@163.com codealy
+ * @since 2026-07-02
  */
 public class MySQLProtocolDemo {
     private static final Logger log = LoggerFactory.getLogger(MySQLProtocolDemo.class);

@@ -8,6 +8,9 @@ import java.util.Objects;
 
 /**
  * Bridges protocol SQL extraction, audit observation, and risk policy decisions.
+ *
+ * @author yueny09@163.com codealy
+ * @since 2026-07-02
  */
 public class SqlTrafficInspector implements TrafficInspector {
 

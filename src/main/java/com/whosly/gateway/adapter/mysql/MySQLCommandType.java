@@ -5,6 +5,9 @@ import java.util.Optional;
 
 /**
  * MySQL command phase command codes.
+ *
+ * @author yueny09@163.com codealy
+ * @since 2026-07-02
  */
 public enum MySQLCommandType {
     COM_QUIT(0x01),

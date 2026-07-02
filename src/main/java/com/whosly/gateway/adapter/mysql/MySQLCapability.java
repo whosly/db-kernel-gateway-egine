@@ -5,6 +5,9 @@ import java.util.Optional;
 
 /**
  * MySQL Client/Server Protocol capability flags recognized by the gateway.
+ *
+ * @author yueny09@163.com codealy
+ * @since 2026-07-02
  */
 public enum MySQLCapability {
     CLIENT_LONG_PASSWORD(1L),

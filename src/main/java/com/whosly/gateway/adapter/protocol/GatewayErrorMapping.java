@@ -2,6 +2,9 @@ package com.whosly.gateway.adapter.protocol;
 
 /**
  * Canonical gateway errors mapped to protocol-native SQLSTATE and errno values.
+ *
+ * @author yueny09@163.com codealy
+ * @since 2026-07-02
  */
 public enum GatewayErrorMapping {
     TARGET_UNAVAILABLE(1042, "08S01", "08006", "target database unavailable"),

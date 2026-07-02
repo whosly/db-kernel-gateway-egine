@@ -89,6 +89,52 @@ class PostgreSQLSqlEventExtractorTest {
                 .isEqualTo("select 1");
     }
 
+    @Test
+    void authenticationAwareExtractorStopsSqlObservationWhenServerAcceptsSsl() {
+        PostgreSQLSqlEventExtractor authenticationAwareExtractor =
+                new PostgreSQLSqlEventExtractor("PostgreSQL", "pg-tls", false);
+        byte[] sslRequest = ByteBuffer.allocate(8)
+                .putInt(8)
+                .putInt(80877103)
+                .array();
+
+        assertThat(authenticationAwareExtractor.inspect(TrafficDirection.CLIENT_TO_TARGET,
+                sslRequest, 0, sslRequest.length)).isEmpty();
+        assertThat(authenticationAwareExtractor.inspect(TrafficDirection.TARGET_TO_CLIENT,
+                new byte[]{'S'}, 0, 1)).isEmpty();
+
+        byte[] query = typedMessage('Q', cstring("select 1"));
+        assertThat(authenticationAwareExtractor.inspect(TrafficDirection.CLIENT_TO_TARGET,
+                query, 0, query.length)).isEmpty();
+    }
+
+    @Test
+    void authenticationAwareExtractorContinuesCleartextObservationWhenServerRejectsSsl() {
+        PostgreSQLSqlEventExtractor authenticationAwareExtractor =
+                new PostgreSQLSqlEventExtractor("PostgreSQL", "pg-cleartext-after-ssl-reject", false);
+        byte[] sslRequest = ByteBuffer.allocate(8)
+                .putInt(8)
+                .putInt(80877103)
+                .array();
+
+        assertThat(authenticationAwareExtractor.inspect(TrafficDirection.CLIENT_TO_TARGET,
+                sslRequest, 0, sslRequest.length)).isEmpty();
+        assertThat(authenticationAwareExtractor.inspect(TrafficDirection.TARGET_TO_CLIENT,
+                new byte[]{'N'}, 0, 1)).isEmpty();
+
+        byte[] startup = new byte[]{0x00, 0x00, 0x00, 0x08, 0x00, 0x03, 0x00, 0x02};
+        assertThat(authenticationAwareExtractor.inspect(TrafficDirection.CLIENT_TO_TARGET,
+                startup, 0, startup.length)).isEmpty();
+
+        byte[] query = typedMessage('Q', cstring("select 1"));
+        List<SqlTrafficEvent> events = authenticationAwareExtractor.inspect(TrafficDirection.CLIENT_TO_TARGET,
+                query, 0, query.length);
+
+        assertThat(events).singleElement()
+                .extracting(SqlTrafficEvent::getSql)
+                .isEqualTo("select 1");
+    }
+
     private static byte[] typedMessage(char type, byte[]... bodies) {
         byte[] body = concat(bodies);
         ByteBuffer buffer = ByteBuffer.allocate(1 + 4 + body.length);

@@ -16,6 +16,9 @@ import java.util.concurrent.Executors;
  * 抽象协议适配器基类
  * 
  * 提供协议适配器的通用实现，具体的协议适配器可以继承此类
+ *
+ * @author yueny09@163.com codealy
+ * @since 2026-07-02
  */
 public abstract class AbstractProtocolAdapter implements ProtocolAdapter {
     

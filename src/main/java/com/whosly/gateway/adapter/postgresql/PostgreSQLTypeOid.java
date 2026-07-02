@@ -5,6 +5,9 @@ import java.util.Optional;
 
 /**
  * PostgreSQL built-in type OIDs commonly needed by protocol metadata handling.
+ *
+ * @author yueny09@163.com codealy
+ * @since 2026-07-02
  */
 public enum PostgreSQLTypeOid {
     BOOL(16, "bool", "boolean"),

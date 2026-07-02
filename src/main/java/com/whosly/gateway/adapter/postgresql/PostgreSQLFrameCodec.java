@@ -11,6 +11,9 @@ import java.io.OutputStream;
 
 /**
  * PostgreSQL message codec for typed messages and untyped startup messages.
+ *
+ * @author yueny09@163.com codealy
+ * @since 2026-07-02
  */
 public class PostgreSQLFrameCodec implements ProtocolFrameCodec {
 

@@ -9,6 +9,9 @@ import java.util.Optional;
 
 /**
  * SQL statement observed from cleartext database client protocol traffic.
+ *
+ * @author yueny09@163.com codealy
+ * @since 2026-07-02
  */
 public final class SqlTrafficEvent {
 

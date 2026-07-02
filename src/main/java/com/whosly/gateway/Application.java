@@ -16,6 +16,9 @@ import org.springframework.context.event.EventListener;
  * 
  * This gateway engine provides unified access to various database systems
  * through different protocols, using Alibaba Druid for SQL parsing.
+ *
+ * @author yueny09@163.com codealy
+ * @since 2026-07-02
  */
 @SpringBootApplication
 public class Application {

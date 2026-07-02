@@ -6,6 +6,9 @@ import java.io.OutputStream;
 
 /**
  * Protocol-neutral contract for database wire frame codecs.
+ *
+ * @author yueny09@163.com codealy
+ * @since 2026-07-02
  */
 public interface ProtocolFrameCodec {
 

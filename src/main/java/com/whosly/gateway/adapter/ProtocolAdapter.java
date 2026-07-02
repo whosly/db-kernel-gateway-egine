@@ -2,6 +2,9 @@ package com.whosly.gateway.adapter;
 
 /**
  * Interface for protocol adapters that handle different database protocols.
+ *
+ * @author yueny09@163.com codealy
+ * @since 2026-07-02
  */
 public interface ProtocolAdapter {
 

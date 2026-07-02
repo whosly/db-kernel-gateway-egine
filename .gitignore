@@ -49,6 +49,7 @@ application-dev.yml
 application-dev.properties
 **/application-local*.yml
 **/application-local*.properties
+**/integration-test-local.properties
 *.pid
 
 # Test

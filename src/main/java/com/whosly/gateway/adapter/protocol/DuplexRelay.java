@@ -17,6 +17,9 @@ import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Bidirectional byte relay for transparent database protocol proxying.
+ *
+ * @author yueny09@163.com codealy
+ * @since 2026-07-02
  */
 public class DuplexRelay {
 

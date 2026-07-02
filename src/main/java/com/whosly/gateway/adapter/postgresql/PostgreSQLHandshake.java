@@ -8,6 +8,9 @@ import java.nio.charset.StandardCharsets;
 
 /**
  * PostgreSQL握手和认证处理类
+ *
+ * @author yueny09@163.com codealy
+ * @since 2026-07-02
  */
 public class PostgreSQLHandshake {
     

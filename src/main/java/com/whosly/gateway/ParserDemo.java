@@ -6,6 +6,9 @@ import com.whosly.gateway.parser.SqlParseException;
 
 /**
  * Simple demo class to test the SQL parser functionality.
+ *
+ * @author yueny09@163.com codealy
+ * @since 2026-07-02
  */
 public class ParserDemo {
 

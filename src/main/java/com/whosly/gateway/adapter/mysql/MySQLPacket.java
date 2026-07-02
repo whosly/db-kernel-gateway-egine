@@ -7,6 +7,9 @@ import java.nio.ByteOrder;
 
 /**
  * MySQL协议数据包处理类
+ *
+ * @author yueny09@163.com codealy
+ * @since 2026-07-02
  */
 public class MySQLPacket {
     public static final int MAX_PACKET_LENGTH = 0xFFFFFF; // 16MB - 1

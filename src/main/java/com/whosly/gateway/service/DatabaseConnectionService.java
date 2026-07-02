@@ -8,6 +8,12 @@ import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.SQLException;
 
+/**
+ * Database Connection Service implementation.
+ *
+ * @author yueny09@163.com codealy
+ * @since 2026-07-02
+ */
 @Service
 public class DatabaseConnectionService {
 

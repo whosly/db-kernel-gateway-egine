@@ -4,6 +4,9 @@ import java.util.List;
 
 /**
  * Extracts SQL events from protocol-specific cleartext client traffic.
+ *
+ * @author yueny09@163.com codealy
+ * @since 2026-07-02
  */
 @FunctionalInterface
 public interface SqlEventExtractor {

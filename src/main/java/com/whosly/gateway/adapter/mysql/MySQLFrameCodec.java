@@ -12,6 +12,9 @@ import java.io.OutputStream;
 
 /**
  * MySQL packet codec: 3-byte little-endian payload length plus sequence id.
+ *
+ * @author yueny09@163.com codealy
+ * @since 2026-07-02
  */
 public class MySQLFrameCodec implements ProtocolFrameCodec {
 

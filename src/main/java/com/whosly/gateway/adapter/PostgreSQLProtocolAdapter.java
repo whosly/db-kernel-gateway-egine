@@ -16,6 +16,9 @@ import java.util.UUID;
 
 /**
  * PostgreSQL transparent protocol proxy adapter.
+ *
+ * @author yueny09@163.com codealy
+ * @since 2026-07-02
  */
 public class PostgreSQLProtocolAdapter extends AbstractProtocolAdapter {
 

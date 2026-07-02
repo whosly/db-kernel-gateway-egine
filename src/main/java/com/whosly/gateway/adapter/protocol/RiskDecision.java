@@ -4,6 +4,9 @@ import java.util.Objects;
 
 /**
  * Result of evaluating a SQL traffic event against risk policy.
+ *
+ * @author yueny09@163.com codealy
+ * @since 2026-07-02
  */
 public final class RiskDecision {
 

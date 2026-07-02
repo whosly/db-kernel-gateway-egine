@@ -6,6 +6,9 @@ import java.sql.*;
 
 /**
  * PostgreSQL协议数据包处理类
+ *
+ * @author yueny09@163.com codealy
+ * @since 2026-07-02
  */
 public class PostgreSQLPacket {
     // PostgreSQL协议常量
