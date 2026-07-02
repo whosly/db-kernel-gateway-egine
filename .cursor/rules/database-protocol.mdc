@@ -11,7 +11,10 @@ alwaysApply: false
 
 # Database Wire-Protocol Rules
 
-Read `docs/rules/database-protocol-rules.md` before changing protocol code.
+Read these before changing protocol code:
+
+- `docs/rules/database-protocol-rules.md`
+- `docs/rules/ai-error-handling-rules.md`
 
 Hard rules:
 
@@ -30,6 +33,9 @@ Hard rules:
   PostgreSQL adapter as a placeholder.
 - Add or update tests before changing frame, startup, handshake, auth, command,
   result, transaction-state, or error behavior.
+- On compile, test, runtime, protocol-spec, or user-feedback failures, follow
+  `docs/rules/ai-error-handling-rules.md`: classify, find root cause, fix one
+  cause, verify narrow-to-wide, and update rules/tests when a gap is found.
 
 Current first-phase scope:
 

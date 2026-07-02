@@ -5,6 +5,7 @@ This repository implements a multi-protocol database gateway engine.
 Before changing database protocol code, read and follow:
 
 - `docs/rules/database-protocol-rules.md`
+- `docs/rules/ai-error-handling-rules.md`
 
 Key rules:
 
@@ -21,3 +22,7 @@ Key rules:
 - Do not log plaintext credentials or authentication payloads.
 - Write focused tests before changing frame, handshake, auth, command, result,
   transaction-state, or error behavior.
+- When builds, tests, protocol checks, or user feedback reveal an error, follow
+  `docs/rules/ai-error-handling-rules.md`: classify the failure, find the root
+  cause, fix one cause at a time, verify, and update rules/tests when the issue
+  exposes a process gap.
