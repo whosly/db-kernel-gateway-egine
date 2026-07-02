@@ -63,4 +63,9 @@ replay_pid*
 # .env/
 .design/
 .data/
-docs/
+docs/*
+!docs/rules/
+!docs/rules/**
+!docs/superpowers/
+!docs/superpowers/plans/
+!docs/superpowers/plans/**

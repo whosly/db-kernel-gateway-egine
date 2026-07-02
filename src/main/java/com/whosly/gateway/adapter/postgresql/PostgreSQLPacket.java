@@ -40,18 +40,7 @@ public class PostgreSQLPacket {
      * @return 完整的PostgreSQL数据包
      */
     public static byte[] createPacket(char type) {
-        ByteArrayOutputStream baos = new ByteArrayOutputStream();
-        
-        // 消息类型（1字节）
-        baos.write(type);
-        
-        // 消息长度（4字节，包括长度字段本身）
-        baos.write(0);
-        baos.write(0);
-        baos.write(0);
-        baos.write(4);
-        
-        return baos.toByteArray();
+        return createPacket(type, new byte[0]);
     }
     
     /**
@@ -62,22 +51,7 @@ public class PostgreSQLPacket {
      * @return 完整的PostgreSQL数据包
      */
     public static byte[] createPacket(char type, byte[] payload) {
-        ByteArrayOutputStream baos = new ByteArrayOutputStream();
-        
-        // 消息类型（1字节）
-        baos.write(type);
-        
-        // 消息长度（4字节，包括长度字段本身和类型字段）
-        int messageLength = payload.length + 4;
-        baos.write((messageLength >> 24) & 0xFF);
-        baos.write((messageLength >> 16) & 0xFF);
-        baos.write((messageLength >> 8) & 0xFF);
-        baos.write(messageLength & 0xFF);
-        
-        // 载荷
-        baos.write(payload, 0, payload.length);
-        
-        return baos.toByteArray();
+        return new PostgreSQLFrameCodec().packet(type, payload);
     }
     
     /**

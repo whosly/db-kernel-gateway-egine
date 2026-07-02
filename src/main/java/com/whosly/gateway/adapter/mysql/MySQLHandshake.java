@@ -78,13 +78,17 @@ public class MySQLHandshake {
         try {
             if (connection != null && !connection.isClosed()) {
                 DatabaseMetaData metaData = connection.getMetaData();
-                return metaData.getDatabaseProductVersion();
+                if (metaData != null) {
+                    String version = metaData.getDatabaseProductVersion();
+                    if (version != null && !version.isBlank()) {
+                        return version;
+                    }
+                }
             }
         } catch (SQLException e) {
             // 如果无法获取版本信息，使用默认版本
-            e.printStackTrace();
         }
-        return "5.7.25"; // 默认版本
+        return SERVER_VERSION; // 默认版本
     }
     
     /**

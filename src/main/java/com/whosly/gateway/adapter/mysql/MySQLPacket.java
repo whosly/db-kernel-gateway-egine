@@ -19,24 +19,7 @@ public class MySQLPacket {
      * @return 完整的MySQL数据包
      */
     public static byte[] createPacket(byte[] payload, int sequenceId) {
-        ByteArrayOutputStream baos = new ByteArrayOutputStream();
-        // 数据包长度（3字节）
-        baos.write(payload.length & 0xFF);
-        baos.write((payload.length >> 8) & 0xFF);
-        baos.write((payload.length >> 16) & 0xFF);
-        
-        // 序列号（1字节）
-        baos.write(sequenceId & 0xFF);
-        
-        // 载荷
-        try {
-            baos.write(payload);
-        } catch (IOException e) {
-            // 不应该发生
-            throw new RuntimeException("Failed to create MySQL packet", e);
-        }
-        
-        return baos.toByteArray();
+        return new MySQLFrameCodec().packet(payload, sequenceId);
     }
     
     /**
@@ -47,33 +30,9 @@ public class MySQLPacket {
      * @throws IOException 读取异常
      */
     public static PacketInfo readPacket(java.io.InputStream inputStream) throws IOException {
-        // 读取数据包头部（4字节）
-        byte[] header = new byte[4];
-        int bytesRead = inputStream.read(header);
-        if (bytesRead != 4) {
-            throw new IOException("Failed to read packet header");
-        }
-        
-        // 解析数据包长度（3字节）
-        int packetLength = (header[0] & 0xFF) | 
-                          ((header[1] & 0xFF) << 8) | 
-                          ((header[2] & 0xFF) << 16);
-        
-        // 解析序列号（1字节）
-        int sequenceId = header[3] & 0xFF;
-        
-        // 读取载荷
-        byte[] payload = new byte[packetLength];
-        int totalRead = 0;
-        while (totalRead < packetLength) {
-            int read = inputStream.read(payload, totalRead, packetLength - totalRead);
-            if (read == -1) {
-                throw new IOException("Unexpected end of stream");
-            }
-            totalRead += read;
-        }
-        
-        return new PacketInfo(payload, sequenceId);
+        com.whosly.gateway.adapter.protocol.ProtocolMessage message =
+                new MySQLFrameCodec().read(inputStream);
+        return new PacketInfo(message.payload(), message.sequence().orElse(0));
     }
     
     /**
