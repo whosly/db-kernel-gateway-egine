@@ -1,12 +1,17 @@
 package com.whosly.gateway.adapter;
 
+import com.whosly.gateway.adapter.protocol.SqlTrafficEvent;
 import org.junit.jupiter.api.Test;
 
+import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
+import java.nio.ByteBuffer;
 import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -64,6 +69,48 @@ class PostgreSQLProtocolAdapterTest {
         }
     }
 
+    @Test
+    void handleClientConnectionObservesSimpleQuerySql() throws Exception {
+        try (ServerSocket targetServer = new ServerSocket(0, 1, InetAddress.getLoopbackAddress());
+             SocketPair clientPair = SocketPair.open();
+             ExecutorService executorService = Executors.newFixedThreadPool(2)) {
+            PostgreSQLProtocolAdapter adapter = new PostgreSQLProtocolAdapter();
+            adapter.setTargetHost(InetAddress.getLoopbackAddress().getHostAddress());
+            adapter.setTargetPort(targetServer.getLocalPort());
+            List<SqlTrafficEvent> observedEvents = new CopyOnWriteArrayList<>();
+            adapter.setSqlTrafficObserver(observedEvents::add);
+
+            Future<?> adapterFuture = executorService.submit(() -> adapter.handleClientConnection(clientPair.serverSide));
+            Future<byte[]> backendObservedQuery = executorService.submit(() -> {
+                try (Socket targetSocket = targetServer.accept()) {
+                    readExact(targetSocket.getInputStream(), 8);
+
+                    byte[] ready = "postgres-target-ready".getBytes(StandardCharsets.UTF_8);
+                    targetSocket.getOutputStream().write(ready);
+                    targetSocket.getOutputStream().flush();
+
+                    return readExact(targetSocket.getInputStream(), postgreSqlMessageLength("select * from account"));
+                }
+            });
+
+            byte[] startup = new byte[]{0x00, 0x00, 0x00, 0x08, 0x00, 0x03, 0x00, 0x02};
+            clientPair.clientSide.getOutputStream().write(startup);
+            clientPair.clientSide.getOutputStream().flush();
+            readExact(clientPair.clientSide.getInputStream(), "postgres-target-ready".length());
+
+            byte[] query = postgreSqlQueryMessage("select * from account");
+            clientPair.clientSide.getOutputStream().write(query);
+            clientPair.clientSide.getOutputStream().flush();
+
+            assertThat(backendObservedQuery.get(2, TimeUnit.SECONDS)).isEqualTo(query);
+            assertEventuallyObservedSql(observedEvents, "select * from account");
+
+            clientPair.clientSide.close();
+            adapterFuture.get(2, TimeUnit.SECONDS);
+            executorService.shutdownNow();
+        }
+    }
+
     private static byte[] readExact(InputStream inputStream, int length) throws Exception {
         byte[] bytes = new byte[length];
         int offset = 0;
@@ -75,6 +122,39 @@ class PostgreSQLProtocolAdapterTest {
             offset += count;
         }
         return bytes;
+    }
+
+    private static byte[] postgreSqlQueryMessage(String sql) {
+        byte[] body = cstring(sql);
+        ByteBuffer buffer = ByteBuffer.allocate(1 + 4 + body.length);
+        buffer.put((byte) 'Q');
+        buffer.putInt(body.length + 4);
+        buffer.put(body);
+        return buffer.array();
+    }
+
+    private static byte[] cstring(String value) {
+        byte[] bytes = value.getBytes(StandardCharsets.UTF_8);
+        byte[] cstring = new byte[bytes.length + 1];
+        System.arraycopy(bytes, 0, cstring, 0, bytes.length);
+        return cstring;
+    }
+
+    private static int postgreSqlMessageLength(String sql) {
+        return 1 + 4 + sql.getBytes(StandardCharsets.UTF_8).length + 1;
+    }
+
+    private static void assertEventuallyObservedSql(List<SqlTrafficEvent> observedEvents, String sql) throws Exception {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
+        while (System.nanoTime() < deadline) {
+            if (observedEvents.stream().anyMatch(event -> sql.equals(event.getSql()))) {
+                return;
+            }
+            Thread.sleep(10);
+        }
+        assertThat(observedEvents)
+                .extracting(SqlTrafficEvent::getSql)
+                .contains(sql);
     }
 
     private static final class SocketPair implements AutoCloseable {

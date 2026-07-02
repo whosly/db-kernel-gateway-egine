@@ -25,17 +25,27 @@ public class DuplexRelay {
 
     private final String sessionId;
     private final int bufferSize;
+    private final TrafficInspector trafficInspector;
 
     public DuplexRelay(String sessionId) {
         this(sessionId, DEFAULT_BUFFER_SIZE);
     }
 
     public DuplexRelay(String sessionId, int bufferSize) {
+        this(sessionId, bufferSize, TrafficInspector.passThrough());
+    }
+
+    public DuplexRelay(String sessionId, TrafficInspector trafficInspector) {
+        this(sessionId, DEFAULT_BUFFER_SIZE, trafficInspector);
+    }
+
+    public DuplexRelay(String sessionId, int bufferSize, TrafficInspector trafficInspector) {
         this.sessionId = Objects.requireNonNull(sessionId, "sessionId must not be null");
         if (bufferSize <= 0) {
             throw new IllegalArgumentException("bufferSize must be positive");
         }
         this.bufferSize = bufferSize;
+        this.trafficInspector = Objects.requireNonNull(trafficInspector, "trafficInspector must not be null");
     }
 
     public void relay(Socket clientSocket, Socket targetSocket) throws IOException {
@@ -51,9 +61,11 @@ public class DuplexRelay {
         });
 
         Future<?> clientToTarget = executorService.submit(() ->
-                copy("client->target", clientSocket, targetSocket, firstDirectionDone, failure));
+                copy(TrafficDirection.CLIENT_TO_TARGET, "client->target", clientSocket, targetSocket,
+                        firstDirectionDone, failure));
         Future<?> targetToClient = executorService.submit(() ->
-                copy("target->client", targetSocket, clientSocket, firstDirectionDone, failure));
+                copy(TrafficDirection.TARGET_TO_CLIENT, "target->client", targetSocket, clientSocket,
+                        firstDirectionDone, failure));
 
         try {
             firstDirectionDone.await();
@@ -74,7 +86,7 @@ public class DuplexRelay {
         }
     }
 
-    private void copy(String direction, Socket source, Socket destination,
+    private void copy(TrafficDirection trafficDirection, String direction, Socket source, Socket destination,
                       CountDownLatch firstDirectionDone, AtomicReference<IOException> failure) {
         byte[] buffer = new byte[bufferSize];
         try {
@@ -82,6 +94,11 @@ public class DuplexRelay {
             OutputStream outputStream = destination.getOutputStream();
             int count;
             while ((count = inputStream.read(buffer)) >= 0) {
+                TrafficAction action = trafficInspector.onBytes(trafficDirection, buffer, 0, count);
+                if (action == TrafficAction.CLOSE) {
+                    log.debug("Relay {} closed by traffic inspector for session {}", direction, sessionId);
+                    break;
+                }
                 outputStream.write(buffer, 0, count);
                 outputStream.flush();
             }

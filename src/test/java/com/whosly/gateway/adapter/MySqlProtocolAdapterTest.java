@@ -1,16 +1,21 @@
 package com.whosly.gateway.adapter;
 
 import com.whosly.gateway.adapter.mysql.MySQLHandshake;
+import com.whosly.gateway.adapter.mysql.MySQLCommandType;
 import com.whosly.gateway.adapter.mysql.MySQLPacket;
 import com.whosly.gateway.adapter.mysql.MySQLResultSet;
+import com.whosly.gateway.adapter.protocol.SqlTrafficEvent;
 import org.junit.jupiter.api.Test;
 
 import java.io.InputStream;
+import java.io.ByteArrayOutputStream;
 import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.sql.Connection;
+import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -137,6 +142,55 @@ class MySqlProtocolAdapterTest {
         }
     }
 
+    @Test
+    void handleClientConnectionObservesSqlAfterTargetAuthenticationOk() throws Exception {
+        try (ServerSocket targetServer = new ServerSocket(0, 1, InetAddress.getLoopbackAddress());
+             SocketPair clientPair = SocketPair.open();
+             ExecutorService executorService = Executors.newFixedThreadPool(2)) {
+            MySqlProtocolAdapter adapter = new MySqlProtocolAdapter();
+            adapter.setTargetHost(InetAddress.getLoopbackAddress().getHostAddress());
+            adapter.setTargetPort(targetServer.getLocalPort());
+            List<SqlTrafficEvent> observedEvents = new CopyOnWriteArrayList<>();
+            adapter.setSqlTrafficObserver(observedEvents::add);
+
+            Future<?> adapterFuture = executorService.submit(() -> adapter.handleClientConnection(clientPair.serverSide));
+            Future<byte[]> backendObservedQuery = executorService.submit(() -> {
+                try (Socket targetSocket = targetServer.accept()) {
+                    byte[] handshake = mysqlPacket(0,
+                            "mysql-target-handshake".getBytes(StandardCharsets.UTF_8));
+                    targetSocket.getOutputStream().write(handshake);
+                    targetSocket.getOutputStream().flush();
+
+                    readExact(targetSocket.getInputStream(), 36);
+
+                    byte[] ok = mysqlPacket(2, new byte[]{0x00});
+                    targetSocket.getOutputStream().write(ok);
+                    targetSocket.getOutputStream().flush();
+
+                    return readExact(targetSocket.getInputStream(), mysqlPacketLength("select * from account"));
+                }
+            });
+
+            byte[] handshake = mysqlPacket(0,
+                    "mysql-target-handshake".getBytes(StandardCharsets.UTF_8));
+            readExact(clientPair.clientSide.getInputStream(), handshake.length);
+            clientPair.clientSide.getOutputStream().write(mysqlPacket(1, new byte[32]));
+            clientPair.clientSide.getOutputStream().flush();
+            readExact(clientPair.clientSide.getInputStream(), 5);
+
+            byte[] queryPacket = mysqlCommandPacket(0, MySQLCommandType.COM_QUERY.getCode(), "select * from account");
+            clientPair.clientSide.getOutputStream().write(queryPacket);
+            clientPair.clientSide.getOutputStream().flush();
+
+            assertThat(backendObservedQuery.get(2, TimeUnit.SECONDS)).isEqualTo(queryPacket);
+            assertEventuallyObservedSql(observedEvents, "select * from account");
+
+            clientPair.clientSide.close();
+            adapterFuture.get(2, TimeUnit.SECONDS);
+            executorService.shutdownNow();
+        }
+    }
+
     private static byte[] readExact(InputStream inputStream, int length) throws Exception {
         byte[] bytes = new byte[length];
         int offset = 0;
@@ -148,6 +202,41 @@ class MySqlProtocolAdapterTest {
             offset += count;
         }
         return bytes;
+    }
+
+    private static byte[] mysqlCommandPacket(int sequenceId, int command, String sql) {
+        byte[] sqlBytes = sql.getBytes(StandardCharsets.UTF_8);
+        byte[] payload = new byte[sqlBytes.length + 1];
+        payload[0] = (byte) command;
+        System.arraycopy(sqlBytes, 0, payload, 1, sqlBytes.length);
+        return mysqlPacket(sequenceId, payload);
+    }
+
+    private static byte[] mysqlPacket(int sequenceId, byte[] payload) {
+        ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
+        outputStream.write(payload.length & 0xFF);
+        outputStream.write((payload.length >> 8) & 0xFF);
+        outputStream.write((payload.length >> 16) & 0xFF);
+        outputStream.write(sequenceId & 0xFF);
+        outputStream.writeBytes(payload);
+        return outputStream.toByteArray();
+    }
+
+    private static int mysqlPacketLength(String sql) {
+        return sql.getBytes(StandardCharsets.UTF_8).length + 5;
+    }
+
+    private static void assertEventuallyObservedSql(List<SqlTrafficEvent> observedEvents, String sql) throws Exception {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
+        while (System.nanoTime() < deadline) {
+            if (observedEvents.stream().anyMatch(event -> sql.equals(event.getSql()))) {
+                return;
+            }
+            Thread.sleep(10);
+        }
+        assertThat(observedEvents)
+                .extracting(SqlTrafficEvent::getSql)
+                .contains(sql);
     }
 
     private static final class SocketPair implements AutoCloseable {

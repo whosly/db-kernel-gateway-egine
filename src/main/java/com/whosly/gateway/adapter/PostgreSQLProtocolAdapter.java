@@ -1,6 +1,8 @@
 package com.whosly.gateway.adapter;
 
 import com.whosly.gateway.adapter.protocol.DuplexRelay;
+import com.whosly.gateway.adapter.protocol.SqlTrafficInspector;
+import com.whosly.gateway.adapter.postgresql.PostgreSQLSqlEventExtractor;
 import com.whosly.gateway.parser.DruidSqlParser;
 import com.whosly.gateway.parser.SqlParser;
 import org.slf4j.Logger;
@@ -37,7 +39,11 @@ public class PostgreSQLProtocolAdapter extends AbstractProtocolAdapter {
         try (Socket targetSocket = connectTarget()) {
             log.info("PostgreSQL proxy session {} connected {} to target {}:{}",
                     sessionId, clientSocket.getRemoteSocketAddress(), targetHost, targetPort);
-            new DuplexRelay(sessionId).relay(clientSocket, targetSocket);
+            SqlTrafficInspector trafficInspector = new SqlTrafficInspector(
+                    new PostgreSQLSqlEventExtractor(PROTOCOL_NAME, sessionId, false)::inspect,
+                    sqlTrafficObserver,
+                    sqlRiskPolicy);
+            new DuplexRelay(sessionId, trafficInspector).relay(clientSocket, targetSocket);
         } catch (IOException e) {
             log.warn("PostgreSQL proxy session {} closed: {}", sessionId, e.getMessage());
         } finally {
