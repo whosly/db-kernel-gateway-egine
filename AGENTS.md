@@ -9,6 +9,11 @@ Before changing database protocol code, read and follow:
 
 Key rules:
 
+- New project branches must be named after the actual feature or workstream.
+  Use a semantic prefix such as `future/`, followed by a short kebab-case
+  feature name, for example `future/database-wire-protocol-foundation`.
+  Do not use tool names, personal names, or vague names such as `tmp`, `test`,
+  `dev`, or `fix`.
 - The rules describe database wire protocols, not the current implementation.
 - Start protocol implementation with MySQL Client/Server Protocol and
   PostgreSQL Frontend/Backend Protocol.
