@@ -1,0 +1,43 @@
+﻿server:
+  port: 0  # 使用随机端口
+
+spring:
+  application:
+    name: db-kernel-gateway-egine
+
+logging:
+  level:
+    com.whosly.gateway: DEBUG
+    com.whosly.gateway.adapter: DEBUG
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n"
+
+gateway:
+  # 数据库类型配置， 类型包括  mysql、postgresql
+  proxy-db-type: postgresql
+  # 代理端口
+  proxy-port: 5433
+
+  # 目标数据库配置
+  target:
+    # # MYSQL 目标数据库配置
+    # host: localhost
+    # port: 13308
+    # username: root
+    # password: Aa123456.
+    # database: demo
+    # PG 目标数据库配置
+    host: localhost
+    port: 5432
+    username: postgres
+    password: Aa123456.
+    database: dmp
+
+  connection:
+    pool:
+      initial-size: 5
+      max-size: 20
+      min-idle: 2
+  security:
+    authentication:
+      enabled: true
