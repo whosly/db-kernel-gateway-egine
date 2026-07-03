@@ -1,96 +1,191 @@
 # 数据库内核网关引擎
 
-这是一个 Java 17 + Spring Boot 实现的多协议数据库网关项目，目标是在网关层接入
-数据库客户端协议，并把请求转发到后端数据库。
+一个基于 Java 17 和 Spring Boot 的数据库协议网关。客户端连接网关端口，网关把
+MySQL 或 PostgreSQL wire protocol 流量透明转发到真实数据库，同时为后续 SQL 审计、
+风控和观测能力预留协议层扩展点。
 
-当前仓库正在建设 MySQL Client/Server Protocol 与 PostgreSQL
-Frontend/Backend Protocol 的完整协议透明代理。第一阶段以 MySQL 当前官方稳定
-Client/Server Protocol 文档和 PostgreSQL 当前稳定 Frontend/Backend Protocol 为
-协议基线，由目标数据库完成真实认证、TLS/SSL/GSS、压缩、prepared statement、
-binary protocol 和 extended query 等协议语义。
+## 当前能力
 
-## 当前状态
+- 支持 MySQL、PostgreSQL 透明代理转发。
+- 由目标数据库完成真实认证，网关不保存也不校验明文密码。
+- 可观察明文 SQL 流量，用于后续 SQL 记录和风控。
+- TLS、压缩等不可明文解析的链路按 opaque tunnel 处理，优先保证转发正确性。
 
-- 已有 Spring Boot 启动入口、网关配置、协议适配器基础接口。
-- 已有 MySQL 与 PostgreSQL 适配器包，以及共享协议抽象包。
-- 已有 MySQL packet codec、PostgreSQL message codec、协议会话状态和错误映射的
-  单元测试基础。
-- SQL 解析使用 Alibaba Druid。
-- 当前只允许配置 `mysql` 或 `postgresql`；不支持的协议必须快速失败，不能映射到
-  其他适配器占位。
+## 环境要求
 
-## 文档入口
+- JDK 17+
+- Maven 3.6+
+- 本地或远端 MySQL / PostgreSQL
+- 可选：`mysql` 或 `psql` 命令行客户端，用于手工验证代理链路
 
-- [项目需求文档](docs/PROJECT_REQUIREMENTS.md)：编码前确认完整协议代理目标、范围和验收标准。
-- [系统设计文档](docs/SYSTEM_DESIGN.md)：编码前确认透明代理架构、opaque tunnel、模块边界和测试策略。
-- [协议参考表](docs/PROTOCOL_REFERENCE_TABLES.md)：MySQL capability、PostgreSQL OID、网关自身错误映射。
-- [项目概览](docs/PROJECT_OVERVIEW.md)：目标、架构、配置和扩展边界。
-- [数据库协议规则](docs/rules/database-protocol-rules.md)：开发数据库 wire
-  protocol 前必须遵守。
-- [AI Coding 错误处理规则](docs/rules/ai-error-handling-rules.md)：遇到失败时的
-  自动处理和沉淀规则。
-- [仓库规则](AGENTS.md)：面向 coding agent 的仓库入口规则。
+## 配置说明
 
-## 快速开始
+通用默认配置在：
 
-环境要求：
-
-- Java 17 或兼容的更高版本 JDK。
-- Maven 3.6+。
-- 如需运行真实代理链路，需要本地或远端 MySQL/PostgreSQL 后端数据库。
-
-运行测试：
-
-```bash
-mvn test
+```text
+src/main/resources/application.yml
 ```
 
-构建：
+本地开发配置建议放在：
 
-```bash
-mvn clean package
+```text
+src/main/resources/application-dev.yml
 ```
 
-启动：
+`application-dev.yml` 已在 `.gitignore` 中忽略，适合放本机数据库地址和密码。
+
+端口含义：
+
+- `server.port`：Spring Boot HTTP 端口，用于 Web/Actuator 等入口。
+- `gateway.proxy-port`：数据库协议代理端口，数据库客户端连接这个端口。
+- `gateway.target.port`：真实后端数据库端口。
+
+## MySQL 网关
+
+复制 MySQL 配置模板：
 
 ```bash
-java -jar target/db-kernel-gateway-egine-1.0.0-SNAPSHOT.jar
+cp src/main/resources/application-mysql-template.yml src/main/resources/application-dev.yml
 ```
 
-## 配置
-
-主要配置位于 `src/main/resources/application.yml`：
+按本地 MySQL 信息修改 `application-dev.yml`：
 
 ```yaml
+server:
+  port: 8080
+
+gateway:
+  proxy-db-type: mysql
+  proxy-port: 33307
+  target:
+    host: localhost
+    port: 13308
+    username: root
+    password: change-me
+    database: mysql
+```
+
+启动服务：
+
+```bash
+mvn spring-boot:run -Dspring-boot.run.profiles=dev
+```
+
+启动成功后会看到类似日志：
+
+```text
+Starting MySQL protocol adapter on port 33307
+MySQL protocol adapter started successfully
+```
+
+另开一个终端，通过网关端口连接：
+
+```bash
+mysql --protocol=tcp -h 127.0.0.1 -P 33307 -uroot -p
+```
+
+进入 MySQL 后执行：
+
+```sql
+select 1;
+```
+
+能正常返回结果，说明链路已经打通：
+
+```text
+mysql client -> gateway:33307 -> target mysql:13308
+```
+
+效果示意：
+
+![MySQL gateway demo](assets/mysql-gateway-demo.gif)
+
+## PostgreSQL 网关
+
+复制 PostgreSQL 配置模板：
+
+```bash
+cp src/main/resources/application-postgresql-template.yml src/main/resources/application-dev.yml
+```
+
+按本地 PostgreSQL 信息修改 `application-dev.yml`：
+
+```yaml
+server:
+  port: 8080
+
 gateway:
   proxy-db-type: postgresql
-  proxy-port: 5433
+  proxy-port: 35433
   target:
     host: localhost
     port: 5432
     username: postgres
     password: change-me
-    database: demo
+    database: postgres
 ```
 
-开发和提交时不要把真实密码、认证 payload、token 或带凭据的连接串写入日志或文档。
+启动服务：
 
-## 协议开发约束
+```bash
+mvn spring-boot:run -Dspring-boot.run.profiles=dev
+```
 
-修改协议代码前必须先阅读 `docs/rules/database-protocol-rules.md`。第一阶段以
-MySQL 和 PostgreSQL 完整协议透明代理为主，新增协议需要先定义自己的
-frame/message codec、状态机、认证/加密/压缩转发模型、结果流、错误格式和测试边界。
+启动成功后会看到类似日志：
 
-包边界：
+```text
+Starting POSTGRESQL protocol adapter on port 35433
+PostgreSQL protocol adapter started successfully
+```
 
-- `com.whosly.gateway.adapter.protocol`：共享协议抽象。
-- `com.whosly.gateway.adapter.mysql`：MySQL 专属协议代码。
-- `com.whosly.gateway.adapter.postgresql`：PostgreSQL 专属协议代码。
-- `com.whosly.gateway.parser`：SQL 解析。
-- `com.whosly.gateway.service`：后端数据库连接与执行服务。
+另开一个终端，通过网关端口连接：
+
+```bash
+psql -h 127.0.0.1 -p 35433 -U postgres -d postgres
+```
+
+进入 PostgreSQL 后执行：
+
+```sql
+select 1;
+```
+
+能正常返回结果，说明链路已经打通：
+
+```text
+psql client -> gateway:35433 -> target postgresql:5432
+```
+
+效果示意：
+
+![PostgreSQL gateway demo](assets/postgresql-gateway-demo.gif)
 
 ## 测试
 
-协议变更必须先补或更新聚焦测试，至少覆盖相关 codec/observer、状态迁移、
-opaque tunnel 切换、双向 relay、网关自身错误映射和真实客户端代理链路。单元测试不
-依赖真实数据库；`mysql`、`psql`、JDBC 与真实后端数据库验证归类为集成测试。
+运行单元测试：
+
+```bash
+mvn test
+```
+
+运行真实数据库集成测试：
+
+```bash
+mvn -Pintegration-test test
+```
+
+集成测试的本地连接信息放在：
+
+```text
+src/test/resources/integration-test-local.properties
+```
+
+该文件同样已被忽略，不应提交真实密码。
+
+## 开发约定
+
+- MySQL 协议代码放在 `com.whosly.gateway.adapter.mysql`。
+- PostgreSQL 协议代码放在 `com.whosly.gateway.adapter.postgresql`。
+- 共享协议抽象放在 `com.whosly.gateway.adapter.protocol`。
+- 不支持的协议必须快速失败，不能临时映射到其他协议适配器。
+- 不要记录明文密码、认证 payload 或带凭据的连接串。
