@@ -6,6 +6,12 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
+/**
+ * Gateway Controller implementation.
+ *
+ * @author yueny09@163.com codealy
+ * @since 2026-07-02
+ */
 @Component
 public class GatewayController {
 

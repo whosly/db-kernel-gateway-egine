@@ -2,6 +2,9 @@ package com.whosly.gateway.parser;
 
 /**
  * Enum representing different SQL dialects supported by the gateway.
+ *
+ * @author yueny09@163.com codealy
+ * @since 2026-07-02
  */
 public enum SqlDialect {
     MYSQL("MySQL"),

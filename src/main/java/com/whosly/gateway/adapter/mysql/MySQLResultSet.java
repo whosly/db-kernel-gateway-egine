@@ -8,6 +8,9 @@ import java.sql.Types;
 
 /**
  * MySQL结果集处理类
+ *
+ * @author yueny09@163.com codealy
+ * @since 2026-07-02
  */
 public class MySQLResultSet {
     

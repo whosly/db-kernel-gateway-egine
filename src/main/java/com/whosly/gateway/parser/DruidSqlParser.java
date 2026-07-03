@@ -16,6 +16,9 @@ import java.util.Set;
 
 /**
  * Implementation of SqlParser using Alibaba Druid.
+ *
+ * @author yueny09@163.com codealy
+ * @since 2026-07-02
  */
 @Component
 public class DruidSqlParser implements SqlParser {

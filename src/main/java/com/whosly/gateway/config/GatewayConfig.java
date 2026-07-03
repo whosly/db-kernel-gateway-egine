@@ -9,6 +9,12 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
+/**
+ * Gateway Config implementation.
+ *
+ * @author yueny09@163.com codealy
+ * @since 2026-07-02
+ */
 @Configuration
 public class GatewayConfig {
 
@@ -30,7 +36,7 @@ public class GatewayConfig {
     @Value("${gateway.target.username:root}")
     private String targetUsername;
     
-    @Value("${gateway.target.password:password}")
+    @Value("${gateway.target.password:}")
     private String targetPassword;
     
     @Value("${gateway.target.database:demo}")

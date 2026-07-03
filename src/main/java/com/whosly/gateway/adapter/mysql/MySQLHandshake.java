@@ -12,6 +12,9 @@ import java.util.Arrays;
 
 /**
  * MySQL握手和认证处理类
+ *
+ * @author yueny09@163.com codealy
+ * @since 2026-07-02
  */
 public class MySQLHandshake {
     private static final String SERVER_VERSION = "5.7.25";

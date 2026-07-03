@@ -6,6 +6,9 @@ import java.util.OptionalInt;
 
 /**
  * Immutable protocol frame/message payload.
+ *
+ * @author yueny09@163.com codealy
+ * @since 2026-07-02
  */
 public final class ProtocolMessage {
 

@@ -6,6 +6,9 @@ import java.io.IOException;
  * 通用协议数据包处理接口
  * 
  * @param <T> 协议特定的握手信息类型
+ *
+ * @author yueny09@163.com codealy
+ * @since 2026-07-02
  */
 public interface ProtocolPacket<T> {
     

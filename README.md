@@ -4,8 +4,10 @@
 数据库客户端协议，并把请求转发到后端数据库。
 
 当前仓库正在建设 MySQL Client/Server Protocol 与 PostgreSQL
-Frontend/Backend Protocol 的协议基础。请注意：这里的 MySQL、PostgreSQL 仍在
-按 wire protocol 分阶段完善中，不能把当前实现描述为完整协议兼容。
+Frontend/Backend Protocol 的完整协议透明代理。第一阶段以 MySQL 当前官方稳定
+Client/Server Protocol 文档和 PostgreSQL 当前稳定 Frontend/Backend Protocol 为
+协议基线，由目标数据库完成真实认证、TLS/SSL/GSS、压缩、prepared statement、
+binary protocol 和 extended query 等协议语义。
 
 ## 当前状态
 
@@ -19,6 +21,9 @@ Frontend/Backend Protocol 的协议基础。请注意：这里的 MySQL、Postgr
 
 ## 文档入口
 
+- [项目需求文档](docs/PROJECT_REQUIREMENTS.md)：编码前确认完整协议代理目标、范围和验收标准。
+- [系统设计文档](docs/SYSTEM_DESIGN.md)：编码前确认透明代理架构、opaque tunnel、模块边界和测试策略。
+- [协议参考表](docs/PROTOCOL_REFERENCE_TABLES.md)：MySQL capability、PostgreSQL OID、网关自身错误映射。
 - [项目概览](docs/PROJECT_OVERVIEW.md)：目标、架构、配置和扩展边界。
 - [数据库协议规则](docs/rules/database-protocol-rules.md)：开发数据库 wire
   protocol 前必须遵守。
@@ -73,8 +78,8 @@ gateway:
 ## 协议开发约束
 
 修改协议代码前必须先阅读 `docs/rules/database-protocol-rules.md`。第一阶段以
-MySQL 和 PostgreSQL 为主，新增协议需要先定义自己的 frame/message codec、状态机、
-认证流程、结果集格式、错误格式和测试边界。
+MySQL 和 PostgreSQL 完整协议透明代理为主，新增协议需要先定义自己的
+frame/message codec、状态机、认证/加密/压缩转发模型、结果流、错误格式和测试边界。
 
 包边界：
 
@@ -86,6 +91,6 @@ MySQL 和 PostgreSQL 为主，新增协议需要先定义自己的 frame/message
 
 ## 测试
 
-协议变更必须先补或更新聚焦测试，至少覆盖相关 codec、状态迁移、认证、命令、结果、
-事务状态或错误映射。单元测试不依赖真实数据库；需要真实客户端或后端数据库的验证应
-归类为集成测试。
+协议变更必须先补或更新聚焦测试，至少覆盖相关 codec/observer、状态迁移、
+opaque tunnel 切换、双向 relay、网关自身错误映射和真实客户端代理链路。单元测试不
+依赖真实数据库；`mysql`、`psql`、JDBC 与真实后端数据库验证归类为集成测试。

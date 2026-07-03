@@ -10,6 +10,9 @@ import java.util.Set;
 
 /**
  * Per-client protocol state shared by protocol-specific sessions.
+ *
+ * @author yueny09@163.com codealy
+ * @since 2026-07-02
  */
 public class ProtocolSession {
 

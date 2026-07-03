@@ -1,5 +1,7 @@
 package com.whosly.gateway.adapter;
 
+import com.whosly.gateway.adapter.protocol.SqlRiskPolicy;
+import com.whosly.gateway.adapter.protocol.SqlTrafficObserver;
 import com.whosly.gateway.parser.SqlParser;
 import com.whosly.gateway.service.DatabaseConnectionService;
 import org.slf4j.Logger;
@@ -14,6 +16,9 @@ import java.util.concurrent.Executors;
  * 抽象协议适配器基类
  * 
  * 提供协议适配器的通用实现，具体的协议适配器可以继承此类
+ *
+ * @author yueny09@163.com codealy
+ * @since 2026-07-02
  */
 public abstract class AbstractProtocolAdapter implements ProtocolAdapter {
     
@@ -24,6 +29,8 @@ public abstract class AbstractProtocolAdapter implements ProtocolAdapter {
     protected ExecutorService executorService;
     protected SqlParser sqlParser;
     protected DatabaseConnectionService databaseConnectionService;
+    protected SqlTrafficObserver sqlTrafficObserver = SqlTrafficObserver.noop();
+    protected SqlRiskPolicy sqlRiskPolicy = SqlRiskPolicy.allowAll();
     protected int port;
     protected String protocolName;
     
@@ -75,6 +82,14 @@ public abstract class AbstractProtocolAdapter implements ProtocolAdapter {
     
     public void setTargetDatabase(String targetDatabase) {
         this.targetDatabase = targetDatabase;
+    }
+
+    public void setSqlTrafficObserver(SqlTrafficObserver sqlTrafficObserver) {
+        this.sqlTrafficObserver = sqlTrafficObserver != null ? sqlTrafficObserver : SqlTrafficObserver.noop();
+    }
+
+    public void setSqlRiskPolicy(SqlRiskPolicy sqlRiskPolicy) {
+        this.sqlRiskPolicy = sqlRiskPolicy != null ? sqlRiskPolicy : SqlRiskPolicy.allowAll();
     }
     
     @Override
@@ -153,7 +168,7 @@ public abstract class AbstractProtocolAdapter implements ProtocolAdapter {
                 // Handle each client in a separate thread
                 executorService.submit(() -> handleClientConnection(clientSocket));
             } catch (IOException e) {
-                if (running) {
+                if (running && serverSocket != null && !serverSocket.isClosed()) {
                     log.error("Error accepting client connection", e);
                 }
             }

@@ -8,6 +8,9 @@ import java.sql.*;
 /**
  * PostgreSQL结果集处理类
  * 提供将JDBC结果集转换为PostgreSQL协议消息的功能
+ *
+ * @author yueny09@163.com codealy
+ * @since 2026-07-02
  */
 public class PostgreSQLResultSet {
     
