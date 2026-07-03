@@ -14,24 +14,18 @@ logging:
 
 gateway:
   # 数据库类型配置， 类型包括  mysql、postgresql
-  proxy-db-type: postgresql
+  proxy-db-type: ${GATEWAY_PROXY_DB_TYPE:postgresql}
   # 代理端口
-  proxy-port: 5433
+  proxy-port: ${GATEWAY_PROXY_PORT:5433}
 
   # 目标数据库配置
   target:
-    # # MYSQL 目标数据库配置
-    # host: localhost
-    # port: 13308
-    # username: root
-    # password: Aa123456.
-    # database: demo
-    # PG 目标数据库配置
-    host: localhost
-    port: 5432
-    username: postgres
-    password: Aa123456.
-    database: dmp
+    # 真实目标库凭据由环境变量或本地测试配置注入，避免写入可提交配置。
+    host: ${GATEWAY_TARGET_HOST:localhost}
+    port: ${GATEWAY_TARGET_PORT:5432}
+    username: ${GATEWAY_TARGET_USERNAME:postgres}
+    password: ${GATEWAY_TARGET_PASSWORD:}
+    database: ${GATEWAY_TARGET_DATABASE:postgres}
 
   connection:
     pool:

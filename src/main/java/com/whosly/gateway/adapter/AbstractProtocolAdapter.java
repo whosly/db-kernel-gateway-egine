@@ -168,7 +168,7 @@ public abstract class AbstractProtocolAdapter implements ProtocolAdapter {
                 // Handle each client in a separate thread
                 executorService.submit(() -> handleClientConnection(clientSocket));
             } catch (IOException e) {
-                if (running) {
+                if (running && serverSocket != null && !serverSocket.isClosed()) {
                     log.error("Error accepting client connection", e);
                 }
             }

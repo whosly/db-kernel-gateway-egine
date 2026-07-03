@@ -36,7 +36,7 @@ public class GatewayConfig {
     @Value("${gateway.target.username:root}")
     private String targetUsername;
     
-    @Value("${gateway.target.password:password}")
+    @Value("${gateway.target.password:}")
     private String targetPassword;
     
     @Value("${gateway.target.database:demo}")
