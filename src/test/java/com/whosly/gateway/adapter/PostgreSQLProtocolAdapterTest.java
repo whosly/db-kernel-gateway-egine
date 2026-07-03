@@ -1,6 +1,6 @@
 package com.whosly.gateway.adapter;
 
-import com.whosly.gateway.adapter.protocol.SqlTrafficEvent;
+import com.whosly.gateway.adapter.protocol.DatabaseTrafficEvent;
 import org.junit.jupiter.api.Test;
 
 import java.io.ByteArrayOutputStream;
@@ -77,8 +77,8 @@ class PostgreSQLProtocolAdapterTest {
             PostgreSQLProtocolAdapter adapter = new PostgreSQLProtocolAdapter();
             adapter.setTargetHost(InetAddress.getLoopbackAddress().getHostAddress());
             adapter.setTargetPort(targetServer.getLocalPort());
-            List<SqlTrafficEvent> observedEvents = new CopyOnWriteArrayList<>();
-            adapter.setSqlTrafficObserver(observedEvents::add);
+            List<DatabaseTrafficEvent> observedEvents = new CopyOnWriteArrayList<>();
+            adapter.setDatabaseTrafficObserver(observedEvents::add);
 
             Future<?> adapterFuture = executorService.submit(() -> adapter.handleClientConnection(clientPair.serverSide));
             Future<byte[]> backendObservedQuery = executorService.submit(() -> {
@@ -144,16 +144,16 @@ class PostgreSQLProtocolAdapterTest {
         return 1 + 4 + sql.getBytes(StandardCharsets.UTF_8).length + 1;
     }
 
-    private static void assertEventuallyObservedSql(List<SqlTrafficEvent> observedEvents, String sql) throws Exception {
+    private static void assertEventuallyObservedSql(List<DatabaseTrafficEvent> observedEvents, String sql) throws Exception {
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
         while (System.nanoTime() < deadline) {
-            if (observedEvents.stream().anyMatch(event -> sql.equals(event.getSql()))) {
+            if (observedEvents.stream().anyMatch(event -> sql.equals(event.getStatement()))) {
                 return;
             }
             Thread.sleep(10);
         }
         assertThat(observedEvents)
-                .extracting(SqlTrafficEvent::getSql)
+                .extracting(DatabaseTrafficEvent::getStatement)
                 .contains(sql);
     }
 

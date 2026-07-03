@@ -1,6 +1,6 @@
 package com.whosly.gateway.adapter.postgresql;
 
-import com.whosly.gateway.adapter.protocol.SqlTrafficEvent;
+import com.whosly.gateway.adapter.protocol.DatabaseTrafficEvent;
 import com.whosly.gateway.adapter.protocol.TrafficDirection;
 
 import java.io.ByteArrayOutputStream;
@@ -17,7 +17,7 @@ import java.util.Optional;
  * @author yueny09@163.com codealy
  * @since 2026-07-02
  */
-public class PostgreSQLSqlEventExtractor {
+public class PostgreSQLDatabaseEventExtractor {
 
     private static final int TYPED_HEADER_LENGTH = 5;
     private static final int UNTYPED_STARTUP_HEADER_LENGTH = 4;
@@ -34,22 +34,22 @@ public class PostgreSQLSqlEventExtractor {
     private boolean awaitingEncryptionResponse;
     private boolean opaqueTunnel;
 
-    public PostgreSQLSqlEventExtractor(String protocolName, String sessionId) {
+    public PostgreSQLDatabaseEventExtractor(String protocolName, String sessionId) {
         this(protocolName, sessionId, true);
     }
 
-    public PostgreSQLSqlEventExtractor(String protocolName, String sessionId, boolean startupMessageConsumed) {
+    public PostgreSQLDatabaseEventExtractor(String protocolName, String sessionId, boolean startupMessageConsumed) {
         this.protocolName = protocolName;
         this.sessionId = sessionId;
         this.skipInitialStartupMessage = !startupMessageConsumed;
         this.startupMessageConsumed = startupMessageConsumed;
     }
 
-    public List<SqlTrafficEvent> extract(byte[] bytes, int offset, int length) {
+    public List<DatabaseTrafficEvent> extract(byte[] bytes, int offset, int length) {
         return extractFrontendMessages(bytes, offset, length);
     }
 
-    public List<SqlTrafficEvent> inspect(TrafficDirection direction, byte[] bytes, int offset, int length) {
+    public List<DatabaseTrafficEvent> inspect(TrafficDirection direction, byte[] bytes, int offset, int length) {
         if (opaqueTunnel) {
             return List.of();
         }
@@ -92,11 +92,11 @@ public class PostgreSQLSqlEventExtractor {
         }
     }
 
-    private List<SqlTrafficEvent> extractFrontendMessages(byte[] bytes, int offset, int length) {
+    private List<DatabaseTrafficEvent> extractFrontendMessages(byte[] bytes, int offset, int length) {
         pendingBytes.write(bytes, offset, length);
         byte[] buffered = pendingBytes.toByteArray();
         int cursor = 0;
-        List<SqlTrafficEvent> events = new ArrayList<>();
+        List<DatabaseTrafficEvent> events = new ArrayList<>();
 
         if (skipInitialStartupMessage && !startupMessageConsumed) {
             if (buffered.length < UNTYPED_STARTUP_HEADER_LENGTH) {
@@ -135,7 +135,7 @@ public class PostgreSQLSqlEventExtractor {
                 break;
             }
 
-            Optional<SqlTrafficEvent> event = extractMessage(type, buffered, cursor + TYPED_HEADER_LENGTH,
+            Optional<DatabaseTrafficEvent> event = extractMessage(type, buffered, cursor + TYPED_HEADER_LENGTH,
                     messageLength - 4);
             event.ifPresent(events::add);
             cursor += totalLength;
@@ -145,12 +145,12 @@ public class PostgreSQLSqlEventExtractor {
         return events;
     }
 
-    private Optional<SqlTrafficEvent> extractMessage(char type, byte[] message, int payloadOffset, int payloadLength) {
+    private Optional<DatabaseTrafficEvent> extractMessage(char type, byte[] message, int payloadOffset, int payloadLength) {
         if (type == PostgreSQLMessageType.QUERY.getCode()) {
             String sql = readCString(message, payloadOffset, payloadOffset + payloadLength).value();
             return sql.isBlank()
                     ? Optional.empty()
-                    : Optional.of(SqlTrafficEvent.builder(protocolName, sessionId, "QUERY", sql).build());
+                    : Optional.of(DatabaseTrafficEvent.builder(protocolName, sessionId, "QUERY", sql).build());
         }
 
         if (type == PostgreSQLMessageType.PARSE.getCode()) {
@@ -159,7 +159,7 @@ public class PostgreSQLSqlEventExtractor {
             statementsByName.put(statementName.value(), sql.value());
             return sql.value().isBlank()
                     ? Optional.empty()
-                    : Optional.of(SqlTrafficEvent.builder(protocolName, sessionId, "PARSE", sql.value())
+                    : Optional.of(DatabaseTrafficEvent.builder(protocolName, sessionId, "PARSE", sql.value())
                     .attribute("statementName", statementName.value())
                     .build());
         }
@@ -179,7 +179,7 @@ public class PostgreSQLSqlEventExtractor {
             String sql = statementsByPortal.get(portalName.value());
             return sql == null || sql.isBlank()
                     ? Optional.empty()
-                    : Optional.of(SqlTrafficEvent.builder(protocolName, sessionId, "EXECUTE", sql)
+                    : Optional.of(DatabaseTrafficEvent.builder(protocolName, sessionId, "EXECUTE", sql)
                     .attribute("portalName", portalName.value())
                     .build());
         }

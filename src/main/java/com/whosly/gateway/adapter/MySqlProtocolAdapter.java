@@ -1,8 +1,8 @@
 package com.whosly.gateway.adapter;
 
 import com.whosly.gateway.adapter.protocol.DuplexRelay;
-import com.whosly.gateway.adapter.protocol.SqlTrafficInspector;
-import com.whosly.gateway.adapter.mysql.MySQLSqlEventExtractor;
+import com.whosly.gateway.adapter.protocol.DatabaseTrafficInspector;
+import com.whosly.gateway.adapter.mysql.MySQLDatabaseEventExtractor;
 import com.whosly.gateway.parser.DruidSqlParser;
 import com.whosly.gateway.parser.SqlParser;
 import org.slf4j.Logger;
@@ -42,10 +42,10 @@ public class MySqlProtocolAdapter extends AbstractProtocolAdapter {
         try (Socket targetSocket = connectTarget()) {
             log.info("MySQL proxy session {} connected {} to target {}:{}",
                     sessionId, clientSocket.getRemoteSocketAddress(), targetHost, targetPort);
-            SqlTrafficInspector trafficInspector = new SqlTrafficInspector(
-                    new MySQLSqlEventExtractor(PROTOCOL_NAME, sessionId, false)::inspect,
-                    sqlTrafficObserver,
-                    sqlRiskPolicy);
+            DatabaseTrafficInspector trafficInspector = new DatabaseTrafficInspector(
+                    new MySQLDatabaseEventExtractor(PROTOCOL_NAME, sessionId, false)::inspect,
+                    databaseTrafficObserver,
+                    databaseRiskPolicy);
             new DuplexRelay(sessionId, trafficInspector).relay(clientSocket, targetSocket);
         } catch (IOException e) {
             log.warn("MySQL proxy session {} closed: {}", sessionId, e.getMessage());

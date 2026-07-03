@@ -24,7 +24,7 @@ class PostgreSqlGatewayIntegrationTest extends DatabaseGatewayIntegrationTestSup
         adapter.setPort(proxyPort);
         adapter.setTargetHost(CONFIG.postgreSqlHost());
         adapter.setTargetPort(CONFIG.postgreSqlPort());
-        adapter.setSqlTrafficObserver(observedEvents::add);
+        adapter.setDatabaseTrafficObserver(observedEvents::add);
 
         try {
             adapter.start();
@@ -50,7 +50,7 @@ class PostgreSqlGatewayIntegrationTest extends DatabaseGatewayIntegrationTestSup
 
             assertObservedSql("select 1");
             assertThat(observedEvents)
-                    .extracting(event -> event.getCommand())
+                    .extracting(event -> event.getOperation())
                     .contains("PARSE", "EXECUTE");
         } finally {
             stopQuietly(adapter);

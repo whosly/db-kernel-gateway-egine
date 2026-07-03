@@ -13,5 +13,5 @@ gateway:
     host: localhost
     port: 13308
     username: root
-    password: Aa123456.
-    database: demo
+    password: change-me
+    database: mysql

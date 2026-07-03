@@ -1,6 +1,6 @@
 package com.whosly.gateway.adapter.mysql;
 
-import com.whosly.gateway.adapter.protocol.SqlTrafficEvent;
+import com.whosly.gateway.adapter.protocol.DatabaseTrafficEvent;
 import com.whosly.gateway.adapter.protocol.TrafficDirection;
 
 import java.io.ByteArrayOutputStream;
@@ -15,7 +15,7 @@ import java.util.Optional;
  * @author yueny09@163.com codealy
  * @since 2026-07-02
  */
-public class MySQLSqlEventExtractor {
+public class MySQLDatabaseEventExtractor {
 
     private static final int HEADER_LENGTH = 4;
     private static final int MYSQL_TYPE_DECIMAL = 0x00;
@@ -59,22 +59,22 @@ public class MySQLSqlEventExtractor {
     private boolean clientHandshakeResponseSeen;
     private int[] lastQueryAttributeTypes = new int[0];
 
-    public MySQLSqlEventExtractor(String protocolName, String sessionId) {
+    public MySQLDatabaseEventExtractor(String protocolName, String sessionId) {
         this(protocolName, sessionId, true);
     }
 
-    public MySQLSqlEventExtractor(String protocolName, String sessionId, boolean readyForCommands) {
+    public MySQLDatabaseEventExtractor(String protocolName, String sessionId, boolean readyForCommands) {
         this.protocolName = protocolName;
         this.sessionId = sessionId;
         this.commandPhaseOnly = !readyForCommands;
         this.readyForCommands = readyForCommands;
     }
 
-    public List<SqlTrafficEvent> extract(byte[] bytes, int offset, int length) {
+    public List<DatabaseTrafficEvent> extract(byte[] bytes, int offset, int length) {
         return extractClientCommandBytes(bytes, offset, length);
     }
 
-    public List<SqlTrafficEvent> inspect(TrafficDirection direction, byte[] bytes, int offset, int length) {
+    public List<DatabaseTrafficEvent> inspect(TrafficDirection direction, byte[] bytes, int offset, int length) {
         if (opaqueTunnel) {
             return List.of();
         }
@@ -133,11 +133,11 @@ public class MySQLSqlEventExtractor {
         }
     }
 
-    private List<SqlTrafficEvent> extractClientCommandBytes(byte[] bytes, int offset, int length) {
+    private List<DatabaseTrafficEvent> extractClientCommandBytes(byte[] bytes, int offset, int length) {
         pendingBytes.write(bytes, offset, length);
         byte[] buffered = pendingBytes.toByteArray();
         int cursor = 0;
-        List<SqlTrafficEvent> events = new ArrayList<>();
+        List<DatabaseTrafficEvent> events = new ArrayList<>();
 
         while (buffered.length - cursor >= HEADER_LENGTH) {
             int payloadLength = (buffered[cursor] & 0xFF)
@@ -148,7 +148,7 @@ public class MySQLSqlEventExtractor {
                 break;
             }
 
-            Optional<SqlTrafficEvent> event = extractPacket(buffered, cursor + HEADER_LENGTH, payloadLength);
+            Optional<DatabaseTrafficEvent> event = extractPacket(buffered, cursor + HEADER_LENGTH, payloadLength);
             event.ifPresent(events::add);
             cursor += packetLength;
         }
@@ -190,7 +190,7 @@ public class MySQLSqlEventExtractor {
         }
     }
 
-    private Optional<SqlTrafficEvent> extractPacket(byte[] packet, int payloadOffset, int payloadLength) {
+    private Optional<DatabaseTrafficEvent> extractPacket(byte[] packet, int payloadOffset, int payloadLength) {
         if (payloadLength < 1) {
             return Optional.empty();
         }
@@ -219,7 +219,7 @@ public class MySQLSqlEventExtractor {
             return Optional.empty();
         }
 
-        return Optional.of(SqlTrafficEvent.builder(protocolName, sessionId, command.name(), sql).build());
+        return Optional.of(DatabaseTrafficEvent.builder(protocolName, sessionId, command.name(), sql).build());
     }
 
     private boolean hasCapability(MySQLCapability capability) {

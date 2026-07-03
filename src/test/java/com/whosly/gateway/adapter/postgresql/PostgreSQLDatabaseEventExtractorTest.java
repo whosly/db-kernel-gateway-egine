@@ -1,6 +1,6 @@
 package com.whosly.gateway.adapter.postgresql;
 
-import com.whosly.gateway.adapter.protocol.SqlTrafficEvent;
+import com.whosly.gateway.adapter.protocol.DatabaseTrafficEvent;
 import com.whosly.gateway.adapter.protocol.TrafficDirection;
 import org.junit.jupiter.api.Test;
 
@@ -11,23 +11,23 @@ import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-class PostgreSQLSqlEventExtractorTest {
+class PostgreSQLDatabaseEventExtractorTest {
 
-    private final PostgreSQLSqlEventExtractor extractor =
-            new PostgreSQLSqlEventExtractor("PostgreSQL", "pg-test");
+    private final PostgreSQLDatabaseEventExtractor extractor =
+            new PostgreSQLDatabaseEventExtractor("PostgreSQL", "pg-test");
 
     @Test
     void extractsSimpleQuerySql() {
         byte[] message = typedMessage('Q', cstring("select 1"));
 
-        List<SqlTrafficEvent> events = extractor.extract(message, 0, message.length);
+        List<DatabaseTrafficEvent> events = extractor.extract(message, 0, message.length);
 
         assertThat(events).singleElement()
                 .satisfies(event -> {
                     assertThat(event.getProtocolName()).isEqualTo("PostgreSQL");
                     assertThat(event.getSessionId()).isEqualTo("pg-test");
-                    assertThat(event.getCommand()).isEqualTo("QUERY");
-                    assertThat(event.getSql()).isEqualTo("select 1");
+                    assertThat(event.getOperation()).isEqualTo("QUERY");
+                    assertThat(event.getStatement()).isEqualTo("select 1");
                 });
     }
 
@@ -48,14 +48,14 @@ class PostgreSQLSqlEventExtractorTest {
                 intBytes(0));
         byte[] messages = concat(parse, bind, execute);
 
-        List<SqlTrafficEvent> events = extractor.extract(messages, 0, messages.length);
+        List<DatabaseTrafficEvent> events = extractor.extract(messages, 0, messages.length);
 
         assertThat(events).hasSize(2);
-        assertThat(events.get(0).getCommand()).isEqualTo("PARSE");
-        assertThat(events.get(0).getSql()).isEqualTo("select * from account where id = $1");
+        assertThat(events.get(0).getOperation()).isEqualTo("PARSE");
+        assertThat(events.get(0).getStatement()).isEqualTo("select * from account where id = $1");
         assertThat(events.get(0).getAttribute("statementName")).contains("stmt1");
-        assertThat(events.get(1).getCommand()).isEqualTo("EXECUTE");
-        assertThat(events.get(1).getSql()).isEqualTo("select * from account where id = $1");
+        assertThat(events.get(1).getOperation()).isEqualTo("EXECUTE");
+        assertThat(events.get(1).getStatement()).isEqualTo("select * from account where id = $1");
         assertThat(events.get(1).getAttribute("portalName")).contains("portal1");
     }
 
@@ -64,35 +64,35 @@ class PostgreSQLSqlEventExtractorTest {
         byte[] message = typedMessage('Q', cstring("select 1"));
 
         assertThat(extractor.extract(message, 0, 2)).isEmpty();
-        List<SqlTrafficEvent> events = extractor.extract(message, 2, message.length - 2);
+        List<DatabaseTrafficEvent> events = extractor.extract(message, 2, message.length - 2);
 
         assertThat(events).singleElement()
-                .extracting(SqlTrafficEvent::getSql)
+                .extracting(DatabaseTrafficEvent::getStatement)
                 .isEqualTo("select 1");
     }
 
     @Test
     void authenticationAwareExtractorSkipsStartupMessageBeforeObservingSql() {
-        PostgreSQLSqlEventExtractor authenticationAwareExtractor =
-                new PostgreSQLSqlEventExtractor("PostgreSQL", "pg-auth", false);
+        PostgreSQLDatabaseEventExtractor authenticationAwareExtractor =
+                new PostgreSQLDatabaseEventExtractor("PostgreSQL", "pg-auth", false);
         byte[] startup = new byte[]{0x00, 0x00, 0x00, 0x08, 0x00, 0x03, 0x00, 0x02};
 
         assertThat(authenticationAwareExtractor.inspect(TrafficDirection.CLIENT_TO_TARGET,
                 startup, 0, startup.length)).isEmpty();
 
         byte[] query = typedMessage('Q', cstring("select 1"));
-        List<SqlTrafficEvent> events = authenticationAwareExtractor.inspect(TrafficDirection.CLIENT_TO_TARGET,
+        List<DatabaseTrafficEvent> events = authenticationAwareExtractor.inspect(TrafficDirection.CLIENT_TO_TARGET,
                 query, 0, query.length);
 
         assertThat(events).singleElement()
-                .extracting(SqlTrafficEvent::getSql)
+                .extracting(DatabaseTrafficEvent::getStatement)
                 .isEqualTo("select 1");
     }
 
     @Test
     void authenticationAwareExtractorStopsSqlObservationWhenServerAcceptsSsl() {
-        PostgreSQLSqlEventExtractor authenticationAwareExtractor =
-                new PostgreSQLSqlEventExtractor("PostgreSQL", "pg-tls", false);
+        PostgreSQLDatabaseEventExtractor authenticationAwareExtractor =
+                new PostgreSQLDatabaseEventExtractor("PostgreSQL", "pg-tls", false);
         byte[] sslRequest = ByteBuffer.allocate(8)
                 .putInt(8)
                 .putInt(80877103)
@@ -110,8 +110,8 @@ class PostgreSQLSqlEventExtractorTest {
 
     @Test
     void authenticationAwareExtractorContinuesCleartextObservationWhenServerRejectsSsl() {
-        PostgreSQLSqlEventExtractor authenticationAwareExtractor =
-                new PostgreSQLSqlEventExtractor("PostgreSQL", "pg-cleartext-after-ssl-reject", false);
+        PostgreSQLDatabaseEventExtractor authenticationAwareExtractor =
+                new PostgreSQLDatabaseEventExtractor("PostgreSQL", "pg-cleartext-after-ssl-reject", false);
         byte[] sslRequest = ByteBuffer.allocate(8)
                 .putInt(8)
                 .putInt(80877103)
@@ -127,11 +127,11 @@ class PostgreSQLSqlEventExtractorTest {
                 startup, 0, startup.length)).isEmpty();
 
         byte[] query = typedMessage('Q', cstring("select 1"));
-        List<SqlTrafficEvent> events = authenticationAwareExtractor.inspect(TrafficDirection.CLIENT_TO_TARGET,
+        List<DatabaseTrafficEvent> events = authenticationAwareExtractor.inspect(TrafficDirection.CLIENT_TO_TARGET,
                 query, 0, query.length);
 
         assertThat(events).singleElement()
-                .extracting(SqlTrafficEvent::getSql)
+                .extracting(DatabaseTrafficEvent::getStatement)
                 .isEqualTo("select 1");
     }
 

@@ -13,5 +13,5 @@ gateway:
     host: localhost
     port: 5432
     username: postgres
-    password: Aa123456.
-    database: dmp
+    password: change-me
+    database: postgres

@@ -24,7 +24,7 @@ class MySqlGatewayIntegrationTest extends DatabaseGatewayIntegrationTestSupport 
         adapter.setPort(proxyPort);
         adapter.setTargetHost(CONFIG.mysqlHost());
         adapter.setTargetPort(CONFIG.mysqlPort());
-        adapter.setSqlTrafficObserver(observedEvents::add);
+        adapter.setDatabaseTrafficObserver(observedEvents::add);
 
         try {
             adapter.start();
@@ -50,7 +50,7 @@ class MySqlGatewayIntegrationTest extends DatabaseGatewayIntegrationTestSupport 
 
             assertObservedSql("select 1");
             assertThat(observedEvents)
-                    .extracting(event -> event.getCommand())
+                    .extracting(event -> event.getOperation())
                     .contains("COM_QUERY");
         } finally {
             stopQuietly(adapter);

@@ -98,7 +98,7 @@ mysql client -> gateway:33307 -> target mysql:13308
 
 效果示意：
 
-![MySQL gateway demo](assets/mysql-gateway-demo.gif)
+![MySQL gateway flow](assets/mysql-gateway-flow.gif)
 
 ## PostgreSQL 网关
 
@@ -158,7 +158,7 @@ psql client -> gateway:35433 -> target postgresql:5432
 
 效果示意：
 
-![PostgreSQL gateway demo](assets/postgresql-gateway-demo.gif)
+![PostgreSQL gateway flow](assets/postgresql-gateway-flow.gif)
 
 ## 测试
 

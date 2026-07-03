@@ -4,7 +4,7 @@ import com.whosly.gateway.adapter.mysql.MySQLHandshake;
 import com.whosly.gateway.adapter.mysql.MySQLCommandType;
 import com.whosly.gateway.adapter.mysql.MySQLPacket;
 import com.whosly.gateway.adapter.mysql.MySQLResultSet;
-import com.whosly.gateway.adapter.protocol.SqlTrafficEvent;
+import com.whosly.gateway.adapter.protocol.DatabaseTrafficEvent;
 import org.junit.jupiter.api.Test;
 
 import java.io.InputStream;
@@ -150,8 +150,8 @@ class MySqlProtocolAdapterTest {
             MySqlProtocolAdapter adapter = new MySqlProtocolAdapter();
             adapter.setTargetHost(InetAddress.getLoopbackAddress().getHostAddress());
             adapter.setTargetPort(targetServer.getLocalPort());
-            List<SqlTrafficEvent> observedEvents = new CopyOnWriteArrayList<>();
-            adapter.setSqlTrafficObserver(observedEvents::add);
+            List<DatabaseTrafficEvent> observedEvents = new CopyOnWriteArrayList<>();
+            adapter.setDatabaseTrafficObserver(observedEvents::add);
 
             Future<?> adapterFuture = executorService.submit(() -> adapter.handleClientConnection(clientPair.serverSide));
             Future<byte[]> backendObservedQuery = executorService.submit(() -> {
@@ -226,16 +226,16 @@ class MySqlProtocolAdapterTest {
         return sql.getBytes(StandardCharsets.UTF_8).length + 5;
     }
 
-    private static void assertEventuallyObservedSql(List<SqlTrafficEvent> observedEvents, String sql) throws Exception {
+    private static void assertEventuallyObservedSql(List<DatabaseTrafficEvent> observedEvents, String sql) throws Exception {
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
         while (System.nanoTime() < deadline) {
-            if (observedEvents.stream().anyMatch(event -> sql.equals(event.getSql()))) {
+            if (observedEvents.stream().anyMatch(event -> sql.equals(event.getStatement()))) {
                 return;
             }
             Thread.sleep(10);
         }
         assertThat(observedEvents)
-                .extracting(SqlTrafficEvent::getSql)
+                .extracting(DatabaseTrafficEvent::getStatement)
                 .contains(sql);
     }
 

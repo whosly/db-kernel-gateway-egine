@@ -1,7 +1,7 @@
 package com.whosly.gateway.integration;
 
 import com.whosly.gateway.adapter.ProtocolAdapter;
-import com.whosly.gateway.adapter.protocol.SqlTrafficEvent;
+import com.whosly.gateway.adapter.protocol.DatabaseTrafficEvent;
 import org.junit.jupiter.api.Assumptions;
 
 import java.net.ServerSocket;
@@ -15,7 +15,7 @@ abstract class DatabaseGatewayIntegrationTestSupport {
 
     protected static final IntegrationTestConfig CONFIG = IntegrationTestConfig.load();
 
-    protected final List<SqlTrafficEvent> observedEvents = new CopyOnWriteArrayList<>();
+    protected final List<DatabaseTrafficEvent> observedEvents = new CopyOnWriteArrayList<>();
 
     protected void requireIntegrationEnabled() {
         Assumptions.assumeTrue(CONFIG.isEnabled(),
@@ -37,13 +37,13 @@ abstract class DatabaseGatewayIntegrationTestSupport {
     protected void assertObservedSql(String sql) throws Exception {
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
         while (System.nanoTime() < deadline) {
-            if (observedEvents.stream().anyMatch(event -> sql.equals(event.getSql()))) {
+            if (observedEvents.stream().anyMatch(event -> sql.equals(event.getStatement()))) {
                 return;
             }
             Thread.sleep(20);
         }
         assertThat(observedEvents)
-                .extracting(SqlTrafficEvent::getSql)
+                .extracting(DatabaseTrafficEvent::getStatement)
                 .contains(sql);
     }
 }

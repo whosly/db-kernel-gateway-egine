@@ -23,9 +23,9 @@ gateway:
     # 真实目标库凭据由环境变量或本地测试配置注入，避免写入可提交配置。
     host: ${GATEWAY_TARGET_HOST:localhost}
     port: ${GATEWAY_TARGET_PORT:5432}
-    username: ${GATEWAY_TARGET_USERNAME:postgres}
+    username: ${GATEWAY_TARGET_USERNAME:}
     password: ${GATEWAY_TARGET_PASSWORD:}
-    database: ${GATEWAY_TARGET_DATABASE:postgres}
+    database: ${GATEWAY_TARGET_DATABASE:}
 
   connection:
     pool:
