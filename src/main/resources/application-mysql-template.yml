@@ -1,0 +1,17 @@
+server:
+  # HTTP 服务端口，比如 actuator、controller 之类的 Web 入口。
+  port: 8080
+
+gateway:
+  # 数据库网关代理的数据库类型
+  proxy-db-type: mysql
+  # MySQL 客户端连接网关时使用的本地代理端口。
+  proxy-port: 13307
+
+  target:
+    # 网关后端转发到的真实的数据库服务。
+    host: localhost
+    port: 13308
+    username: root
+    password: Aa123456.
+    database: demo
