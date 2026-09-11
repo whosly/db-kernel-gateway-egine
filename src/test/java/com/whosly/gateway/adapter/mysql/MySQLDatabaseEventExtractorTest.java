@@ -358,6 +358,127 @@ class MySQLDatabaseEventExtractorTest {
         return cstring;
     }
 
+    @Test
+    void tracksTransactionStatusFromOkPacketStatusFlags() {
+        MySQLSession session = new MySQLSession("mysql-transaction");
+        MySQLDatabaseEventExtractor transactionExtractor =
+                new MySQLDatabaseEventExtractor("MySQL", "mysql-transaction", true, session);
+
+        byte[] beginOk = okPacket(1, 0, 0, 0x0003);
+        transactionExtractor.inspect(TrafficDirection.TARGET_TO_CLIENT, beginOk, 0, beginOk.length);
+        assertThat(session.getTransactionStatus()).isEqualTo(MySQLSession.TransactionStatus.IN_TRANSACTION);
+        assertThat(session.isAutocommit()).isTrue();
+
+        byte[] commitOk = okPacket(1, 1, 0, 0x0002);
+        transactionExtractor.inspect(TrafficDirection.TARGET_TO_CLIENT, commitOk, 0, commitOk.length);
+        assertThat(session.getTransactionStatus()).isEqualTo(MySQLSession.TransactionStatus.IDLE);
+        assertThat(session.getLastAffectedRows()).isEqualTo(1);
+    }
+
+    @Test
+    void recordsSqlStateFromErrorPacket() {
+        MySQLSession session = new MySQLSession("mysql-error");
+        MySQLDatabaseEventExtractor errorExtractor =
+                new MySQLDatabaseEventExtractor("MySQL", "mysql-error", true, session);
+
+        byte[] error = errPacket(1, 1064, "42000", "You have an error in your SQL syntax");
+        errorExtractor.inspect(TrafficDirection.TARGET_TO_CLIENT, error, 0, error.length);
+
+        assertThat(session.getLastSqlState()).contains("42000");
+    }
+
+    @Test
+    void updatesTransactionStatusFromClassicResultSetEof() {
+        MySQLSession session = new MySQLSession("mysql-resultset");
+        MySQLDatabaseEventExtractor resultSetExtractor =
+                new MySQLDatabaseEventExtractor("MySQL", "mysql-resultset", true, session);
+
+        inspectTarget(resultSetExtractor, 1, new byte[]{0x01});
+        inspectTarget(resultSetExtractor, 2, new byte[]{0x03, 'd', 'e', 'f'});
+        inspectTarget(resultSetExtractor, 3, new byte[]{(byte) 0xFE, 0x00, 0x00, 0x02, 0x00});
+        inspectTarget(resultSetExtractor, 4, new byte[]{0x01, 'a'});
+        inspectTarget(resultSetExtractor, 5, new byte[]{(byte) 0xFE, 0x00, 0x00, 0x03, 0x00});
+
+        assertThat(session.getTransactionStatus()).isEqualTo(MySQLSession.TransactionStatus.IN_TRANSACTION);
+    }
+
+    @Test
+    void updatesTransactionStatusFromOkAsEofWhenClientDeprecatesEof() {
+        MySQLSession session = new MySQLSession("mysql-deprecate-eof");
+        MySQLDatabaseEventExtractor deprecateExtractor =
+                new MySQLDatabaseEventExtractor("MySQL", "mysql-deprecate-eof", false, session);
+
+        byte[] handshakeResponse = rawPacket(1, capabilityPayload(
+                MySQLCapability.CLIENT_PROTOCOL_41.getFlag()
+                        | MySQLCapability.CLIENT_DEPRECATE_EOF.getFlag()));
+        deprecateExtractor.inspect(TrafficDirection.CLIENT_TO_TARGET,
+                handshakeResponse, 0, handshakeResponse.length);
+        inspectTarget(deprecateExtractor, 2, new byte[]{0x00, 0x02});
+
+        inspectTarget(deprecateExtractor, 1, new byte[]{0x01});
+        inspectTarget(deprecateExtractor, 2, new byte[]{0x03, 'd', 'e', 'f'});
+        inspectTarget(deprecateExtractor, 3, new byte[]{0x01, 'a'});
+        inspectTarget(deprecateExtractor, 4, new byte[]{(byte) 0xFE, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00});
+
+        assertThat(session.getTransactionStatus()).isEqualTo(MySQLSession.TransactionStatus.IN_TRANSACTION);
+    }
+
+    @Test
+    void keepsObservingAfterServerMoreResultsStatusFlag() {
+        MySQLSession session = new MySQLSession("mysql-more-results");
+        MySQLDatabaseEventExtractor moreResultsExtractor =
+                new MySQLDatabaseEventExtractor("MySQL", "mysql-more-results", true, session);
+
+        inspectTarget(moreResultsExtractor, 1, okPayload(0, 0x0002 | 0x0008));
+        inspectTarget(moreResultsExtractor, 1, new byte[]{0x01});
+        inspectTarget(moreResultsExtractor, 2, new byte[]{0x03, 'd', 'e', 'f'});
+        inspectTarget(moreResultsExtractor, 3, new byte[]{(byte) 0xFE, 0x00, 0x00, 0x02, 0x00});
+        inspectTarget(moreResultsExtractor, 4, new byte[]{0x01, 'a'});
+        inspectTarget(moreResultsExtractor, 5, new byte[]{(byte) 0xFE, 0x00, 0x00, 0x03, 0x00});
+
+        assertThat(session.getTransactionStatus()).isEqualTo(MySQLSession.TransactionStatus.IN_TRANSACTION);
+    }
+
+    private static void inspectTarget(MySQLDatabaseEventExtractor extractor, int sequenceId, byte[] payload) {
+        byte[] packet = rawPacket(sequenceId, payload);
+        extractor.inspect(TrafficDirection.TARGET_TO_CLIENT, packet, 0, packet.length);
+    }
+
+    private static byte[] okPayload(int affectedRows, int statusFlags) {
+        ByteArrayOutputStream payload = new ByteArrayOutputStream();
+        payload.write(0x00);
+        payload.write(affectedRows);
+        payload.write(0x00);
+        payload.write(statusFlags & 0xFF);
+        payload.write((statusFlags >> 8) & 0xFF);
+        payload.write(0);
+        payload.write(0);
+        return payload.toByteArray();
+    }
+
+    private static byte[] okPacket(int sequenceId, long affectedRows, long lastInsertId, int statusFlags) {
+        ByteArrayOutputStream payload = new ByteArrayOutputStream();
+        payload.write(0x00);
+        payload.write((int) affectedRows);
+        payload.write((int) lastInsertId);
+        payload.write(statusFlags & 0xFF);
+        payload.write((statusFlags >> 8) & 0xFF);
+        payload.write(0);
+        payload.write(0);
+        return rawPacket(sequenceId, payload.toByteArray());
+    }
+
+    private static byte[] errPacket(int sequenceId, int errorCode, String sqlState, String message) {
+        ByteArrayOutputStream payload = new ByteArrayOutputStream();
+        payload.write(0xFF);
+        payload.write(errorCode & 0xFF);
+        payload.write((errorCode >> 8) & 0xFF);
+        payload.write('#');
+        payload.writeBytes(sqlState.getBytes(StandardCharsets.US_ASCII));
+        payload.writeBytes(message.getBytes(StandardCharsets.UTF_8));
+        return rawPacket(sequenceId, payload.toByteArray());
+    }
+
     private static byte[] framedPayload(byte[] source, int offset, int payloadLength, int sequenceId) {
         byte[] packet = new byte[MySQLFrameCodec.HEADER_LENGTH + payloadLength];
         packet[0] = (byte) (payloadLength & 0xFF);

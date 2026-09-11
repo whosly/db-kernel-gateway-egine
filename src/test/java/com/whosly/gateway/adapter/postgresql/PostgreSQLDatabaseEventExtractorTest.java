@@ -204,6 +204,83 @@ class PostgreSQLDatabaseEventExtractorTest {
         return concat(intBytes(payload.length + 4), payload);
     }
 
+    @Test
+    void observesBackendCommandTagRowCountAndSqlState() {
+        PostgreSQLSession session = new PostgreSQLSession("pg-backend");
+        PostgreSQLDatabaseEventExtractor backendExtractor =
+                new PostgreSQLDatabaseEventExtractor("PostgreSQL", "pg-backend", true, session);
+
+        byte[] rowDescription = typedMessage('T', shortBytes(3));
+        backendExtractor.inspect(TrafficDirection.TARGET_TO_CLIENT, rowDescription, 0, rowDescription.length);
+
+        byte[] commandComplete = typedMessage('C', cstring("SELECT 3"));
+        backendExtractor.inspect(TrafficDirection.TARGET_TO_CLIENT, commandComplete, 0, commandComplete.length);
+
+        byte[] errorResponse = typedMessage('E',
+                errorField('S', "ERROR"), errorField('C', "42601"), new byte[]{0});
+        backendExtractor.inspect(TrafficDirection.TARGET_TO_CLIENT, errorResponse, 0, errorResponse.length);
+
+        assertThat(session.getLastRowDescriptionFieldCount()).isEqualTo(3);
+        assertThat(session.getLastCommandTag()).contains("SELECT 3");
+        assertThat(session.getLastSqlState()).contains("42601");
+        assertThat(session.getLastSeverity()).contains("ERROR");
+    }
+
+    @Test
+    void observesBackendParametersKeyDataAuthenticationAndNotices() {
+        PostgreSQLSession session = new PostgreSQLSession("pg-backend-info");
+        PostgreSQLDatabaseEventExtractor backendExtractor =
+                new PostgreSQLDatabaseEventExtractor("PostgreSQL", "pg-backend-info", true, session);
+
+        inspectBackend(backendExtractor, 'S', cstring("server_version"), cstring("18.0"));
+        inspectBackend(backendExtractor, 'K', intBytes(4711), intBytes(9911));
+        inspectBackend(backendExtractor, 'N',
+                errorField('S', "WARNING"), errorField('C', "01000"), new byte[]{0});
+        inspectBackend(backendExtractor, 'R', intBytes(10));
+        inspectBackend(backendExtractor, 't', shortBytes(2));
+
+        assertThat(session.getParameter("server_version")).contains("18.0");
+        assertThat(session.getBackendProcessId()).isEqualTo(4711);
+        assertThat(session.getBackendSecretKey()).isEqualTo(9911);
+        assertThat(session.getLastNoticeSeverity()).contains("WARNING");
+        assertThat(session.getLastNoticeSqlState()).contains("01000");
+        assertThat(session.getLastAuthenticationType()).isEqualTo(10);
+        assertThat(session.getLastParameterDescriptionCount()).isEqualTo(2);
+    }
+
+    @Test
+    void closeRemovesPortalMappingSoExecuteIsNoLongerReported() {
+        PostgreSQLDatabaseEventExtractor closeExtractor =
+                new PostgreSQLDatabaseEventExtractor("PostgreSQL", "pg-close", true);
+
+        byte[] parse = typedMessage('P', cstring("stmt1"), cstring("select 1"), shortBytes(0));
+        byte[] bind = typedMessage('B', cstring("portal1"), cstring("stmt1"),
+                shortBytes(0), shortBytes(0), shortBytes(0));
+        byte[] setup = concat(parse, bind);
+        closeExtractor.extract(setup, 0, setup.length);
+
+        byte[] execute = typedMessage('E', cstring("portal1"), intBytes(0));
+        assertThat(closeExtractor.extract(execute, 0, execute.length)).singleElement()
+                .extracting(DatabaseTrafficEvent::getStatement).isEqualTo("select 1");
+
+        byte[] close = typedMessage('C', cstring("P"), cstring("portal1"));
+        closeExtractor.extract(close, 0, close.length);
+
+        assertThat(closeExtractor.extract(execute, 0, execute.length)).isEmpty();
+    }
+
+    private static void inspectBackend(PostgreSQLDatabaseEventExtractor extractor, char type, byte[]... bodies) {
+        byte[] message = typedMessage(type, bodies);
+        extractor.inspect(TrafficDirection.TARGET_TO_CLIENT, message, 0, message.length);
+    }
+
+    private static byte[] errorField(char code, String value) {
+        ByteArrayOutputStream output = new ByteArrayOutputStream();
+        output.write(code);
+        output.writeBytes(cstring(value));
+        return output.toByteArray();
+    }
+
     private static byte[] typedMessage(char type, byte[]... bodies) {
         byte[] body = concat(bodies);
         ByteBuffer buffer = ByteBuffer.allocate(1 + 4 + body.length);

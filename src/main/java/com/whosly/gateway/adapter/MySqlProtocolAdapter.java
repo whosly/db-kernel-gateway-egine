@@ -47,6 +47,10 @@ public class MySqlProtocolAdapter extends AbstractProtocolAdapter {
         String sessionId = "mysql-" + UUID.randomUUID();
         MySQLSession session = new MySQLSession(sessionId);
 
+        /*
+         * When the target is unreachable the gateway answers with a native MySQL
+         * ERR_Packet (rule 2.8) before closing, instead of a bare TCP reset.
+         */
         Socket targetSocket;
         try {
             targetSocket = connectTarget();

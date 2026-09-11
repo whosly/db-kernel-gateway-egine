@@ -6,10 +6,17 @@ import java.util.Optional;
 /**
  * PostgreSQL built-in type OIDs commonly needed by protocol metadata handling.
  *
+ * <p>Transparent proxying never rewrites the target {@code RowDescription}, so
+ * this table exists for audit and tests only.</p>
+ *
+ * @see <a href="https://www.postgresql.org/docs/current/datatype-oid.html">
+ *     PostgreSQL data type OIDs</a>
  * @author yueny09@163.com codealy
  * @since 2026-07-02
  */
 public enum PostgreSQLTypeOid {
+
+    // Built-in scalar and string types.
     BOOL(16, "bool", "boolean"),
     BYTEA(17, "bytea", "binary"),
     CHAR(18, "char", "internal"),
@@ -35,6 +42,8 @@ public enum PostgreSQLTypeOid {
     NUMERIC(1700, "numeric", "numeric"),
     UUID(2950, "uuid", "uuid"),
     JSONB(3802, "jsonb", "json"),
+
+    // Array types; the element type name is prefixed with an underscore.
     BOOL_ARRAY(1000, "_bool", "array"),
     BYTEA_ARRAY(1001, "_bytea", "array"),
     INT2_ARRAY(1005, "_int2", "array"),

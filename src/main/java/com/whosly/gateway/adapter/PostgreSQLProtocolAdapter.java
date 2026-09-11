@@ -21,6 +21,11 @@ import java.util.UUID;
 /**
  * PostgreSQL transparent protocol proxy adapter.
  *
+ * <p>Accepts a client connection, opens the target connection and relays bytes
+ * in both directions while a per-connection {@link PostgreSQLSession} records
+ * observed protocol state. When the target cannot be reached the client gets a
+ * PostgreSQL-native {@code ErrorResponse} instead of a bare TCP reset.</p>
+ *
  * @author yueny09@163.com codealy
  * @since 2026-07-02
  */

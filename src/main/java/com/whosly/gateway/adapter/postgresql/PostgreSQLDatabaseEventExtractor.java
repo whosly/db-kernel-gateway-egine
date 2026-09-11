@@ -13,8 +13,21 @@ import java.util.Map;
 import java.util.Optional;
 
 /**
- * Extracts SQL statements from cleartext PostgreSQL frontend messages and
- * observes backend {@code ReadyForQuery} transaction state.
+ * Observes cleartext PostgreSQL traffic and extracts auditable SQL events.
+ *
+ * <p>The relay forwards the original bytes; this extractor only reads them. It
+ * tracks the two directions independently:</p>
+ * <ul>
+ *   <li>client to target: the startup family (StartupMessage / SSLRequest /
+ *       GSSENCRequest / CancelRequest), then simple and extended query messages.
+ *       Extended query SQL is correlated from Parse through Bind to Execute;</li>
+ *   <li>target to client: the authentication exchange plus the response
+ *       messages that carry transaction state and command metadata.</li>
+ * </ul>
+ *
+ * <p>Accepted TLS/GSS encryption turns the session into an opaque tunnel where
+ * no further inspection happens. Anything that cannot be parsed confidently is
+ * dropped rather than guessed.</p>
  *
  * @author yueny09@163.com codealy
  * @since 2026-07-02
@@ -23,15 +36,25 @@ public class PostgreSQLDatabaseEventExtractor {
 
     private final String protocolName;
     private final String sessionId;
+    /** True when construction starts before the startup message has been seen. */
     private final boolean skipInitialStartupMessage;
+    /** Optional session used to publish observed protocol state; null in some tests. */
     private final PostgreSQLSession session;
+    /** Buffer for frontend messages, which TCP may split across reads. */
     private final ByteArrayOutputStream pendingBytes = new ByteArrayOutputStream();
+    /** Buffer for backend messages used for transaction/metadata observation. */
     private final ByteArrayOutputStream pendingBackendBytes = new ByteArrayOutputStream();
+    /** Parse-time mapping of statement name to SQL text. */
     private final Map<String, String> statementsByName = new HashMap<>();
+    /** Bind-time mapping of portal name to SQL text. */
     private final Map<String, String> statementsByPortal = new HashMap<>();
+    /** True once the StartupMessage has been consumed. */
     private boolean startupMessageConsumed;
+    /** True while waiting for the single-byte SSL/GSS encoding response. */
     private boolean awaitingEncryptionResponse;
+    /** True after accepted encryption: bytes become opaque and are not parsed. */
     private boolean opaqueTunnel;
+    /** True when this session was a CancelRequest. */
     private boolean cancelRequest;
 
     public PostgreSQLDatabaseEventExtractor(String protocolName, String sessionId) {
@@ -111,6 +134,11 @@ public class PostgreSQLDatabaseEventExtractor {
             observeBackendEncryptionResponse(bytes, offset, length);
             return;
         }
+        /*
+         * Backend bytes only become meaningful once the startup message has been
+         * consumed; before that the only interesting byte is the single-byte
+         * encoding response handled above.
+         */
         if (!startupMessageConsumed || cancelRequest) {
             return;
         }
@@ -140,18 +168,115 @@ public class PostgreSQLDatabaseEventExtractor {
     }
 
     private void observeBackendMessage(char type, byte[] message, int payloadOffset, int payloadLength) {
-        if (session == null || payloadLength < 1) {
+        if (session == null) {
             return;
         }
 
         Optional<PostgreSQLBackendMessageType> backendType = PostgreSQLBackendMessageType.fromCode(type);
-        if (backendType.isEmpty() || backendType.get() != PostgreSQLBackendMessageType.READY_FOR_QUERY) {
+        if (backendType.isEmpty()) {
+            return;
+        }
+
+        switch (backendType.get()) {
+            case READY_FOR_QUERY -> observeReadyForQuery(message, payloadOffset, payloadLength);
+            case COMMAND_COMPLETE -> session.setLastCommandTag(
+                    readCString(message, payloadOffset, payloadOffset + payloadLength).value());
+            case ROW_DESCRIPTION -> observeRowDescription(message, payloadOffset, payloadLength);
+            case PARAMETER_DESCRIPTION -> observeParameterDescription(message, payloadOffset, payloadLength);
+            case PARAMETER_STATUS -> observeParameterStatus(message, payloadOffset, payloadOffset + payloadLength);
+            case BACKEND_KEY_DATA -> observeBackendKeyData(message, payloadOffset, payloadLength);
+            case AUTHENTICATION -> observeAuthentication(message, payloadOffset, payloadLength);
+            case ERROR_RESPONSE -> {
+                PgErrorFields fields = readErrorFields(message, payloadOffset, payloadOffset + payloadLength);
+                session.setLastSeverity(fields.severity());
+                session.setLastSqlState(fields.sqlState());
+            }
+            case NOTICE_RESPONSE -> {
+                PgErrorFields fields = readErrorFields(message, payloadOffset, payloadOffset + payloadLength);
+                session.setLastNoticeSeverity(fields.severity());
+                session.setLastNoticeSqlState(fields.sqlState());
+            }
+            default -> {
+                // Other backend messages are forwarded verbatim; no metadata is tracked yet.
+            }
+        }
+    }
+
+    private void observeReadyForQuery(byte[] message, int payloadOffset, int payloadLength) {
+        if (payloadLength < 1) {
             return;
         }
 
         char status = (char) (message[payloadOffset] & 0xFF);
         session.setTransactionStatus(transactionStatus(status));
         session.tryTransitionTo(ProtocolConnectionState.READY);
+    }
+
+    private void observeRowDescription(byte[] message, int payloadOffset, int payloadLength) {
+        if (payloadLength < 2) {
+            return;
+        }
+
+        int fieldCount = ((message[payloadOffset] & 0xFF) << 8) | (message[payloadOffset + 1] & 0xFF);
+        session.setLastRowDescriptionFieldCount(fieldCount);
+    }
+
+    private void observeParameterDescription(byte[] message, int payloadOffset, int payloadLength) {
+        if (payloadLength < 2) {
+            return;
+        }
+
+        int parameterCount = ((message[payloadOffset] & 0xFF) << 8) | (message[payloadOffset + 1] & 0xFF);
+        session.setLastParameterDescriptionCount(parameterCount);
+    }
+
+    /** Session parameters the server reports after authentication. */
+    private void observeParameterStatus(byte[] message, int offset, int endExclusive) {
+        CString name = readCString(message, offset, endExclusive);
+        CString value = readCString(message, name.nextOffset(), endExclusive);
+        if (!name.value().isEmpty()) {
+            session.setParameter(name.value(), value.value());
+        }
+    }
+
+    /** Cancel key material used to associate a future cancel request. */
+    private void observeBackendKeyData(byte[] message, int payloadOffset, int payloadLength) {
+        if (payloadLength < 8) {
+            return;
+        }
+        session.setBackendProcessId(PostgreSQLFrameCodec.readInt4(message, payloadOffset, payloadOffset + 4));
+        session.setBackendSecretKey(PostgreSQLFrameCodec.readInt4(message, payloadOffset + 4, payloadOffset + 8));
+    }
+
+    /** Authentication type only; the payload itself is never retained. */
+    private void observeAuthentication(byte[] message, int payloadOffset, int payloadLength) {
+        if (payloadLength < 4) {
+            return;
+        }
+        session.setLastAuthenticationType(PostgreSQLFrameCodec.readInt4(message, payloadOffset, payloadOffset + 4));
+    }
+
+    /**
+     * Parses the field list shared by ErrorResponse and NoticeResponse.
+     *
+     * <p>Only severity and SQLSTATE are kept; message, detail and hint text are
+     * intentionally ignored so no backend payload is retained.</p>
+     */
+    private static PgErrorFields readErrorFields(byte[] message, int offset, int endExclusive) {
+        String severity = null;
+        String sqlState = null;
+        int cursor = offset;
+        while (cursor < endExclusive && message[cursor] != 0) {
+            char fieldCode = (char) (message[cursor] & 0xFF);
+            CString value = readCString(message, cursor + 1, endExclusive);
+            if (fieldCode == 'S') {
+                severity = value.value();
+            } else if (fieldCode == 'C') {
+                sqlState = value.value();
+            }
+            cursor = value.nextOffset();
+        }
+        return new PgErrorFields(severity, sqlState);
     }
 
     private static PostgreSQLSession.TransactionStatus transactionStatus(char wireCode) {
@@ -168,6 +293,11 @@ public class PostgreSQLDatabaseEventExtractor {
         int cursor = 0;
         List<DatabaseTrafficEvent> events = new ArrayList<>();
 
+        /*
+         * The first client message is untyped and must be classified before any
+         * typed message parsing: StartupMessage, SSLRequest, GSSENCRequest or
+         * CancelRequest. The latter three do not enter the query path.
+         */
         if (skipInitialStartupMessage && !startupMessageConsumed) {
             if (buffered.length < PostgreSQLFrameCodec.UNTYPED_HEADER_LENGTH) {
                 return List.of();
@@ -183,12 +313,14 @@ public class PostgreSQLDatabaseEventExtractor {
                 return List.of();
             }
 
+            // SSLRequest / GSSENCRequest: the server answers with a single byte.
             if (startupLength == 8 && isEncryptionRequest(buffered)) {
                 awaitingEncryptionResponse = true;
                 compact(buffered, startupLength);
                 return List.of();
             }
 
+            // CancelRequest is a separate, short-lived connection.
             if (startupLength == 16 && isCancelRequest(buffered)) {
                 cancelRequest = true;
                 compact(buffered, startupLength);
@@ -225,7 +357,18 @@ public class PostgreSQLDatabaseEventExtractor {
         return events;
     }
 
+    /**
+     * Extracts an audit event from one frontend message.
+     *
+     * <p>Simple query emits an event directly. Extended query has no SQL in its
+     * Execute message, so Parse stores statement name to SQL, Bind maps a portal
+     * to that statement, and Execute resolves the portal back to its SQL. Close
+     * and Describe keep the mirror accurate but emit no event, while Flush and
+     * Sync need no action because the following ReadyForQuery is observed
+     * separately.</p>
+     */
     private Optional<DatabaseTrafficEvent> extractMessage(char type, byte[] message, int payloadOffset, int payloadLength) {
+        // Simple query: the SQL text is the whole payload.
         if (type == PostgreSQLMessageType.QUERY.getCode()) {
             String sql = readCString(message, payloadOffset, payloadOffset + payloadLength).value();
             return sql.isBlank()
@@ -233,6 +376,7 @@ public class PostgreSQLDatabaseEventExtractor {
                     : Optional.of(DatabaseTrafficEvent.builder(protocolName, sessionId, "QUERY", sql).build());
         }
 
+        // Extended query step 1: remember statement name -> SQL text.
         if (type == PostgreSQLMessageType.PARSE.getCode()) {
             CString statementName = readCString(message, payloadOffset, payloadOffset + payloadLength);
             CString sql = readCString(message, statementName.nextOffset(), payloadOffset + payloadLength);
@@ -244,6 +388,7 @@ public class PostgreSQLDatabaseEventExtractor {
                     .build());
         }
 
+        // Extended query step 2: link a portal to its statement (no event yet).
         if (type == PostgreSQLMessageType.BIND.getCode()) {
             CString portalName = readCString(message, payloadOffset, payloadOffset + payloadLength);
             CString statementName = readCString(message, portalName.nextOffset(), payloadOffset + payloadLength);
@@ -254,6 +399,7 @@ public class PostgreSQLDatabaseEventExtractor {
             return Optional.empty();
         }
 
+        // Extended query step 3: resolve the portal back to its SQL and report it.
         if (type == PostgreSQLMessageType.EXECUTE.getCode()) {
             CString portalName = readCString(message, payloadOffset, payloadOffset + payloadLength);
             String sql = statementsByPortal.get(portalName.value());
@@ -264,7 +410,32 @@ public class PostgreSQLDatabaseEventExtractor {
                     .build());
         }
 
+        // Extended query: Close drops a prepared statement or portal from the mirror.
+        if (type == PostgreSQLMessageType.CLOSE.getCode()) {
+            CString target = readCString(message, payloadOffset, payloadOffset + payloadLength);
+            CString name = readCString(message, target.nextOffset(), payloadOffset + payloadLength);
+            forgetPreparedObject(target.value(), name.value());
+            return Optional.empty();
+        }
+
+        // Extended query: Describe only requests metadata, so there is nothing to audit.
+        if (type == PostgreSQLMessageType.DESCRIBE.getCode()) {
+            return Optional.empty();
+        }
+
         return Optional.empty();
+    }
+
+    /**
+     * Forgets a prepared statement or portal that the client closed. The target
+     * is {@code S} for a statement and {@code P} for a portal.
+     */
+    private void forgetPreparedObject(String target, String name) {
+        if ("S".equals(target)) {
+            statementsByName.remove(name);
+        } else if ("P".equals(target)) {
+            statementsByPortal.remove(name);
+        }
     }
 
     private void observeStartupParameters(byte[] buffered, int payloadOffset, int payloadEnd) {
@@ -335,5 +506,9 @@ public class PostgreSQLDatabaseEventExtractor {
     }
 
     private record CString(String value, int nextOffset) {
+    }
+
+    /** Sanitized subset of an ErrorResponse/NoticeResponse field list. */
+    private record PgErrorFields(String severity, String sqlState) {
     }
 }

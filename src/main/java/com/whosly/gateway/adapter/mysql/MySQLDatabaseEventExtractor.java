@@ -11,13 +11,27 @@ import java.util.List;
 import java.util.Optional;
 
 /**
- * Extracts SQL statements from cleartext MySQL command phase packets.
+ * Observes cleartext MySQL traffic and extracts auditable SQL events.
+ *
+ * <p>The relay forwards the original bytes; this extractor only reads them. It
+ * tracks the two directions independently:</p>
+ * <ul>
+ *   <li>client to target: connection phase (handshake response), then command
+ *       phase (COM_QUERY / COM_STMT_PREPARE SQL and COM_INIT_DB database);</li>
+ *   <li>target to client: the authentication OK that ends the connection phase,
+ *       then the response packets needed to keep transaction state real.</li>
+ * </ul>
+ *
+ * <p>Anything that cannot be parsed confidently is dropped rather than guessed.
+ * A TLS or compression switch turns the session into an opaque tunnel where no
+ * further inspection happens.</p>
  *
  * @author yueny09@163.com codealy
  * @since 2026-07-02
  */
 public class MySQLDatabaseEventExtractor {
 
+    // MySQL column/parameter type codes (protocol "enum_field_types").
     private static final int MYSQL_TYPE_DECIMAL = 0x00;
     private static final int MYSQL_TYPE_NULL = 0x06;
     private static final int MYSQL_TYPE_TINY = 0x01;
@@ -47,19 +61,42 @@ public class MySQLDatabaseEventExtractor {
     private static final int MYSQL_TYPE_STRING = 0xfe;
     private static final int MYSQL_TYPE_GEOMETRY = 0xff;
 
+    // The first payload byte identifies the packet kind.
+    private static final int OK_PACKET_HEADER = 0x00;
+    private static final int EOF_PACKET_HEADER = 0xFE;
+    private static final int ERR_PACKET_HEADER = 0xFF;
+
     private final String protocolName;
     private final String sessionId;
+    /** Optional session used to publish observed protocol state; null in some tests. */
     private final MySQLSession session;
+    /** True when construction starts before authentication, so the handshake is observed first. */
     private final boolean commandPhaseOnly;
+    /** Buffer for client command packets. */
     private final ByteArrayOutputStream pendingBytes = new ByteArrayOutputStream();
+    /** Buffer used while looking for the server authentication OK packet. */
     private final ByteArrayOutputStream pendingTargetBytes = new ByteArrayOutputStream();
+    /** Buffer for the handshake response, which TCP may split across reads. */
     private final ByteArrayOutputStream pendingHandshakeBytes = new ByteArrayOutputStream();
+    /** Accumulates payloads of a fragmented logical packet (payload == 2^24 - 1). */
     private final ByteArrayOutputStream pendingLogicalPayload = new ByteArrayOutputStream();
+    /** Buffer for target response packets used for transaction-state observation. */
+    private final ByteArrayOutputStream pendingServerBytes = new ByteArrayOutputStream();
+    /** Set while reassembling a physically fragmented logical packet. */
     private boolean frameContinuation;
+    /** True once the client may send commands (server authentication OK seen). */
     private boolean readyForCommands;
+    /** Position inside the current server response; see {@link MySQLResponsePhase}. */
+    private MySQLResponsePhase responsePhase = MySQLResponsePhase.IDLE;
+    /** Column definition packets still to skip in the current result set. */
+    private int remainingColumnDefinitions;
+    /** True after a TLS/compression switch: bytes become opaque and are not parsed. */
     private boolean opaqueTunnel;
+    /** Client capability flags from the handshake response; they drive optional layouts. */
     private long clientCapabilityFlags;
+    /** True once the first client packet (handshake response) has been parsed. */
     private boolean clientHandshakeResponseSeen;
+    /** Parameter types of the previous COM_QUERY, reused when new_params_bound_flag is 0. */
     private int[] lastQueryAttributeTypes = new int[0];
 
     public MySQLDatabaseEventExtractor(String protocolName, String sessionId) {
@@ -89,7 +126,11 @@ public class MySQLDatabaseEventExtractor {
         }
 
         if (direction == TrafficDirection.TARGET_TO_CLIENT) {
-            observeTargetBytes(bytes, offset, length);
+            if (readyForCommands) {
+                observeCommandPhaseResponses(bytes, offset, length);
+            } else {
+                observeTargetBytes(bytes, offset, length);
+            }
             return List.of();
         }
 
@@ -132,6 +173,11 @@ public class MySQLDatabaseEventExtractor {
         pendingHandshakeBytes.reset();
         clientCapabilityFlags |= capabilityFlags;
         observeHandshakeResponse(buffered, payloadLength, capabilityFlags);
+        /*
+         * TLS, zlib and zstd cannot be parsed here: as soon as the client opts
+         * into one of them the session becomes an opaque tunnel and inspection
+         * stops, while byte forwarding continues unchanged.
+         */
         if ((capabilityFlags & MySQLCapability.CLIENT_SSL.getFlag()) != 0
                 || (capabilityFlags & MySQLCapability.CLIENT_COMPRESS.getFlag()) != 0
                 || (capabilityFlags & MySQLCapability.CLIENT_ZSTD_COMPRESSION_ALGORITHM.getFlag()) != 0) {
@@ -140,7 +186,10 @@ public class MySQLDatabaseEventExtractor {
             pendingTargetBytes.reset();
             pendingHandshakeBytes.reset();
             pendingLogicalPayload.reset();
+            pendingServerBytes.reset();
             frameContinuation = false;
+            responsePhase = MySQLResponsePhase.IDLE;
+            remainingColumnDefinitions = 0;
         }
 
         advanceSession(ProtocolConnectionState.NEGOTIATING);
@@ -203,6 +252,12 @@ public class MySQLDatabaseEventExtractor {
             return;
         }
 
+        /*
+         * During authentication the only packet worth waiting for is the server
+         * OK_Packet (first payload byte 0x00). ERR and auth-switch packets are
+         * skipped until it arrives, so the client command phase is not entered
+         * prematurely.
+         */
         pendingTargetBytes.write(bytes, offset, length);
         byte[] buffered = pendingTargetBytes.toByteArray();
         int cursor = 0;
@@ -241,17 +296,20 @@ public class MySQLDatabaseEventExtractor {
             return Optional.empty();
         }
 
+        // COM_INIT_DB changes session state instead of producing a SQL event.
         MySQLCommandType command = commandType.get();
         if (command == MySQLCommandType.COM_INIT_DB) {
             observeInitDb(packet, payloadOffset + 1, payloadOffset + payloadLength);
             return Optional.empty();
         }
+        // Only text SQL and prepared-statement SQL are audited for now.
         if (command != MySQLCommandType.COM_QUERY && command != MySQLCommandType.COM_STMT_PREPARE) {
             return Optional.empty();
         }
 
         int sqlOffset = payloadOffset + 1;
         if (command == MySQLCommandType.COM_QUERY && hasCapability(MySQLCapability.CLIENT_QUERY_ATTRIBUTES)) {
+            // SQL text is prefixed with parameter metadata; step over it first.
             sqlOffset = skipQueryAttributes(packet, sqlOffset, payloadOffset + payloadLength);
         }
         if (sqlOffset > payloadOffset + payloadLength) {
@@ -368,6 +426,12 @@ public class MySQLDatabaseEventExtractor {
         return length.nextOffset() + safeLongToInt(length.value());
     }
 
+    /**
+     * Reads a MySQL length-encoded integer.
+     *
+     * <p>{@code 0xFB} denotes NULL and is reported as value 0; it is only valid
+     * inside result rows, not in the lengths this observer reads.</p>
+     */
     private static LengthEncodedInteger readLengthEncodedInteger(byte[] bytes, int offset, int endExclusive) {
         if (offset >= endExclusive) {
             return new LengthEncodedInteger(0, endExclusive + 1);
@@ -406,6 +470,192 @@ public class MySQLDatabaseEventExtractor {
             return Integer.MAX_VALUE;
         }
         return (int) value;
+    }
+
+    private void observeCommandPhaseResponses(byte[] bytes, int offset, int length) {
+        /*
+         * Packets are consumed strictly in order and interpreted through the
+         * response phase machine. Basing the decision on the packet order (not
+         * on a single sequence id) is what allows the EOF that follows column
+         * definitions to be told apart from the result set terminator.
+         */
+        pendingServerBytes.write(bytes, offset, length);
+        byte[] buffered = pendingServerBytes.toByteArray();
+        int cursor = 0;
+
+        while (buffered.length - cursor >= MySQLFrameCodec.HEADER_LENGTH) {
+            int payloadLength = MySQLFrameCodec.payloadLength(buffered, cursor, buffered.length);
+            if (payloadLength < 0) {
+                break;
+            }
+            int packetLength = MySQLFrameCodec.HEADER_LENGTH + payloadLength;
+            if (buffered.length - cursor < packetLength) {
+                break;
+            }
+
+            if (payloadLength > 0) {
+                processResponsePacket(buffered, cursor + MySQLFrameCodec.HEADER_LENGTH, payloadLength);
+            }
+            cursor += packetLength;
+        }
+
+        compactServer(buffered, cursor);
+    }
+
+    /**
+     * Advances the response phase machine by one server packet.
+     */
+    private void processResponsePacket(byte[] packet, int payloadOffset, int payloadLength) {
+        if (payloadLength <= 0) {
+            return;
+        }
+
+        int firstByte = packet[payloadOffset] & 0xFF;
+        switch (responsePhase) {
+            case IDLE, RESPONSE_HEADER -> handleResponseHeader(packet, payloadOffset, payloadLength, firstByte);
+            case COLUMN_DEFINITIONS -> {
+                remainingColumnDefinitions--;
+                if (remainingColumnDefinitions <= 0) {
+                    responsePhase = hasCapability(MySQLCapability.CLIENT_DEPRECATE_EOF)
+                            ? MySQLResponsePhase.ROWS
+                            : MySQLResponsePhase.COLUMN_TERMINATOR;
+                }
+            }
+            case COLUMN_TERMINATOR -> responsePhase = MySQLResponsePhase.ROWS;
+            case ROWS -> {
+                if (firstByte == EOF_PACKET_HEADER) {
+                    observeResultSetTerminator(packet, payloadOffset, payloadLength);
+                }
+            }
+        }
+    }
+
+    private void handleResponseHeader(byte[] packet, int payloadOffset, int payloadLength, int firstByte) {
+        if (firstByte == OK_PACKET_HEADER) {
+            applyOkPacket(packet, payloadOffset, payloadLength);
+            return;
+        }
+        if (firstByte == ERR_PACKET_HEADER) {
+            observeErrPacket(packet, payloadOffset, payloadLength);
+            responsePhase = MySQLResponsePhase.IDLE;
+            return;
+        }
+
+        LengthEncodedInteger columnCount =
+                readLengthEncodedInteger(packet, payloadOffset, payloadOffset + payloadLength);
+        remainingColumnDefinitions = safeLongToInt(columnCount.value());
+        responsePhase = remainingColumnDefinitions > 0
+                ? MySQLResponsePhase.COLUMN_DEFINITIONS
+                : MySQLResponsePhase.ROWS;
+    }
+
+    /**
+     * Applies an OK packet (also the OK-as-EOF terminator) and decides whether a
+     * further result set follows.
+     */
+    private void applyOkPacket(byte[] packet, int payloadOffset, int payloadLength) {
+        if (payloadLength < 7) {
+            responsePhase = MySQLResponsePhase.IDLE;
+            return;
+        }
+
+        int payloadEnd = payloadOffset + payloadLength;
+        int cursor = payloadOffset + 1;
+        LengthEncodedInteger affectedRows = readLengthEncodedInteger(packet, cursor, payloadEnd);
+        cursor = affectedRows.nextOffset();
+        LengthEncodedInteger lastInsertId = readLengthEncodedInteger(packet, cursor, payloadEnd);
+        cursor = lastInsertId.nextOffset();
+        if (cursor + 4 > payloadEnd) {
+            responsePhase = MySQLResponsePhase.IDLE;
+            return;
+        }
+
+        int statusFlags = (packet[cursor] & 0xFF) | ((packet[cursor + 1] & 0xFF) << 8);
+        int warningCount = (packet[cursor + 2] & 0xFF) | ((packet[cursor + 3] & 0xFF) << 8);
+        if (session != null) {
+            session.setLastAffectedRows(affectedRows.value());
+            session.setLastWarningCount(warningCount);
+            session.applyStatusFlags(statusFlags);
+        }
+        responsePhase = hasMoreResults(statusFlags)
+                ? MySQLResponsePhase.RESPONSE_HEADER
+                : MySQLResponsePhase.IDLE;
+    }
+
+    /**
+     * Applies the final packet of a result set. Its status flags are the source
+     * of truth for the client-visible transaction state, and two layouts exist
+     * depending on whether the client negotiated CLIENT_DEPRECATE_EOF.
+     */
+    private void observeResultSetTerminator(byte[] packet, int payloadOffset, int payloadLength) {
+        int statusFlags;
+        int warningCount;
+
+        if (hasCapability(MySQLCapability.CLIENT_DEPRECATE_EOF)) {
+            // OK-as-EOF reuses the OK packet layout behind a 0xFE header.
+            int payloadEnd = payloadOffset + payloadLength;
+            int cursor = payloadOffset + 1;
+            LengthEncodedInteger affectedRows = readLengthEncodedInteger(packet, cursor, payloadEnd);
+            cursor = affectedRows.nextOffset();
+            LengthEncodedInteger lastInsertId = readLengthEncodedInteger(packet, cursor, payloadEnd);
+            cursor = lastInsertId.nextOffset();
+            if (cursor + 4 > payloadEnd) {
+                responsePhase = MySQLResponsePhase.IDLE;
+                return;
+            }
+
+            statusFlags = (packet[cursor] & 0xFF) | ((packet[cursor + 1] & 0xFF) << 8);
+            warningCount = (packet[cursor + 2] & 0xFF) | ((packet[cursor + 3] & 0xFF) << 8);
+            if (session != null) {
+                session.setLastAffectedRows(affectedRows.value());
+                session.setLastWarningCount(warningCount);
+            }
+        } else {
+            // Classic EOF packet: header, warnings (2), status flags (2).
+            if (payloadLength < 5) {
+                responsePhase = MySQLResponsePhase.IDLE;
+                return;
+            }
+            warningCount = (packet[payloadOffset + 1] & 0xFF) | ((packet[payloadOffset + 2] & 0xFF) << 8);
+            statusFlags = (packet[payloadOffset + 3] & 0xFF) | ((packet[payloadOffset + 4] & 0xFF) << 8);
+            if (session != null) {
+                session.setLastWarningCount(warningCount);
+            }
+        }
+
+        if (session != null) {
+            session.applyStatusFlags(statusFlags);
+        }
+        responsePhase = hasMoreResults(statusFlags)
+                ? MySQLResponsePhase.RESPONSE_HEADER
+                : MySQLResponsePhase.IDLE;
+    }
+
+    private boolean hasMoreResults(int statusFlags) {
+        return (statusFlags & MySQLServerStatusFlag.SERVER_MORE_RESULTS_EXISTS.getFlag()) != 0;
+    }
+
+    private void observeErrPacket(byte[] packet, int payloadOffset, int payloadLength) {
+        if (session == null) {
+            return;
+        }
+
+        int payloadEnd = payloadOffset + payloadLength;
+        if (payloadOffset + 3 > payloadEnd) {
+            return;
+        }
+
+        int cursor = payloadOffset + 3;
+        if (cursor + 6 <= payloadEnd && packet[cursor] == '#') {
+            session.setLastSqlState(new String(packet, cursor + 1, 5, StandardCharsets.US_ASCII));
+        }
+    }
+
+    private void compactServer(byte[] buffered, int consumed) {
+        pendingServerBytes.reset();
+        if (consumed < buffered.length) {
+            pendingServerBytes.write(buffered, consumed, buffered.length - consumed);
+        }
     }
 
     private void compact(byte[] buffered, int consumed) {
@@ -508,5 +758,22 @@ public class MySQLDatabaseEventExtractor {
     }
 
     private record CursorResult(String value, int nextOffset) {
+    }
+
+    /**
+     * Tracks where the observer is inside a MySQL response so a result set
+     * terminator can be told apart from the EOF that follows column definitions.
+     */
+    private enum MySQLResponsePhase {
+        /** No response in flight. */
+        IDLE,
+        /** Expecting the first packet of a response: OK, ERR or column count. */
+        RESPONSE_HEADER,
+        /** Counting down the column definition packets of a result set. */
+        COLUMN_DEFINITIONS,
+        /** Skipping the EOF that follows column definitions (without CLIENT_DEPRECATE_EOF). */
+        COLUMN_TERMINATOR,
+        /** Consuming row packets until the result set terminator. */
+        ROWS
     }
 }
