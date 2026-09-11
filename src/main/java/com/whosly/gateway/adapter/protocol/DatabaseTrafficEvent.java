@@ -8,25 +8,30 @@ import java.util.Objects;
 import java.util.Optional;
 
 /**
- * SQL statement observed from cleartext database client protocol traffic.
+ * Database operation observed from cleartext database client protocol traffic.
+ *
+ * <p>The operation is the protocol-level command name, such as COM_QUERY,
+ * SQL_BATCH, RPC_REQUEST, or Redis GET. The statement is the human-readable
+ * payload used by audit and risk controls, such as SQL text or a Redis command
+ * summary.</p>
  *
  * @author yueny09@163.com codealy
- * @since 2026-07-02
+ * @since 2026-07-03
  */
-public final class SqlTrafficEvent {
+public final class DatabaseTrafficEvent {
 
     private final String protocolName;
     private final String sessionId;
-    private final String command;
-    private final String sql;
+    private final String operation;
+    private final String statement;
     private final Instant observedAt;
     private final Map<String, String> attributes;
 
-    private SqlTrafficEvent(Builder builder) {
+    private DatabaseTrafficEvent(Builder builder) {
         this.protocolName = Objects.requireNonNull(builder.protocolName, "protocolName must not be null");
         this.sessionId = Objects.requireNonNull(builder.sessionId, "sessionId must not be null");
-        this.command = Objects.requireNonNull(builder.command, "command must not be null");
-        this.sql = Objects.requireNonNull(builder.sql, "sql must not be null");
+        this.operation = Objects.requireNonNull(builder.operation, "operation must not be null");
+        this.statement = Objects.requireNonNull(builder.statement, "statement must not be null");
         this.observedAt = Objects.requireNonNull(builder.observedAt, "observedAt must not be null");
         this.attributes = Collections.unmodifiableMap(new LinkedHashMap<>(builder.attributes));
     }
@@ -39,12 +44,12 @@ public final class SqlTrafficEvent {
         return sessionId;
     }
 
-    public String getCommand() {
-        return command;
+    public String getOperation() {
+        return operation;
     }
 
-    public String getSql() {
-        return sql;
+    public String getStatement() {
+        return statement;
     }
 
     public Instant getObservedAt() {
@@ -59,24 +64,24 @@ public final class SqlTrafficEvent {
         return Optional.ofNullable(attributes.get(name));
     }
 
-    public static Builder builder(String protocolName, String sessionId, String command, String sql) {
-        return new Builder(protocolName, sessionId, command, sql);
+    public static Builder builder(String protocolName, String sessionId, String operation, String statement) {
+        return new Builder(protocolName, sessionId, operation, statement);
     }
 
     public static final class Builder {
 
         private final String protocolName;
         private final String sessionId;
-        private final String command;
-        private final String sql;
+        private final String operation;
+        private final String statement;
         private Instant observedAt = Instant.now();
         private final Map<String, String> attributes = new LinkedHashMap<>();
 
-        private Builder(String protocolName, String sessionId, String command, String sql) {
+        private Builder(String protocolName, String sessionId, String operation, String statement) {
             this.protocolName = protocolName;
             this.sessionId = sessionId;
-            this.command = command;
-            this.sql = sql;
+            this.operation = operation;
+            this.statement = statement;
         }
 
         public Builder observedAt(Instant observedAt) {
@@ -91,8 +96,8 @@ public final class SqlTrafficEvent {
             return this;
         }
 
-        public SqlTrafficEvent build() {
-            return new SqlTrafficEvent(this);
+        public DatabaseTrafficEvent build() {
+            return new DatabaseTrafficEvent(this);
         }
     }
 }

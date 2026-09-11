@@ -6,10 +6,15 @@ import java.util.Optional;
 /**
  * MySQL Client/Server Protocol capability flags recognized by the gateway.
  *
+ * <p>{@link #isRecognized(long)} checks the whitelist built from these constants,
+ * so a client capability outside the mask can be identified instead of being
+ * silently treated as known.</p>
+ *
  * @author yueny09@163.com codealy
  * @since 2026-07-02
  */
 public enum MySQLCapability {
+    // Connection and result-set semantics.
     CLIENT_LONG_PASSWORD(1L),
     CLIENT_FOUND_ROWS(1L << 1),
     CLIENT_LONG_FLAG(1L << 2),
@@ -21,18 +26,22 @@ public enum MySQLCapability {
     CLIENT_IGNORE_SPACE(1L << 8),
     CLIENT_PROTOCOL_41(1L << 9),
     CLIENT_INTERACTIVE(1L << 10),
+    // Transport and capability negotiation.
     CLIENT_SSL(1L << 11),
     CLIENT_IGNORE_SIGPIPE(1L << 12),
     CLIENT_TRANSACTIONS(1L << 13),
     CLIENT_RESERVED(1L << 14),
-    CLIENT_RESERVED2(1L << 15),
+    CLIENT_SECURE_CONNECTION(1L << 15),
+    // Multi-statement / multi-result behavior.
     CLIENT_MULTI_STATEMENTS(1L << 16),
     CLIENT_MULTI_RESULTS(1L << 17),
     CLIENT_PS_MULTI_RESULTS(1L << 18),
+    // Authentication plugins and connection attributes.
     CLIENT_PLUGIN_AUTH(1L << 19),
     CLIENT_CONNECT_ATTRS(1L << 20),
     CLIENT_PLUGIN_AUTH_LENENC_CLIENT_DATA(1L << 21),
     CLIENT_CAN_HANDLE_EXPIRED_PASSWORDS(1L << 22),
+    // Session state tracking and result metadata.
     CLIENT_SESSION_TRACK(1L << 23),
     CLIENT_DEPRECATE_EOF(1L << 24),
     CLIENT_OPTIONAL_RESULTSET_METADATA(1L << 25),

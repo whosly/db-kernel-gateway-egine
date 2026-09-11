@@ -33,13 +33,13 @@ public class GatewayConfig {
     @Value("${gateway.target.port:13308}")
     private int targetPort;
     
-    @Value("${gateway.target.username:root}")
+    @Value("${gateway.target.username:}")
     private String targetUsername;
     
     @Value("${gateway.target.password:}")
     private String targetPassword;
     
-    @Value("${gateway.target.database:demo}")
+    @Value("${gateway.target.database:}")
     private String targetDatabase;
 
     @Bean

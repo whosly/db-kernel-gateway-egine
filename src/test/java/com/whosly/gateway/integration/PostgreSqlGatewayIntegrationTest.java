@@ -8,9 +8,11 @@ import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.sql.Statement;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 @Tag("integration")
 class PostgreSqlGatewayIntegrationTest extends DatabaseGatewayIntegrationTestSupport {
@@ -24,7 +26,7 @@ class PostgreSqlGatewayIntegrationTest extends DatabaseGatewayIntegrationTestSup
         adapter.setPort(proxyPort);
         adapter.setTargetHost(CONFIG.postgreSqlHost());
         adapter.setTargetPort(CONFIG.postgreSqlPort());
-        adapter.setSqlTrafficObserver(observedEvents::add);
+        adapter.setDatabaseTrafficObserver(observedEvents::add);
 
         try {
             adapter.start();
@@ -50,8 +52,49 @@ class PostgreSqlGatewayIntegrationTest extends DatabaseGatewayIntegrationTestSup
 
             assertObservedSql("select 1");
             assertThat(observedEvents)
-                    .extracting(event -> event.getCommand())
+                    .extracting(event -> event.getOperation())
                     .contains("PARSE", "EXECUTE");
+        } finally {
+            stopQuietly(adapter);
+        }
+    }
+
+    @Test
+    void proxiesTransactionsAndTargetErrorsThroughGateway() throws Exception {
+        requireIntegrationEnabled();
+
+        PostgreSQLProtocolAdapter adapter = new PostgreSQLProtocolAdapter();
+        int proxyPort = freePort();
+        adapter.setPort(proxyPort);
+        adapter.setTargetHost(CONFIG.postgreSqlHost());
+        adapter.setTargetPort(CONFIG.postgreSqlPort());
+        adapter.setDatabaseTrafficObserver(observedEvents::add);
+
+        try {
+            adapter.start();
+
+            String url = "jdbc:postgresql://localhost:" + proxyPort + "/" + CONFIG.postgreSqlDatabase()
+                    + "?sslmode=disable";
+            try (Connection connection = DriverManager.getConnection(url,
+                    CONFIG.postgreSqlUsername(), CONFIG.postgreSqlPassword())) {
+                connection.setAutoCommit(false);
+                try (Statement statement = connection.createStatement();
+                     ResultSet resultSet = statement.executeQuery("select current_database()")) {
+                    assertThat(resultSet.next()).isTrue();
+                    assertThat(resultSet.getString(1)).isEqualTo(CONFIG.postgreSqlDatabase());
+                }
+                connection.rollback();
+                connection.setAutoCommit(true);
+
+                try (Statement statement = connection.createStatement()) {
+                    assertThatThrownBy(() -> statement.executeQuery("select * from gateway_missing_table"))
+                            .isInstanceOf(SQLException.class)
+                            .satisfies(error -> assertThat(((SQLException) error).getSQLState())
+                                    .isEqualTo("42P01"));
+                }
+            }
+
+            assertObservedSql("select current_database()");
         } finally {
             stopQuietly(adapter);
         }

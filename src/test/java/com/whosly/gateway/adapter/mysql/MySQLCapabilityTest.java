@@ -13,6 +13,7 @@ class MySQLCapabilityTest {
         assertThat(MySQLCapability.isRecognized(MySQLCapability.CLIENT_ZSTD_COMPRESSION_ALGORITHM.getFlag())).isTrue();
         assertThat(MySQLCapability.isRecognized(MySQLCapability.CLIENT_PS_MULTI_RESULTS.getFlag())).isTrue();
         assertThat(MySQLCapability.isRecognized(MySQLCapability.CLIENT_QUERY_ATTRIBUTES.getFlag())).isTrue();
+        assertThat(MySQLCapability.CLIENT_SECURE_CONNECTION.getFlag()).isEqualTo(1L << 15);
     }
 
     @Test

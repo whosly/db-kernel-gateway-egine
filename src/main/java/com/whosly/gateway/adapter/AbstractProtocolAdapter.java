@@ -1,7 +1,7 @@
 package com.whosly.gateway.adapter;
 
-import com.whosly.gateway.adapter.protocol.SqlRiskPolicy;
-import com.whosly.gateway.adapter.protocol.SqlTrafficObserver;
+import com.whosly.gateway.adapter.protocol.DatabaseRiskPolicy;
+import com.whosly.gateway.adapter.protocol.DatabaseTrafficObserver;
 import com.whosly.gateway.parser.SqlParser;
 import com.whosly.gateway.service.DatabaseConnectionService;
 import org.slf4j.Logger;
@@ -29,17 +29,17 @@ public abstract class AbstractProtocolAdapter implements ProtocolAdapter {
     protected ExecutorService executorService;
     protected SqlParser sqlParser;
     protected DatabaseConnectionService databaseConnectionService;
-    protected SqlTrafficObserver sqlTrafficObserver = SqlTrafficObserver.noop();
-    protected SqlRiskPolicy sqlRiskPolicy = SqlRiskPolicy.allowAll();
+    protected DatabaseTrafficObserver databaseTrafficObserver = DatabaseTrafficObserver.noop();
+    protected DatabaseRiskPolicy databaseRiskPolicy = DatabaseRiskPolicy.allowAll();
     protected int port;
     protected String protocolName;
     
     // 目标数据库配置
     protected String targetHost = "localhost";
     protected int targetPort = 3306;
-    protected String targetUsername = "root";
-    protected String targetPassword = "password";
-    protected String targetDatabase = "testdb";
+    protected String targetUsername = "";
+    protected String targetPassword = "";
+    protected String targetDatabase = "";
     
     public AbstractProtocolAdapter(String protocolName, int defaultPort) {
         this.protocolName = protocolName;
@@ -84,12 +84,12 @@ public abstract class AbstractProtocolAdapter implements ProtocolAdapter {
         this.targetDatabase = targetDatabase;
     }
 
-    public void setSqlTrafficObserver(SqlTrafficObserver sqlTrafficObserver) {
-        this.sqlTrafficObserver = sqlTrafficObserver != null ? sqlTrafficObserver : SqlTrafficObserver.noop();
+    public void setDatabaseTrafficObserver(DatabaseTrafficObserver databaseTrafficObserver) {
+        this.databaseTrafficObserver = databaseTrafficObserver != null ? databaseTrafficObserver : DatabaseTrafficObserver.noop();
     }
 
-    public void setSqlRiskPolicy(SqlRiskPolicy sqlRiskPolicy) {
-        this.sqlRiskPolicy = sqlRiskPolicy != null ? sqlRiskPolicy : SqlRiskPolicy.allowAll();
+    public void setDatabaseRiskPolicy(DatabaseRiskPolicy databaseRiskPolicy) {
+        this.databaseRiskPolicy = databaseRiskPolicy != null ? databaseRiskPolicy : DatabaseRiskPolicy.allowAll();
     }
     
     @Override

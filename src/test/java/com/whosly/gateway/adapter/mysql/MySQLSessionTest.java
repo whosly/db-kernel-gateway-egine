@@ -24,4 +24,17 @@ class MySQLSessionTest {
 
         assertThat(session.nextServerSequence()).isEqualTo(1);
     }
+
+    @Test
+    void appliesServerStatusFlagsToTransactionState() {
+        MySQLSession session = new MySQLSession("mysql-2");
+
+        session.applyStatusFlags(MySQLServerStatusFlag.SERVER_STATUS_IN_TRANS.getFlag()
+                | MySQLServerStatusFlag.SERVER_STATUS_AUTOCOMMIT.getFlag());
+        assertThat(session.getTransactionStatus()).isEqualTo(MySQLSession.TransactionStatus.IN_TRANSACTION);
+        assertThat(session.isAutocommit()).isTrue();
+
+        session.applyStatusFlags(MySQLServerStatusFlag.SERVER_STATUS_AUTOCOMMIT.getFlag());
+        assertThat(session.getTransactionStatus()).isEqualTo(MySQLSession.TransactionStatus.IDLE);
+    }
 }

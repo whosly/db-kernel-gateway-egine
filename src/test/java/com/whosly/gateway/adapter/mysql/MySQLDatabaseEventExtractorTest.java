@@ -1,0 +1,523 @@
+package com.whosly.gateway.adapter.mysql;
+
+import com.whosly.gateway.adapter.protocol.DatabaseTrafficEvent;
+import com.whosly.gateway.adapter.protocol.ProtocolConnectionState;
+import com.whosly.gateway.adapter.protocol.TrafficDirection;
+import org.junit.jupiter.api.Test;
+
+import java.io.ByteArrayOutputStream;
+import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
+import java.util.List;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+class MySQLDatabaseEventExtractorTest {
+
+    private final MySQLDatabaseEventExtractor extractor = new MySQLDatabaseEventExtractor("MySQL", "mysql-test");
+
+    @Test
+    void extractsComQuerySqlFromMySqlPacket() {
+        byte[] packet = packet(0, MySQLCommandType.COM_QUERY.getCode(), "select 1");
+
+        List<DatabaseTrafficEvent> events = extractor.extract(packet, 0, packet.length);
+
+        assertThat(events).hasSize(1);
+        assertThat(events.get(0).getProtocolName()).isEqualTo("MySQL");
+        assertThat(events.get(0).getSessionId()).isEqualTo("mysql-test");
+        assertThat(events.get(0).getOperation()).isEqualTo("COM_QUERY");
+        assertThat(events.get(0).getStatement()).isEqualTo("select 1");
+    }
+
+    @Test
+    void extractsComQuerySqlWhenClientSendsQueryAttributeCounts() {
+        MySQLDatabaseEventExtractor queryAttributeExtractor =
+                new MySQLDatabaseEventExtractor("MySQL", "mysql-query-attributes", false);
+        byte[] handshakeResponse = rawPacket(1,
+                capabilityPayload(MySQLCapability.CLIENT_QUERY_ATTRIBUTES.getFlag()
+                        | MySQLCapability.CLIENT_PROTOCOL_41.getFlag()));
+        queryAttributeExtractor.inspect(TrafficDirection.CLIENT_TO_TARGET,
+                handshakeResponse, 0, handshakeResponse.length);
+        byte[] okPacket = rawPacket(2, new byte[]{0x00});
+        queryAttributeExtractor.inspect(TrafficDirection.TARGET_TO_CLIENT, okPacket, 0, okPacket.length);
+
+        byte[] sqlBytes = "select 1".getBytes(StandardCharsets.UTF_8);
+        byte[] payload = new byte[1 + 2 + sqlBytes.length];
+        payload[0] = (byte) MySQLCommandType.COM_QUERY.getCode();
+        payload[1] = 0;
+        payload[2] = 1;
+        System.arraycopy(sqlBytes, 0, payload, 3, sqlBytes.length);
+        byte[] packet = rawPacket(0, payload);
+
+        List<DatabaseTrafficEvent> events = queryAttributeExtractor.inspect(TrafficDirection.CLIENT_TO_TARGET,
+                packet, 0, packet.length);
+
+        assertThat(events).singleElement()
+                .extracting(DatabaseTrafficEvent::getStatement)
+                .isEqualTo("select 1");
+    }
+
+    @Test
+    void authenticationAwareExtractorReadsCapabilitiesFromSplitHandshakeResponse() {
+        MySQLDatabaseEventExtractor queryAttributeExtractor =
+                new MySQLDatabaseEventExtractor("MySQL", "mysql-split-handshake", false);
+        byte[] handshakeResponse = rawPacket(1,
+                capabilityPayload(MySQLCapability.CLIENT_QUERY_ATTRIBUTES.getFlag()
+                        | MySQLCapability.CLIENT_PROTOCOL_41.getFlag()));
+
+        assertThat(queryAttributeExtractor.inspect(TrafficDirection.CLIENT_TO_TARGET,
+                handshakeResponse, 0, 2)).isEmpty();
+        assertThat(queryAttributeExtractor.inspect(TrafficDirection.CLIENT_TO_TARGET,
+                handshakeResponse, 2, handshakeResponse.length - 2)).isEmpty();
+        assertThat(queryAttributeExtractor.inspect(TrafficDirection.TARGET_TO_CLIENT,
+                rawPacket(2, new byte[]{0x00}), 0, 5)).isEmpty();
+
+        byte[] sqlBytes = "select 1".getBytes(StandardCharsets.UTF_8);
+        byte[] payload = new byte[1 + 2 + sqlBytes.length];
+        payload[0] = (byte) MySQLCommandType.COM_QUERY.getCode();
+        payload[1] = 0;
+        payload[2] = 1;
+        System.arraycopy(sqlBytes, 0, payload, 3, sqlBytes.length);
+
+        List<DatabaseTrafficEvent> events = queryAttributeExtractor.inspect(TrafficDirection.CLIENT_TO_TARGET,
+                rawPacket(0, payload), 0, payload.length + 4);
+
+        assertThat(events).singleElement()
+                .extracting(DatabaseTrafficEvent::getStatement)
+                .isEqualTo("select 1");
+    }
+
+    @Test
+    void extractsComQuerySqlWhenQueryAttributesContainParameterMetadataAndValues() {
+        MySQLDatabaseEventExtractor queryAttributeExtractor =
+                new MySQLDatabaseEventExtractor("MySQL", "mysql-query-attributes", false);
+        byte[] handshakeResponse = rawPacket(1,
+                capabilityPayload(MySQLCapability.CLIENT_QUERY_ATTRIBUTES.getFlag()
+                        | MySQLCapability.CLIENT_PROTOCOL_41.getFlag()));
+        queryAttributeExtractor.inspect(TrafficDirection.CLIENT_TO_TARGET,
+                handshakeResponse, 0, handshakeResponse.length);
+        queryAttributeExtractor.inspect(TrafficDirection.TARGET_TO_CLIENT,
+                rawPacket(2, new byte[]{0x00}), 0, 5);
+
+        byte[] sqlBytes = "select @a, @b".getBytes(StandardCharsets.UTF_8);
+        byte[] payload = new byte[]{
+                (byte) MySQLCommandType.COM_QUERY.getCode(),
+                0x02,
+                0x01,
+                0x00,
+                0x01,
+                0x08, 0x00, 0x01, 'a',
+                (byte) 0xfd, 0x00, 0x01, 'b',
+                0x2a, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+                0x03, 'f', 'o', 'o'
+        };
+        byte[] packetPayload = new byte[payload.length + sqlBytes.length];
+        System.arraycopy(payload, 0, packetPayload, 0, payload.length);
+        System.arraycopy(sqlBytes, 0, packetPayload, payload.length, sqlBytes.length);
+
+        List<DatabaseTrafficEvent> events = queryAttributeExtractor.inspect(TrafficDirection.CLIENT_TO_TARGET,
+                rawPacket(0, packetPayload), 0, packetPayload.length + 4);
+
+        assertThat(events).singleElement()
+                .extracting(DatabaseTrafficEvent::getStatement)
+                .isEqualTo("select @a, @b");
+    }
+
+    @Test
+    void extractsPreparedStatementSqlFromComStmtPreparePacket() {
+        byte[] packet = packet(0, MySQLCommandType.COM_STMT_PREPARE.getCode(),
+                "select * from account where id = ?");
+
+        List<DatabaseTrafficEvent> events = extractor.extract(packet, 0, packet.length);
+
+        assertThat(events).singleElement()
+                .satisfies(event -> {
+                    assertThat(event.getOperation()).isEqualTo("COM_STMT_PREPARE");
+                    assertThat(event.getStatement()).isEqualTo("select * from account where id = ?");
+                });
+    }
+
+    @Test
+    void buffersPartialPacketsUntilSqlPacketIsComplete() {
+        byte[] packet = packet(0, MySQLCommandType.COM_QUERY.getCode(), "select 1");
+
+        assertThat(extractor.extract(packet, 0, 3)).isEmpty();
+        List<DatabaseTrafficEvent> events = extractor.extract(packet, 3, packet.length - 3);
+
+        assertThat(events).singleElement()
+                .extracting(DatabaseTrafficEvent::getStatement)
+                .isEqualTo("select 1");
+    }
+
+    @Test
+    void authenticationAwareExtractorSkipsHandshakeResponseBeforeObservingSql() {
+        MySQLDatabaseEventExtractor authenticationAwareExtractor =
+                new MySQLDatabaseEventExtractor("MySQL", "mysql-auth", false);
+        byte[] credentialLikePacket = rawPacket(1, capabilityPayload(MySQLCapability.CLIENT_PROTOCOL_41.getFlag()));
+
+        assertThat(authenticationAwareExtractor.inspect(TrafficDirection.CLIENT_TO_TARGET,
+                credentialLikePacket, 0, credentialLikePacket.length)).isEmpty();
+
+        byte[] okPacket = rawPacket(2, new byte[]{0x00});
+        assertThat(authenticationAwareExtractor.inspect(TrafficDirection.TARGET_TO_CLIENT,
+                okPacket, 0, okPacket.length)).isEmpty();
+
+        byte[] query = packet(0, MySQLCommandType.COM_QUERY.getCode(), "select 1");
+        List<DatabaseTrafficEvent> events = authenticationAwareExtractor.inspect(TrafficDirection.CLIENT_TO_TARGET,
+                query, 0, query.length);
+
+        assertThat(events).singleElement()
+                .extracting(DatabaseTrafficEvent::getStatement)
+                .isEqualTo("select 1");
+    }
+
+    @Test
+    void authenticationAwareExtractorHandlesSplitAuthenticationOkPacket() {
+        MySQLDatabaseEventExtractor authenticationAwareExtractor =
+                new MySQLDatabaseEventExtractor("MySQL", "mysql-auth", false);
+        byte[] okPacket = rawPacket(2, new byte[]{0x00});
+
+        assertThat(authenticationAwareExtractor.inspect(TrafficDirection.TARGET_TO_CLIENT,
+                okPacket, 0, 2)).isEmpty();
+        assertThat(authenticationAwareExtractor.inspect(TrafficDirection.TARGET_TO_CLIENT,
+                okPacket, 2, okPacket.length - 2)).isEmpty();
+
+        byte[] query = packet(0, MySQLCommandType.COM_QUERY.getCode(), "select 1");
+        List<DatabaseTrafficEvent> events = authenticationAwareExtractor.inspect(TrafficDirection.CLIENT_TO_TARGET,
+                query, 0, query.length);
+
+        assertThat(events).singleElement()
+                .extracting(DatabaseTrafficEvent::getStatement)
+                .isEqualTo("select 1");
+    }
+
+    @Test
+    void authenticationAwareExtractorStopsSqlObservationWhenClientRequestsTls() {
+        MySQLDatabaseEventExtractor authenticationAwareExtractor =
+                new MySQLDatabaseEventExtractor("MySQL", "mysql-tls", false);
+        byte[] sslRequest = rawPacket(1, capabilityPayload(MySQLCapability.CLIENT_SSL.getFlag()));
+
+        assertThat(authenticationAwareExtractor.inspect(TrafficDirection.CLIENT_TO_TARGET,
+                sslRequest, 0, sslRequest.length)).isEmpty();
+
+        byte[] query = packet(0, MySQLCommandType.COM_QUERY.getCode(), "select 1");
+        assertThat(authenticationAwareExtractor.inspect(TrafficDirection.CLIENT_TO_TARGET,
+                query, 0, query.length)).isEmpty();
+    }
+
+    @Test
+    void authenticationAwareExtractorStopsSqlObservationWhenClientRequestsCompression() {
+        MySQLDatabaseEventExtractor authenticationAwareExtractor =
+                new MySQLDatabaseEventExtractor("MySQL", "mysql-compress", false);
+        byte[] handshakeResponse = rawPacket(1, capabilityPayload(MySQLCapability.CLIENT_COMPRESS.getFlag()));
+
+        assertThat(authenticationAwareExtractor.inspect(TrafficDirection.CLIENT_TO_TARGET,
+                handshakeResponse, 0, handshakeResponse.length)).isEmpty();
+        byte[] okPacket = rawPacket(2, new byte[]{0x00});
+        assertThat(authenticationAwareExtractor.inspect(TrafficDirection.TARGET_TO_CLIENT,
+                okPacket, 0, okPacket.length)).isEmpty();
+
+        byte[] query = packet(0, MySQLCommandType.COM_QUERY.getCode(), "select 1");
+        assertThat(authenticationAwareExtractor.inspect(TrafficDirection.CLIENT_TO_TARGET,
+                query, 0, query.length)).isEmpty();
+    }
+
+    @Test
+    void authenticationContinuationPayloadDoesNotDisableCleartextObservation() {
+        MySQLDatabaseEventExtractor authenticationAwareExtractor =
+                new MySQLDatabaseEventExtractor("MySQL", "mysql-auth-more", false);
+        byte[] handshakeResponse = rawPacket(1, capabilityPayload(MySQLCapability.CLIENT_PROTOCOL_41.getFlag()));
+
+        assertThat(authenticationAwareExtractor.inspect(TrafficDirection.CLIENT_TO_TARGET,
+                handshakeResponse, 0, handshakeResponse.length)).isEmpty();
+
+        byte[] authContinuationLooksLikeCompression = rawPacket(3,
+                capabilityPayload(MySQLCapability.CLIENT_COMPRESS.getFlag()));
+        assertThat(authenticationAwareExtractor.inspect(TrafficDirection.CLIENT_TO_TARGET,
+                authContinuationLooksLikeCompression, 0, authContinuationLooksLikeCompression.length)).isEmpty();
+
+        byte[] okPacket = rawPacket(4, new byte[]{0x00});
+        assertThat(authenticationAwareExtractor.inspect(TrafficDirection.TARGET_TO_CLIENT,
+                okPacket, 0, okPacket.length)).isEmpty();
+
+        byte[] query = packet(0, MySQLCommandType.COM_QUERY.getCode(), "select 1");
+        List<DatabaseTrafficEvent> events = authenticationAwareExtractor.inspect(TrafficDirection.CLIENT_TO_TARGET,
+                query, 0, query.length);
+
+        assertThat(events).singleElement()
+                .extracting(DatabaseTrafficEvent::getStatement)
+                .isEqualTo("select 1");
+    }
+
+    @Test
+    void reassemblesFragmentedComQuerySplitAcrossMaximumLengthPackets() {
+        MySQLDatabaseEventExtractor largePacketExtractor =
+                new MySQLDatabaseEventExtractor("MySQL", "mysql-large", true);
+        int maxPayload = MySQLFrameCodec.MAX_PAYLOAD_LENGTH;
+        byte[] sqlBytes = new byte[maxPayload + 2];
+        Arrays.fill(sqlBytes, (byte) 'a');
+        byte[] logicalPayload = new byte[1 + sqlBytes.length];
+        logicalPayload[0] = (byte) MySQLCommandType.COM_QUERY.getCode();
+        System.arraycopy(sqlBytes, 0, logicalPayload, 1, sqlBytes.length);
+
+        byte[] firstPacket = framedPayload(logicalPayload, 0, maxPayload, 0);
+        byte[] secondPacket = framedPayload(logicalPayload, maxPayload,
+                logicalPayload.length - maxPayload, 1);
+
+        assertThat(largePacketExtractor.inspect(TrafficDirection.CLIENT_TO_TARGET,
+                firstPacket, 0, firstPacket.length)).isEmpty();
+
+        List<DatabaseTrafficEvent> events = largePacketExtractor.inspect(TrafficDirection.CLIENT_TO_TARGET,
+                secondPacket, 0, secondPacket.length);
+
+        assertThat(events).singleElement().satisfies(event -> {
+            assertThat(event.getOperation()).isEqualTo("COM_QUERY");
+            assertThat(event.getStatement()).hasSize(sqlBytes.length);
+        });
+    }
+
+    @Test
+    void advancesSessionStateFromNegotiationToReady() {
+        MySQLSession session = new MySQLSession("mysql-session-state");
+        MySQLDatabaseEventExtractor sessionExtractor =
+                new MySQLDatabaseEventExtractor("MySQL", "mysql-session-state", false, session);
+
+        assertThat(session.getState()).isEqualTo(ProtocolConnectionState.CONNECTED);
+
+        byte[] handshakeResponse = rawPacket(1, capabilityPayload(MySQLCapability.CLIENT_PROTOCOL_41.getFlag()));
+        sessionExtractor.inspect(TrafficDirection.CLIENT_TO_TARGET,
+                handshakeResponse, 0, handshakeResponse.length);
+        assertThat(session.getState()).isEqualTo(ProtocolConnectionState.AUTHENTICATING);
+
+        byte[] okPacket = rawPacket(2, new byte[]{0x00});
+        sessionExtractor.inspect(TrafficDirection.TARGET_TO_CLIENT, okPacket, 0, okPacket.length);
+        assertThat(session.getState()).isEqualTo(ProtocolConnectionState.READY);
+    }
+
+    @Test
+    void recordsClientIdentityAndDatabaseFromHandshakeResponse() {
+        MySQLSession session = new MySQLSession("mysql-identity");
+        MySQLDatabaseEventExtractor identityExtractor =
+                new MySQLDatabaseEventExtractor("MySQL", "mysql-identity", false, session);
+
+        byte[] handshakeResponse = handshakeResponse(
+                MySQLCapability.CLIENT_PROTOCOL_41.getFlag()
+                        | MySQLCapability.CLIENT_SECURE_CONNECTION.getFlag()
+                        | MySQLCapability.CLIENT_CONNECT_WITH_DB.getFlag()
+                        | MySQLCapability.CLIENT_PLUGIN_AUTH.getFlag(),
+                "appuser",
+                new byte[20],
+                "demo",
+                "mysql_native_password");
+
+        identityExtractor.inspect(TrafficDirection.CLIENT_TO_TARGET,
+                handshakeResponse, 0, handshakeResponse.length);
+
+        assertThat(session.getAttribute("client.user")).contains("appuser");
+        assertThat(session.getCurrentDatabase()).contains("demo");
+    }
+
+    @Test
+    void updatesSessionDatabaseOnComInitDb() {
+        MySQLSession session = new MySQLSession("mysql-init-db");
+        MySQLDatabaseEventExtractor initDbExtractor =
+                new MySQLDatabaseEventExtractor("MySQL", "mysql-init-db", true, session);
+
+        byte[] initDb = packet(0, MySQLCommandType.COM_INIT_DB.getCode(), "analytics");
+        List<DatabaseTrafficEvent> events = initDbExtractor.extract(initDb, 0, initDb.length);
+
+        assertThat(events).isEmpty();
+        assertThat(session.getCurrentDatabase()).contains("analytics");
+    }
+
+    private static byte[] handshakeResponse(long capabilities, String username, byte[] authResponse,
+                                            String database, String authPlugin) {
+        ByteArrayOutputStream payload = new ByteArrayOutputStream();
+        for (int index = 0; index < 4; index++) {
+            payload.write((int) ((capabilities >> (index * 8)) & 0xFF));
+        }
+        payload.writeBytes(new byte[]{0, 0, 0, 1});
+        payload.write(0x21);
+        payload.writeBytes(new byte[23]);
+        payload.writeBytes(cstring(username));
+        payload.write(authResponse.length & 0xFF);
+        payload.writeBytes(authResponse);
+        if (database != null) {
+            payload.writeBytes(cstring(database));
+        }
+        if (authPlugin != null) {
+            payload.writeBytes(cstring(authPlugin));
+        }
+        return rawPacket(1, payload.toByteArray());
+    }
+
+    private static byte[] cstring(String value) {
+        byte[] bytes = value.getBytes(StandardCharsets.UTF_8);
+        byte[] cstring = new byte[bytes.length + 1];
+        System.arraycopy(bytes, 0, cstring, 0, bytes.length);
+        return cstring;
+    }
+
+    @Test
+    void tracksTransactionStatusFromOkPacketStatusFlags() {
+        MySQLSession session = new MySQLSession("mysql-transaction");
+        MySQLDatabaseEventExtractor transactionExtractor =
+                new MySQLDatabaseEventExtractor("MySQL", "mysql-transaction", true, session);
+
+        byte[] beginOk = okPacket(1, 0, 0, 0x0003);
+        transactionExtractor.inspect(TrafficDirection.TARGET_TO_CLIENT, beginOk, 0, beginOk.length);
+        assertThat(session.getTransactionStatus()).isEqualTo(MySQLSession.TransactionStatus.IN_TRANSACTION);
+        assertThat(session.isAutocommit()).isTrue();
+
+        byte[] commitOk = okPacket(1, 1, 0, 0x0002);
+        transactionExtractor.inspect(TrafficDirection.TARGET_TO_CLIENT, commitOk, 0, commitOk.length);
+        assertThat(session.getTransactionStatus()).isEqualTo(MySQLSession.TransactionStatus.IDLE);
+        assertThat(session.getLastAffectedRows()).isEqualTo(1);
+    }
+
+    @Test
+    void recordsSqlStateFromErrorPacket() {
+        MySQLSession session = new MySQLSession("mysql-error");
+        MySQLDatabaseEventExtractor errorExtractor =
+                new MySQLDatabaseEventExtractor("MySQL", "mysql-error", true, session);
+
+        byte[] error = errPacket(1, 1064, "42000", "You have an error in your SQL syntax");
+        errorExtractor.inspect(TrafficDirection.TARGET_TO_CLIENT, error, 0, error.length);
+
+        assertThat(session.getLastSqlState()).contains("42000");
+    }
+
+    @Test
+    void updatesTransactionStatusFromClassicResultSetEof() {
+        MySQLSession session = new MySQLSession("mysql-resultset");
+        MySQLDatabaseEventExtractor resultSetExtractor =
+                new MySQLDatabaseEventExtractor("MySQL", "mysql-resultset", true, session);
+
+        inspectTarget(resultSetExtractor, 1, new byte[]{0x01});
+        inspectTarget(resultSetExtractor, 2, new byte[]{0x03, 'd', 'e', 'f'});
+        inspectTarget(resultSetExtractor, 3, new byte[]{(byte) 0xFE, 0x00, 0x00, 0x02, 0x00});
+        inspectTarget(resultSetExtractor, 4, new byte[]{0x01, 'a'});
+        inspectTarget(resultSetExtractor, 5, new byte[]{(byte) 0xFE, 0x00, 0x00, 0x03, 0x00});
+
+        assertThat(session.getTransactionStatus()).isEqualTo(MySQLSession.TransactionStatus.IN_TRANSACTION);
+    }
+
+    @Test
+    void updatesTransactionStatusFromOkAsEofWhenClientDeprecatesEof() {
+        MySQLSession session = new MySQLSession("mysql-deprecate-eof");
+        MySQLDatabaseEventExtractor deprecateExtractor =
+                new MySQLDatabaseEventExtractor("MySQL", "mysql-deprecate-eof", false, session);
+
+        byte[] handshakeResponse = rawPacket(1, capabilityPayload(
+                MySQLCapability.CLIENT_PROTOCOL_41.getFlag()
+                        | MySQLCapability.CLIENT_DEPRECATE_EOF.getFlag()));
+        deprecateExtractor.inspect(TrafficDirection.CLIENT_TO_TARGET,
+                handshakeResponse, 0, handshakeResponse.length);
+        inspectTarget(deprecateExtractor, 2, new byte[]{0x00, 0x02});
+
+        inspectTarget(deprecateExtractor, 1, new byte[]{0x01});
+        inspectTarget(deprecateExtractor, 2, new byte[]{0x03, 'd', 'e', 'f'});
+        inspectTarget(deprecateExtractor, 3, new byte[]{0x01, 'a'});
+        inspectTarget(deprecateExtractor, 4, new byte[]{(byte) 0xFE, 0x00, 0x00, 0x03, 0x00, 0x00, 0x00});
+
+        assertThat(session.getTransactionStatus()).isEqualTo(MySQLSession.TransactionStatus.IN_TRANSACTION);
+    }
+
+    @Test
+    void keepsObservingAfterServerMoreResultsStatusFlag() {
+        MySQLSession session = new MySQLSession("mysql-more-results");
+        MySQLDatabaseEventExtractor moreResultsExtractor =
+                new MySQLDatabaseEventExtractor("MySQL", "mysql-more-results", true, session);
+
+        inspectTarget(moreResultsExtractor, 1, okPayload(0, 0x0002 | 0x0008));
+        inspectTarget(moreResultsExtractor, 1, new byte[]{0x01});
+        inspectTarget(moreResultsExtractor, 2, new byte[]{0x03, 'd', 'e', 'f'});
+        inspectTarget(moreResultsExtractor, 3, new byte[]{(byte) 0xFE, 0x00, 0x00, 0x02, 0x00});
+        inspectTarget(moreResultsExtractor, 4, new byte[]{0x01, 'a'});
+        inspectTarget(moreResultsExtractor, 5, new byte[]{(byte) 0xFE, 0x00, 0x00, 0x03, 0x00});
+
+        assertThat(session.getTransactionStatus()).isEqualTo(MySQLSession.TransactionStatus.IN_TRANSACTION);
+    }
+
+    private static void inspectTarget(MySQLDatabaseEventExtractor extractor, int sequenceId, byte[] payload) {
+        byte[] packet = rawPacket(sequenceId, payload);
+        extractor.inspect(TrafficDirection.TARGET_TO_CLIENT, packet, 0, packet.length);
+    }
+
+    private static byte[] okPayload(int affectedRows, int statusFlags) {
+        ByteArrayOutputStream payload = new ByteArrayOutputStream();
+        payload.write(0x00);
+        payload.write(affectedRows);
+        payload.write(0x00);
+        payload.write(statusFlags & 0xFF);
+        payload.write((statusFlags >> 8) & 0xFF);
+        payload.write(0);
+        payload.write(0);
+        return payload.toByteArray();
+    }
+
+    private static byte[] okPacket(int sequenceId, long affectedRows, long lastInsertId, int statusFlags) {
+        ByteArrayOutputStream payload = new ByteArrayOutputStream();
+        payload.write(0x00);
+        payload.write((int) affectedRows);
+        payload.write((int) lastInsertId);
+        payload.write(statusFlags & 0xFF);
+        payload.write((statusFlags >> 8) & 0xFF);
+        payload.write(0);
+        payload.write(0);
+        return rawPacket(sequenceId, payload.toByteArray());
+    }
+
+    private static byte[] errPacket(int sequenceId, int errorCode, String sqlState, String message) {
+        ByteArrayOutputStream payload = new ByteArrayOutputStream();
+        payload.write(0xFF);
+        payload.write(errorCode & 0xFF);
+        payload.write((errorCode >> 8) & 0xFF);
+        payload.write('#');
+        payload.writeBytes(sqlState.getBytes(StandardCharsets.US_ASCII));
+        payload.writeBytes(message.getBytes(StandardCharsets.UTF_8));
+        return rawPacket(sequenceId, payload.toByteArray());
+    }
+
+    private static byte[] framedPayload(byte[] source, int offset, int payloadLength, int sequenceId) {
+        byte[] packet = new byte[MySQLFrameCodec.HEADER_LENGTH + payloadLength];
+        packet[0] = (byte) (payloadLength & 0xFF);
+        packet[1] = (byte) ((payloadLength >> 8) & 0xFF);
+        packet[2] = (byte) ((payloadLength >> 16) & 0xFF);
+        packet[3] = (byte) (sequenceId & 0xFF);
+        System.arraycopy(source, offset, packet, MySQLFrameCodec.HEADER_LENGTH, payloadLength);
+        return packet;
+    }
+
+    private static byte[] packet(int sequenceId, int command, String sql) {
+        byte[] sqlBytes = sql.getBytes(StandardCharsets.UTF_8);
+        int payloadLength = sqlBytes.length + 1;
+        byte[] packet = new byte[payloadLength + 4];
+        packet[0] = (byte) (payloadLength & 0xFF);
+        packet[1] = (byte) ((payloadLength >> 8) & 0xFF);
+        packet[2] = (byte) ((payloadLength >> 16) & 0xFF);
+        packet[3] = (byte) (sequenceId & 0xFF);
+        packet[4] = (byte) command;
+        System.arraycopy(sqlBytes, 0, packet, 5, sqlBytes.length);
+        return packet;
+    }
+
+    private static byte[] rawPacket(int sequenceId, byte[] payload) {
+        byte[] packet = new byte[payload.length + 4];
+        packet[0] = (byte) (payload.length & 0xFF);
+        packet[1] = (byte) ((payload.length >> 8) & 0xFF);
+        packet[2] = (byte) ((payload.length >> 16) & 0xFF);
+        packet[3] = (byte) (sequenceId & 0xFF);
+        System.arraycopy(payload, 0, packet, 4, payload.length);
+        return packet;
+    }
+
+    private static byte[] capabilityPayload(long capabilityFlags) {
+        byte[] payload = new byte[32];
+        payload[0] = (byte) (capabilityFlags & 0xFF);
+        payload[1] = (byte) ((capabilityFlags >> 8) & 0xFF);
+        payload[2] = (byte) ((capabilityFlags >> 16) & 0xFF);
+        payload[3] = (byte) ((capabilityFlags >> 24) & 0xFF);
+        return payload;
+    }
+}
