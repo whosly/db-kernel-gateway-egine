@@ -52,6 +52,7 @@ public class PostgreSQLProtocolAdapter extends AbstractProtocolAdapter {
     protected void handleClientConnection(Socket clientSocket) {
         String sessionId = "postgresql-" + UUID.randomUUID();
         PostgreSQLSession session = new PostgreSQLSession(sessionId);
+        registerSession(session);
 
         Socket targetSocket;
         try {
@@ -61,6 +62,7 @@ public class PostgreSQLProtocolAdapter extends AbstractProtocolAdapter {
                     sessionId, targetHost, targetPort, e.getMessage());
             sendStartupError(clientSocket, e);
             session.close();
+            unregisterSession(session);
             closeQuietly(clientSocket);
             return;
         }
@@ -77,6 +79,7 @@ public class PostgreSQLProtocolAdapter extends AbstractProtocolAdapter {
             log.warn("PostgreSQL proxy session {} closed: {}", sessionId, e.getMessage());
         } finally {
             session.close();
+            unregisterSession(session);
             closeQuietly(clientSocket);
         }
     }

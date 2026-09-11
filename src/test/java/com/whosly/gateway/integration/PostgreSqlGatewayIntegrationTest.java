@@ -1,6 +1,7 @@
 package com.whosly.gateway.integration;
 
 import com.whosly.gateway.adapter.PostgreSQLProtocolAdapter;
+import com.whosly.gateway.adapter.postgresql.PostgreSQLSession;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
@@ -83,7 +84,14 @@ class PostgreSqlGatewayIntegrationTest extends DatabaseGatewayIntegrationTestSup
                     assertThat(resultSet.next()).isTrue();
                     assertThat(resultSet.getString(1)).isEqualTo(CONFIG.postgreSqlDatabase());
                 }
+
+                PostgreSQLSession session = (PostgreSQLSession) awaitActiveSession(adapter);
+                assertThat(session.getParameter("server_version")).isPresent();
+                assertThat(session.getBackendProcessId()).isGreaterThan(0);
+                assertThat(session.getReadyForQueryStatus()).isEqualTo('T');
+
                 connection.rollback();
+                assertThat(session.getReadyForQueryStatus()).isEqualTo('I');
                 connection.setAutoCommit(true);
 
                 try (Statement statement = connection.createStatement()) {

@@ -46,6 +46,7 @@ public class MySqlProtocolAdapter extends AbstractProtocolAdapter {
     protected void handleClientConnection(Socket clientSocket) {
         String sessionId = "mysql-" + UUID.randomUUID();
         MySQLSession session = new MySQLSession(sessionId);
+        registerSession(session);
 
         /*
          * When the target is unreachable the gateway answers with a native MySQL
@@ -59,6 +60,7 @@ public class MySqlProtocolAdapter extends AbstractProtocolAdapter {
                     sessionId, targetHost, targetPort, e.getMessage());
             sendGatewayError(clientSocket, e);
             session.close();
+            unregisterSession(session);
             closeQuietly(clientSocket);
             return;
         }
@@ -75,6 +77,7 @@ public class MySqlProtocolAdapter extends AbstractProtocolAdapter {
             log.warn("MySQL proxy session {} closed: {}", sessionId, e.getMessage());
         } finally {
             session.close();
+            unregisterSession(session);
             closeQuietly(clientSocket);
         }
     }

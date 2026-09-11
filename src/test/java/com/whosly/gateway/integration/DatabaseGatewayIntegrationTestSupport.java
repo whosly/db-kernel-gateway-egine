@@ -2,9 +2,11 @@ package com.whosly.gateway.integration;
 
 import com.whosly.gateway.adapter.ProtocolAdapter;
 import com.whosly.gateway.adapter.protocol.DatabaseTrafficEvent;
+import com.whosly.gateway.adapter.protocol.ProtocolSession;
 import org.junit.jupiter.api.Assumptions;
 
 import java.net.ServerSocket;
+import java.util.Collection;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
@@ -32,6 +34,25 @@ abstract class DatabaseGatewayIntegrationTestSupport {
         if (adapter != null && adapter.isRunning()) {
             adapter.stop();
         }
+    }
+
+    /**
+     * Waits for the adapter to report at least one active session.
+     *
+     * <p>The session is registered on the adapter's connection thread, so the
+     * client may observe a freshly established connection slightly earlier.</p>
+     */
+    protected ProtocolSession awaitActiveSession(ProtocolAdapter adapter) throws Exception {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
+        while (System.nanoTime() < deadline) {
+            Collection<ProtocolSession> sessions = adapter.getActiveSessions();
+            if (!sessions.isEmpty()) {
+                return sessions.iterator().next();
+            }
+            Thread.sleep(20);
+        }
+        assertThat(adapter.getActiveSessions()).isNotEmpty();
+        return adapter.getActiveSessions().iterator().next();
     }
 
     protected void assertObservedSql(String sql) throws Exception {

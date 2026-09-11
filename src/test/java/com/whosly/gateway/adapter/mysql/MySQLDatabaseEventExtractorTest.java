@@ -439,6 +439,33 @@ class MySQLDatabaseEventExtractorTest {
         assertThat(session.getTransactionStatus()).isEqualTo(MySQLSession.TransactionStatus.IN_TRANSACTION);
     }
 
+    @Test
+    void entersStreamingStateForLocalInfileAndIgnoresFileData() {
+        MySQLSession session = new MySQLSession("mysql-infile");
+        MySQLDatabaseEventExtractor infileExtractor =
+                new MySQLDatabaseEventExtractor("MySQL", "mysql-infile", false, session);
+
+        byte[] handshakeResponse = rawPacket(1, capabilityPayload(MySQLCapability.CLIENT_PROTOCOL_41.getFlag()));
+        infileExtractor.inspect(TrafficDirection.CLIENT_TO_TARGET,
+                handshakeResponse, 0, handshakeResponse.length);
+        inspectTarget(infileExtractor, 2, new byte[]{0x00, 0x02});
+        assertThat(session.getState()).isEqualTo(ProtocolConnectionState.READY);
+
+        // Server requests a LOAD DATA LOCAL INFILE upload.
+        inspectTarget(infileExtractor, 1, new byte[]{(byte) 0xFB, '/', 't', 'm', 'p', '/', 'a', '.', 'c', 's', 'v'});
+        assertThat(session.getState()).isEqualTo(ProtocolConnectionState.STREAMING);
+
+        // File data whose first byte looks like COM_QUERY must not be audited.
+        byte[] filePacket = rawPacket(2, new byte[]{0x03, 'd', 'a', 't', 'a'});
+        assertThat(infileExtractor.inspect(TrafficDirection.CLIENT_TO_TARGET,
+                filePacket, 0, filePacket.length)).isEmpty();
+        assertThat(session.getState()).isEqualTo(ProtocolConnectionState.STREAMING);
+
+        // The final OK closes the upload and marks the session ready again.
+        inspectTarget(infileExtractor, 1, okPayload(1, 0x0002));
+        assertThat(session.getState()).isEqualTo(ProtocolConnectionState.READY);
+    }
+
     private static void inspectTarget(MySQLDatabaseEventExtractor extractor, int sequenceId, byte[] payload) {
         byte[] packet = rawPacket(sequenceId, payload);
         extractor.inspect(TrafficDirection.TARGET_TO_CLIENT, packet, 0, packet.length);

@@ -1,5 +1,9 @@
 package com.whosly.gateway.adapter;
 
+import com.whosly.gateway.adapter.protocol.ProtocolSession;
+
+import java.util.Collection;
+
 /**
  * Interface for protocol adapters that handle different database protocols.
  *
@@ -38,4 +42,15 @@ public interface ProtocolAdapter {
      * @return true if running, false otherwise
      */
     boolean isRunning();
+
+    /**
+     * Snapshot of the sessions currently proxied by this adapter.
+     *
+     * <p>Each session exposes the protocol state the gateway observed on the
+     * wire, such as transaction status, selected database and backend metadata.
+     * The returned collection is a copy; later changes are not reflected.</p>
+     *
+     * @return immutable snapshot of active sessions
+     */
+    Collection<ProtocolSession> getActiveSessions();
 }

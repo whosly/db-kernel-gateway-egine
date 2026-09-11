@@ -269,6 +269,24 @@ class PostgreSQLDatabaseEventExtractorTest {
         assertThat(closeExtractor.extract(execute, 0, execute.length)).isEmpty();
     }
 
+    @Test
+    void entersStreamingStateDuringCopyAndReturnsToReady() {
+        PostgreSQLSession session = new PostgreSQLSession("pg-copy");
+        PostgreSQLDatabaseEventExtractor copyExtractor =
+                new PostgreSQLDatabaseEventExtractor("PostgreSQL", "pg-copy", false, session);
+
+        byte[] startup = new byte[]{0x00, 0x00, 0x00, 0x08, 0x00, 0x03, 0x00, 0x02};
+        copyExtractor.inspect(TrafficDirection.CLIENT_TO_TARGET, startup, 0, startup.length);
+        inspectBackend(copyExtractor, 'Z', new byte[]{'I'});
+        assertThat(session.getState()).isEqualTo(ProtocolConnectionState.READY);
+
+        inspectBackend(copyExtractor, 'G', new byte[]{0x00});
+        assertThat(session.getState()).isEqualTo(ProtocolConnectionState.STREAMING);
+
+        inspectBackend(copyExtractor, 'Z', new byte[]{'I'});
+        assertThat(session.getState()).isEqualTo(ProtocolConnectionState.READY);
+    }
+
     private static void inspectBackend(PostgreSQLDatabaseEventExtractor extractor, char type, byte[]... bodies) {
         byte[] message = typedMessage(type, bodies);
         extractor.inspect(TrafficDirection.TARGET_TO_CLIENT, message, 0, message.length);

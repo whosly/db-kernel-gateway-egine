@@ -63,6 +63,7 @@ public class MySQLDatabaseEventExtractor {
 
     // The first payload byte identifies the packet kind.
     private static final int OK_PACKET_HEADER = 0x00;
+    private static final int LOCAL_INFILE_HEADER = 0xFB;
     private static final int EOF_PACKET_HEADER = 0xFE;
     private static final int ERR_PACKET_HEADER = 0xFF;
 
@@ -90,6 +91,8 @@ public class MySQLDatabaseEventExtractor {
     private MySQLResponsePhase responsePhase = MySQLResponsePhase.IDLE;
     /** Column definition packets still to skip in the current result set. */
     private int remainingColumnDefinitions;
+    /** True while the client uploads LOAD DATA LOCAL INFILE content. */
+    private boolean localInfileInProgress;
     /** True after a TLS/compression switch: bytes become opaque and are not parsed. */
     private boolean opaqueTunnel;
     /** Client capability flags from the handshake response; they drive optional layouts. */
@@ -190,6 +193,7 @@ public class MySQLDatabaseEventExtractor {
             frameContinuation = false;
             responsePhase = MySQLResponsePhase.IDLE;
             remainingColumnDefinitions = 0;
+            localInfileInProgress = false;
         }
 
         advanceSession(ProtocolConnectionState.NEGOTIATING);
@@ -197,6 +201,16 @@ public class MySQLDatabaseEventExtractor {
     }
 
     private List<DatabaseTrafficEvent> extractClientCommandBytes(byte[] bytes, int offset, int length) {
+        if (localInfileInProgress) {
+            /*
+             * The client is uploading LOAD DATA LOCAL INFILE bytes rather than
+             * sending commands. Skipping them prevents file content (which may
+             * start with any byte, including 0x03) from being reported as SQL.
+             * The upload ends when the server OK/ERR response arrives.
+             */
+            return List.of();
+        }
+
         pendingBytes.write(bytes, offset, length);
         byte[] buffered = pendingBytes.toByteArray();
         int cursor = 0;
@@ -538,6 +552,14 @@ public class MySQLDatabaseEventExtractor {
         if (firstByte == ERR_PACKET_HEADER) {
             observeErrPacket(packet, payloadOffset, payloadLength);
             responsePhase = MySQLResponsePhase.IDLE;
+            finishLocalInfile();
+            return;
+        }
+        if (firstByte == LOCAL_INFILE_HEADER) {
+            // LOAD DATA LOCAL INFILE: the server asks the client to upload a file.
+            localInfileInProgress = true;
+            responsePhase = MySQLResponsePhase.IDLE;
+            advanceSession(ProtocolConnectionState.STREAMING);
             return;
         }
 
@@ -554,6 +576,9 @@ public class MySQLDatabaseEventExtractor {
      * further result set follows.
      */
     private void applyOkPacket(byte[] packet, int payloadOffset, int payloadLength) {
+        // An OK response also closes a pending LOCAL INFILE upload.
+        finishLocalInfile();
+
         if (payloadLength < 7) {
             responsePhase = MySQLResponsePhase.IDLE;
             return;
@@ -669,6 +694,19 @@ public class MySQLDatabaseEventExtractor {
         if (session != null) {
             session.tryTransitionTo(state);
         }
+    }
+
+    /**
+     * Ends a LOAD DATA LOCAL INFILE upload. Called when the server finally
+     * answers with OK or ERR, which also marks the session ready for commands
+     * again.
+     */
+    private void finishLocalInfile() {
+        if (!localInfileInProgress) {
+            return;
+        }
+        localInfileInProgress = false;
+        advanceSession(ProtocolConnectionState.READY);
     }
 
     /**
