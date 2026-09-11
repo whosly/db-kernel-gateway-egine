@@ -183,6 +183,9 @@ public class PostgreSQLDatabaseEventExtractor {
                     readCString(message, payloadOffset, payloadOffset + payloadLength).value());
             case ROW_DESCRIPTION -> observeRowDescription(message, payloadOffset, payloadLength);
             case PARAMETER_DESCRIPTION -> observeParameterDescription(message, payloadOffset, payloadLength);
+            // COPY moves the session into streaming until the next ReadyForQuery.
+            case COPY_IN_RESPONSE, COPY_OUT_RESPONSE, COPY_BOTH_RESPONSE ->
+                    session.tryTransitionTo(ProtocolConnectionState.STREAMING);
             case PARAMETER_STATUS -> observeParameterStatus(message, payloadOffset, payloadOffset + payloadLength);
             case BACKEND_KEY_DATA -> observeBackendKeyData(message, payloadOffset, payloadLength);
             case AUTHENTICATION -> observeAuthentication(message, payloadOffset, payloadLength);

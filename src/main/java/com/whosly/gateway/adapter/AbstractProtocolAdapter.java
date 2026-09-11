@@ -2,6 +2,7 @@ package com.whosly.gateway.adapter;
 
 import com.whosly.gateway.adapter.protocol.DatabaseRiskPolicy;
 import com.whosly.gateway.adapter.protocol.DatabaseTrafficObserver;
+import com.whosly.gateway.adapter.protocol.ProtocolSession;
 import com.whosly.gateway.parser.SqlParser;
 import com.whosly.gateway.service.DatabaseConnectionService;
 import org.slf4j.Logger;
@@ -9,6 +10,10 @@ import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.net.ServerSocket;
+import java.util.Collection;
+import java.util.List;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
@@ -33,6 +38,7 @@ public abstract class AbstractProtocolAdapter implements ProtocolAdapter {
     protected DatabaseRiskPolicy databaseRiskPolicy = DatabaseRiskPolicy.allowAll();
     protected int port;
     protected String protocolName;
+    private final Map<String, ProtocolSession> activeSessions = new ConcurrentHashMap<>();
     
     // 目标数据库配置
     protected String targetHost = "localhost";
@@ -146,7 +152,10 @@ public abstract class AbstractProtocolAdapter implements ProtocolAdapter {
         } catch (IOException e) {
             log.error("Error stopping {} protocol adapter", protocolName, e);
         }
-        
+
+        activeSessions.values().forEach(ProtocolSession::close);
+        activeSessions.clear();
+
         running = false;
         log.info("{} protocol adapter stopped successfully", protocolName);
     }
@@ -154,6 +163,27 @@ public abstract class AbstractProtocolAdapter implements ProtocolAdapter {
     @Override
     public boolean isRunning() {
         return running;
+    }
+
+    @Override
+    public Collection<ProtocolSession> getActiveSessions() {
+        return List.copyOf(activeSessions.values());
+    }
+
+    /**
+     * Registers a per-connection session so it can be inspected while active.
+     */
+    protected void registerSession(ProtocolSession session) {
+        activeSessions.put(session.getConnectionId(), session);
+    }
+
+    /**
+     * Removes a session from the active set. Safe to call more than once.
+     */
+    protected void unregisterSession(ProtocolSession session) {
+        if (session != null) {
+            activeSessions.remove(session.getConnectionId());
+        }
     }
     
     /**

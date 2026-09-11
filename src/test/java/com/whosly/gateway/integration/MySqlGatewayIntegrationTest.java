@@ -1,6 +1,7 @@
 package com.whosly.gateway.integration;
 
 import com.whosly.gateway.adapter.MySqlProtocolAdapter;
+import com.whosly.gateway.adapter.mysql.MySQLSession;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 
@@ -76,22 +77,28 @@ class MySqlGatewayIntegrationTest extends DatabaseGatewayIntegrationTestSupport 
             String url = "jdbc:mysql://localhost:" + proxyPort + "/" + CONFIG.mysqlDatabase()
                     + "?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC";
             try (Connection connection = DriverManager.getConnection(url,
-                    CONFIG.mysqlUsername(), CONFIG.mysqlPassword())) {
-                connection.setAutoCommit(false);
-                try (Statement statement = connection.createStatement();
-                     ResultSet resultSet = statement.executeQuery("select database()")) {
+                    CONFIG.mysqlUsername(), CONFIG.mysqlPassword());
+                 Statement statement = connection.createStatement()) {
+                MySQLSession session = (MySQLSession) awaitActiveSession(adapter);
+
+                try (ResultSet resultSet = statement.executeQuery("select database()")) {
                     assertThat(resultSet.next()).isTrue();
                     assertThat(resultSet.getString(1)).isEqualToIgnoringCase(CONFIG.mysqlDatabase());
                 }
-                connection.commit();
-                connection.setAutoCommit(true);
+                assertThat(session.getCurrentDatabase()).hasValueSatisfying(
+                        database -> assertThat(database).isEqualToIgnoringCase(CONFIG.mysqlDatabase()));
 
-                try (Statement statement = connection.createStatement()) {
-                    assertThatThrownBy(() -> statement.executeQuery("select * from gateway_missing_table"))
-                            .isInstanceOf(SQLException.class)
-                            .satisfies(error -> assertThat(((SQLException) error).getSQLState())
-                                    .isEqualTo("42S02"));
-                }
+                statement.execute("begin");
+                assertThat(session.getTransactionStatus())
+                        .isEqualTo(MySQLSession.TransactionStatus.IN_TRANSACTION);
+
+                statement.execute("commit");
+                assertThat(session.getTransactionStatus()).isEqualTo(MySQLSession.TransactionStatus.IDLE);
+
+                assertThatThrownBy(() -> statement.executeQuery("select * from gateway_missing_table"))
+                        .isInstanceOf(SQLException.class)
+                        .satisfies(error -> assertThat(((SQLException) error).getSQLState())
+                                .isEqualTo("42S02"));
             }
 
             assertObservedSql("select database()");
