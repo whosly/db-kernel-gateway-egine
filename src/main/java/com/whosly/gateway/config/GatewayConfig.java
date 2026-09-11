@@ -1,13 +1,18 @@
 package com.whosly.gateway.config;
 
+import com.whosly.gateway.adapter.AbstractProtocolAdapter;
 import com.whosly.gateway.adapter.MySqlProtocolAdapter;
 import com.whosly.gateway.adapter.PostgreSQLProtocolAdapter;
 import com.whosly.gateway.adapter.ProtocolAdapter;
+import com.whosly.gateway.adapter.protocol.ClientAddressPolicy;
+import com.whosly.gateway.adapter.protocol.CidrClientAddressPolicy;
 import com.whosly.gateway.parser.DruidSqlParser;
 import com.whosly.gateway.parser.SqlParser;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+
+import java.util.Arrays;
 
 /**
  * Gateway Config implementation.
@@ -42,6 +47,17 @@ public class GatewayConfig {
     @Value("${gateway.target.database:}")
     private String targetDatabase;
 
+    // 连接生命周期治理
+    @Value("${gateway.max-connections:200}")
+    private int maxConnections;
+
+    @Value("${gateway.idle-timeout-seconds:0}")
+    private long idleTimeoutSeconds;
+
+    // 客户端地址白名单，逗号分隔的 CIDR；留空表示不限制
+    @Value("${gateway.allowed-client-cidrs:}")
+    private String allowedClientCidrs;
+
     @Bean
     public SqlParser sqlParser() {
         return new DruidSqlParser();
@@ -69,6 +85,7 @@ public class GatewayConfig {
         adapter.setTargetUsername(targetUsername);
         adapter.setTargetPassword(targetPassword);
         adapter.setTargetDatabase(targetDatabase);
+        applyConnectionGovernance(adapter);
         return adapter;
     }
     
@@ -81,7 +98,21 @@ public class GatewayConfig {
         adapter.setTargetUsername(targetUsername);
         adapter.setTargetPassword(targetPassword);
         adapter.setTargetDatabase(targetDatabase);
+        applyConnectionGovernance(adapter);
         return adapter;
+    }
+
+    private void applyConnectionGovernance(AbstractProtocolAdapter adapter) {
+        adapter.setMaxConnections(maxConnections);
+        adapter.setIdleTimeoutSeconds(idleTimeoutSeconds);
+        adapter.setClientAddressPolicy(clientAddressPolicy());
+    }
+
+    private ClientAddressPolicy clientAddressPolicy() {
+        if (allowedClientCidrs == null || allowedClientCidrs.isBlank()) {
+            return ClientAddressPolicy.allowAll();
+        }
+        return CidrClientAddressPolicy.of(Arrays.asList(allowedClientCidrs.split(",")));
     }
     
     // Getter methods for target database configuration

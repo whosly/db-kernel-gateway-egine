@@ -3,6 +3,8 @@ package com.whosly.gateway.adapter.postgresql;
 import com.whosly.gateway.adapter.protocol.DatabaseTrafficEvent;
 import com.whosly.gateway.adapter.protocol.ProtocolConnectionState;
 import com.whosly.gateway.adapter.protocol.TrafficDirection;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
@@ -11,6 +13,8 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Observes cleartext PostgreSQL traffic and extracts auditable SQL events.
@@ -34,6 +38,8 @@ import java.util.Optional;
  */
 public class PostgreSQLDatabaseEventExtractor {
 
+    private static final Logger log = LoggerFactory.getLogger(PostgreSQLDatabaseEventExtractor.class);
+
     private final String protocolName;
     private final String sessionId;
     /** True when construction starts before the startup message has been seen. */
@@ -56,22 +62,40 @@ public class PostgreSQLDatabaseEventExtractor {
     private boolean opaqueTunnel;
     /** True when this session was a CancelRequest. */
     private boolean cancelRequest;
+    /** Optional index correlating CancelRequest keys with sessions. */
+    private final PostgreSQLCancelKeyRegistry cancelKeyRegistry;
+    /** Process id carried by an observed CancelRequest; -1 when none was seen. */
+    private int cancelRequestProcessId = -1;
+    /** Secret key carried by an observed CancelRequest; memory only, never logged. */
+    private int cancelRequestSecretKey;
+    /** Session id the observed CancelRequest targets, when the key is known. */
+    private String cancelTargetSessionId;
+    /** Count of malformed-frame anomalies; forwarding is never affected by them. */
+    private final AtomicLong protocolAnomalies = new AtomicLong();
+    private final AtomicBoolean protocolAnomalyLogged = new AtomicBoolean();
 
     public PostgreSQLDatabaseEventExtractor(String protocolName, String sessionId) {
-        this(protocolName, sessionId, true, null);
+        this(protocolName, sessionId, true, null, null);
     }
 
     public PostgreSQLDatabaseEventExtractor(String protocolName, String sessionId, boolean startupMessageConsumed) {
-        this(protocolName, sessionId, startupMessageConsumed, null);
+        this(protocolName, sessionId, startupMessageConsumed, null, null);
     }
 
     public PostgreSQLDatabaseEventExtractor(String protocolName, String sessionId,
                                             boolean startupMessageConsumed, PostgreSQLSession session) {
+        this(protocolName, sessionId, startupMessageConsumed, session, null);
+    }
+
+    public PostgreSQLDatabaseEventExtractor(String protocolName, String sessionId,
+                                            boolean startupMessageConsumed, PostgreSQLSession session,
+                                            PostgreSQLCancelKeyRegistry cancelKeyRegistry) {
         this.protocolName = protocolName;
         this.sessionId = sessionId;
         this.skipInitialStartupMessage = !startupMessageConsumed;
         this.startupMessageConsumed = startupMessageConsumed;
         this.session = session;
+        this.cancelKeyRegistry = cancelKeyRegistry;
     }
 
     public List<DatabaseTrafficEvent> extract(byte[] bytes, int offset, int length) {
@@ -151,6 +175,7 @@ public class PostgreSQLDatabaseEventExtractor {
             char type = (char) (buffered[cursor] & 0xFF);
             int messageLength = PostgreSQLFrameCodec.readInt4(buffered, cursor + 1, buffered.length);
             if (messageLength < PostgreSQLFrameCodec.MIN_MESSAGE_LENGTH) {
+                recordProtocolAnomaly("backend message length " + messageLength + " (minimum 4)");
                 break;
             }
 
@@ -182,10 +207,21 @@ public class PostgreSQLDatabaseEventExtractor {
             case COMMAND_COMPLETE -> session.setLastCommandTag(
                     readCString(message, payloadOffset, payloadOffset + payloadLength).value());
             case ROW_DESCRIPTION -> observeRowDescription(message, payloadOffset, payloadLength);
+            case DATA_ROW -> session.incrementResultRows();
             case PARAMETER_DESCRIPTION -> observeParameterDescription(message, payloadOffset, payloadLength);
+            // Extended-query acknowledgements (rule 4.7).
+            case PARSE_COMPLETE -> session.recordParseComplete();
+            case BIND_COMPLETE -> session.recordBindComplete();
+            case CLOSE_COMPLETE -> session.recordCloseComplete();
+            case NO_DATA -> session.recordNoData();
+            case PORTAL_SUSPENDED -> session.recordPortalSuspended();
+            case NOTIFICATION_RESPONSE -> observeNotification(message, payloadOffset, payloadLength);
             // COPY moves the session into streaming until the next ReadyForQuery.
-            case COPY_IN_RESPONSE, COPY_OUT_RESPONSE, COPY_BOTH_RESPONSE ->
-                    session.tryTransitionTo(ProtocolConnectionState.STREAMING);
+            case COPY_IN_RESPONSE, COPY_OUT_RESPONSE, COPY_BOTH_RESPONSE -> {
+                session.beginCopy();
+                session.tryTransitionTo(ProtocolConnectionState.STREAMING);
+            }
+            case COPY_DATA -> session.incrementCopyData();
             case PARAMETER_STATUS -> observeParameterStatus(message, payloadOffset, payloadOffset + payloadLength);
             case BACKEND_KEY_DATA -> observeBackendKeyData(message, payloadOffset, payloadLength);
             case AUTHENTICATION -> observeAuthentication(message, payloadOffset, payloadLength);
@@ -212,7 +248,25 @@ public class PostgreSQLDatabaseEventExtractor {
 
         char status = (char) (message[payloadOffset] & 0xFF);
         session.setTransactionStatus(transactionStatus(status));
+        // ReadyForQuery is also the answer to a pending Sync (rule 4.7).
+        session.markSyncCompleted();
         session.tryTransitionTo(ProtocolConnectionState.READY);
+    }
+
+    /**
+     * Records the channel of a LISTEN/NOTIFY notification.
+     *
+     * <p>Only the sending process id and channel name are kept: the notification
+     * payload is application data and is deliberately not retained.</p>
+     */
+    private void observeNotification(byte[] message, int payloadOffset, int payloadLength) {
+        if (payloadLength < 4) {
+            return;
+        }
+
+        int processId = PostgreSQLFrameCodec.readInt4(message, payloadOffset, payloadOffset + 4);
+        CString channel = readCString(message, payloadOffset + 4, payloadOffset + payloadLength);
+        session.recordNotification(processId, channel.value());
     }
 
     private void observeRowDescription(byte[] message, int payloadOffset, int payloadLength) {
@@ -220,6 +274,8 @@ public class PostgreSQLDatabaseEventExtractor {
             return;
         }
 
+        // A RowDescription also marks the start of a new result set.
+        session.beginResultSet();
         int fieldCount = ((message[payloadOffset] & 0xFF) << 8) | (message[payloadOffset + 1] & 0xFF);
         session.setLastRowDescriptionFieldCount(fieldCount);
     }
@@ -247,8 +303,45 @@ public class PostgreSQLDatabaseEventExtractor {
         if (payloadLength < 8) {
             return;
         }
-        session.setBackendProcessId(PostgreSQLFrameCodec.readInt4(message, payloadOffset, payloadOffset + 4));
-        session.setBackendSecretKey(PostgreSQLFrameCodec.readInt4(message, payloadOffset + 4, payloadOffset + 8));
+        int processId = PostgreSQLFrameCodec.readInt4(message, payloadOffset, payloadOffset + 4);
+        int secretKey = PostgreSQLFrameCodec.readInt4(message, payloadOffset + 4, payloadOffset + 8);
+        session.setBackendProcessId(processId);
+        session.setBackendSecretKey(secretKey);
+        if (cancelKeyRegistry != null) {
+            // Enables correlating a later CancelRequest with this session (rule 4.10).
+            cancelKeyRegistry.register(sessionId, processId, secretKey);
+        }
+    }
+
+    /**
+     * Correlates an observed {@code CancelRequest} with the session whose
+     * {@code BackendKeyData} matches. The request itself keeps being forwarded
+     * untouched: the gateway only notes which session it targets.
+     */
+    private void observeCancelRequest(byte[] buffered) {
+        cancelRequestProcessId = PostgreSQLFrameCodec.readInt4(buffered,
+                PostgreSQLFrameCodec.UNTYPED_HEADER_LENGTH + 4, buffered.length);
+        cancelRequestSecretKey = PostgreSQLFrameCodec.readInt4(buffered,
+                PostgreSQLFrameCodec.UNTYPED_HEADER_LENGTH + 8, buffered.length);
+        if (cancelKeyRegistry != null) {
+            cancelTargetSessionId = cancelKeyRegistry
+                    .findTargetSessionId(cancelRequestProcessId, cancelRequestSecretKey)
+                    .orElse(null);
+        }
+    }
+
+    /**
+     * Session id targeted by an observed {@code CancelRequest}.
+     *
+     * @return the target session, or empty when no active session matches the key
+     */
+    public Optional<String> getCancelTargetSessionId() {
+        return Optional.ofNullable(cancelTargetSessionId);
+    }
+
+    /** Backend process id carried by an observed {@code CancelRequest}; -1 when none. */
+    public int getCancelRequestProcessId() {
+        return cancelRequestProcessId;
     }
 
     /** Authentication type only; the payload itself is never retained. */
@@ -308,6 +401,7 @@ public class PostgreSQLDatabaseEventExtractor {
 
             int startupLength = PostgreSQLFrameCodec.readInt4(buffered, 0, buffered.length);
             if (startupLength < PostgreSQLFrameCodec.UNTYPED_HEADER_LENGTH) {
+                recordProtocolAnomaly("startup length " + startupLength + " (minimum 4)");
                 compact(buffered, 0);
                 return List.of();
             }
@@ -326,6 +420,7 @@ public class PostgreSQLDatabaseEventExtractor {
             // CancelRequest is a separate, short-lived connection.
             if (startupLength == 16 && isCancelRequest(buffered)) {
                 cancelRequest = true;
+                observeCancelRequest(buffered);
                 compact(buffered, startupLength);
                 return List.of();
             }
@@ -341,6 +436,7 @@ public class PostgreSQLDatabaseEventExtractor {
             char type = (char) (buffered[cursor] & 0xFF);
             int messageLength = PostgreSQLFrameCodec.readInt4(buffered, cursor + 1, buffered.length);
             if (messageLength < PostgreSQLFrameCodec.MIN_MESSAGE_LENGTH) {
+                recordProtocolAnomaly("message length " + messageLength + " (minimum 4)");
                 break;
             }
 
@@ -371,6 +467,32 @@ public class PostgreSQLDatabaseEventExtractor {
      * separately.</p>
      */
     private Optional<DatabaseTrafficEvent> extractMessage(char type, byte[] message, int payloadOffset, int payloadLength) {
+        // Terminate ends the session; the server closes the connection.
+        if (type == PostgreSQLMessageType.TERMINATE.getCode()) {
+            sessionAdvance(ProtocolConnectionState.CLOSING);
+            return Optional.empty();
+        }
+
+        /*
+         * Every frontend message that opens or advances a query cycle moves the
+         * session to EXECUTING; the ReadyForQuery that ends the cycle returns it
+         * to READY (rule 2.1/4.7). Observation never gates forwarding, so an
+         * illegal transition is ignored rather than raised.
+         */
+        sessionAdvance(ProtocolConnectionState.EXECUTING);
+
+        /*
+         * Sync is the extended-query error-recovery point: after an error the
+         * server discards messages until this marker and then answers
+         * ReadyForQuery. Recording it keeps the recovery window observable.
+         */
+        if (type == PostgreSQLMessageType.SYNC.getCode()) {
+            if (session != null) {
+                session.markSyncRequested();
+            }
+            return Optional.empty();
+        }
+
         // Simple query: the SQL text is the whole payload.
         if (type == PostgreSQLMessageType.QUERY.getCode()) {
             String sql = readCString(message, payloadOffset, payloadOffset + payloadLength).value();
@@ -383,7 +505,12 @@ public class PostgreSQLDatabaseEventExtractor {
         if (type == PostgreSQLMessageType.PARSE.getCode()) {
             CString statementName = readCString(message, payloadOffset, payloadOffset + payloadLength);
             CString sql = readCString(message, statementName.nextOffset(), payloadOffset + payloadLength);
-            statementsByName.put(statementName.value(), sql.value());
+            boolean replaced = statementsByName.put(statementName.value(), sql.value()) != null;
+            if (session != null && !statementName.value().isEmpty() && !replaced) {
+                // Only named statements persist: the unnamed statement is replaced
+                // by the next Parse and never accumulates.
+                session.markPreparedStatementOpened();
+            }
             return sql.value().isBlank()
                     ? Optional.empty()
                     : Optional.of(DatabaseTrafficEvent.builder(protocolName, sessionId, "PARSE", sql.value())
@@ -418,6 +545,9 @@ public class PostgreSQLDatabaseEventExtractor {
             CString target = readCString(message, payloadOffset, payloadOffset + payloadLength);
             CString name = readCString(message, target.nextOffset(), payloadOffset + payloadLength);
             forgetPreparedObject(target.value(), name.value());
+            if (session != null && "S".equals(target.value())) {
+                session.markPreparedStatementClosed();
+            }
             return Optional.empty();
         }
 
@@ -426,6 +556,15 @@ public class PostgreSQLDatabaseEventExtractor {
             return Optional.empty();
         }
 
+        /*
+         * A frontend message the gateway does not model is still self-delimiting,
+         * so parsing of the following messages stays safe; only its meaning is
+         * unknown. That degrades observation to UNCERTAIN instead of suspending it
+         * (rule 2.10), because a PostgreSQL frame needs no boundary recovery.
+         */
+        if (PostgreSQLMessageType.fromCode(type).isEmpty() && session != null) {
+            session.markObservationUncertain();
+        }
         return Optional.empty();
     }
 
@@ -468,6 +607,22 @@ public class PostgreSQLDatabaseEventExtractor {
     private void sessionAdvance(ProtocolConnectionState state) {
         if (session != null) {
             session.tryTransitionTo(state);
+        }
+    }
+
+    /**
+     * Number of malformed-frame anomalies observed. Recorded for diagnostics
+     * only: bytes are always forwarded and observation continues.
+     */
+    public long getProtocolAnomalyCount() {
+        return protocolAnomalies.get();
+    }
+
+    private void recordProtocolAnomaly(String detail) {
+        protocolAnomalies.incrementAndGet();
+        if (protocolAnomalyLogged.compareAndSet(false, true)) {
+            log.warn("PostgreSQL protocol anomaly on session {}: {} (further anomalies are counted only)",
+                    sessionId, detail);
         }
     }
 

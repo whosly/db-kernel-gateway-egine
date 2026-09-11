@@ -60,12 +60,15 @@ tunnel、生命周期管理、审计元数据和自身错误映射。后续 Orac
 
 后续必须继续细化的规则缺口：
 
-- MySQL capability flag 白名单：已在 `docs/PROTOCOL_REFERENCE_TABLES.md` 定义首批
-  可识别与可透传集合，后续实现应保持同步。
-- MySQL error code / SQLSTATE 映射表：已在 `docs/PROTOCOL_REFERENCE_TABLES.md`
-  定义网关自身错误首批映射；目标数据库错误必须原样透传。
-- PostgreSQL type OID 映射表：已在 `docs/PROTOCOL_REFERENCE_TABLES.md` 定义首批
-  审计/测试用途类型集合；不得用它改写目标库 RowDescription。
+- 表类资产单源：MySQL capability flag、MySQL status flag、MySQL command 码、
+  MySQL error code / SQLSTATE 映射、PostgreSQL frontend/backend message 类型、
+  PostgreSQL type OID 的唯一真源是 `com.whosly.gateway.adapter.*` 下的 Java 枚举。
+  `docs/PROTOCOL_REFERENCE_TABLES.md` 只是这些枚举的**镜像视图**，用于评审与对照，
+  不得反向成为真源，也不得声称某张表已定义而实现中不存在。
+- MySQL error code / SQLSTATE 映射表：网关自身错误的首批映射由
+  `GatewayErrorMapping` 定义；目标数据库错误必须原样透传，不得改写。
+- PostgreSQL type OID 映射表：首批审计/测试用途类型集合由 `PostgreSQLTypeOid`
+  定义；只用于审计与测试，不得用它改写目标库 RowDescription。
 - PostgreSQL Extended Query 错误恢复：透明代理模式下目标库负责 Parse/Bind/Execute
   错误语义；网关只记录可见消息并保持转发。
 - 集成测试策略：后续应明确哪些测试使用真实 `mysql`、`psql`、JDBC 客户端，哪些
@@ -260,6 +263,36 @@ codec 必须负责：
 - session-local buffer。
 - streaming state。
 
+### 2.10 观测路径规则
+
+透明代理的数据路径只有一条：字节原样双向转发。观测是挂在数据路径旁的只读旁路，
+必须满足以下不变量：
+
+- **观测不得影响转发**：观测不得修改、延迟、重排或阻塞客户端与目标数据库之间的
+  任何字节。
+- **观测必须可失败**：观测、审计、状态推断的异常一律 fail-open，只降级观测结果，
+  不得让客户端连接失败。
+- **改写必须 fail-closed**：SQL 改写与结果集脱敏是唯一允许改变字节的操作；改写
+  失败必须拒绝并返回协议原生错误，不得部分改写，也不得原样放行。
+- **未改写即零序列化**：未被改写的消息必须直接写出其原始字节，不得为了统一而重新
+  序列化。
+- **观测状态必须带置信度**：至少区分 `CONFIRMED`（与协议完全一致）、`UNCERTAIN`
+  （遇到未建模形态，保留上次已确认值且不再更新）、`SUSPENDED`（相位机无法自愈，
+  停止写入会话状态）。未确认状态不得用于路由、连接复用或安全决策。
+- **观测必须能再同步**：解析一旦错位，必须复位而不是继续推断。再同步点定义为：
+  - MySQL：客户端命令包 `sequence_id == 0`（见 3.2），每个新命令都是确定的边界；
+  - PostgreSQL：后端 `ReadyForQuery`，它是查询周期的语义终点。
+- **未知即暂停或降级**：未识别的命令与未识别的响应形态必须进入 `SUSPENDED`，禁止继续
+  猜测其后续含义。当帧格式本身自描述时（例如 PostgreSQL 的 `type + length`），未建模的
+  消息不会破坏后续解析，只需降级为 `UNCERTAIN` 并继续观测；能否降级取决于该协议能否在
+  字节流中确定消息边界，不能确定边界的必须暂停。
+- **opaque tunnel 之后不再解析**：一旦协商进入 TLS/GSS/压缩等不透明链路，必须停止
+  所有明文解析，只保留字节转发。
+- **会话必须输出可消费快照**：每个协议会话都要能给出统一的快照视图，至少包含协议名、
+  连接状态、观测置信度、是否处于事务、客户端身份与默认库、会话脏度、连接时间与最近活动
+  时间，并自带"观测是否可信"与"可否无重置复用"的判定。审计、风控、路由和连接池化只消费
+  该快照，不得直接读取协议内部字段。
+
 ## 3. MySQL 协议规则
 
 ### 3.1 协议阶段
@@ -384,6 +417,38 @@ SSLRequest 规则：
 - 成功响应类型。
 - 错误响应类型。
 - 是否修改 session state。
+
+每个 command handler 还必须声明**是否有响应**与**响应形态**；观测相位机按声明选择
+分支，禁止用 payload 首字节猜测：
+
+- `expects_response`：该命令是否会产生响应包。
+- `response_shape` 取值：
+  - `OK`：单个 OK_Packet。
+  - `ERR`：单个 ERR_Packet。
+  - `RESULTSET`：列数 → 列定义 →（EOF）→ 行 → 终止包。
+  - `EOF_ONLY`：单个 EOF_Packet（或 `CLIENT_DEPRECATE_EOF` 下的 OK-as-EOF）。
+  - `COLUMN_LIST`：列定义列表 + EOF，**没有列数包**。
+  - `PREPARE`：prepare-ok 头（含 statement id 与参数/列数），其后是声明数量的参数定义
+    与列定义，各自以 EOF 结束；`CLIENT_DEPRECATE_EOF` 时不发送这些 EOF。
+  - `RAW_STRING`：无标记字符串包。
+  - `STREAM`：流式响应，直到连接关闭或进入下一阶段。
+  - `NO_RESPONSE`：服务端不回任何包。
+  - `UNKNOWN`：未识别，必须进入 `SUSPENDED`（见 2.10）。
+
+必须显式建模以下形态，否则观测会错位：
+
+- `COM_FIELD_LIST`：`COLUMN_LIST`。响应**没有列数包**，首个 ColumnDefinition 的
+  payload 首字节是字段名长度，不得被当作列数。
+- `COM_STATISTICS`：`RAW_STRING`。响应是无标记字符串包，不是 OK/ERR/结果集。
+- `COM_SET_OPTION`：`EOF_ONLY`。
+- `COM_STMT_SEND_LONG_DATA`、`COM_STMT_CLOSE`：`NO_RESPONSE`。不得当作会产生响应的
+  命令，也不得让会话状态滞留在执行中。
+- `COM_STMT_PREPARE`：`PREPARE`。响应首包是 prepare-ok，**不是列数包**；参数与列定义的
+  数量必须取自该头部，否则元数据定义会被误读为结果集头。
+- prepared statement 的 prepare/execute/send long data/close/reset/fetch 必须按本节
+  声明响应形态后再观测，不得使用统一猜测分支。
+
+`COM_QUIT` 是终止命令：必须进入 `CLOSING`，且不得等待响应。
 
 ### 3.7 MySQL COM_QUERY 响应规则
 
@@ -689,6 +754,23 @@ StartupMessage 或普通查询消息。
 透明代理核心服务只管理连接、转发、状态和审计，不能依赖 MySQL、PostgreSQL 具体
 结果集实现来重写数据库响应。
 
+数据路径边界（规则 2.10 的落地位置）：
+
+- `WireMessage` / `RawBackedMessage`：消息视图。未改写时直接暴露原始字节区间；改写必须
+  通过 `withReplacement` 生成新消息，原视图保留给观测与审计。
+- `MessagePipeline` / `MessageInterceptor` / `InterceptorPhase`：有序拦截链，顺序固定为
+  观测 → 策略 → 改写 → 审计。改写必须在策略之后，否则改写可以绕过策略检查。
+- `TrafficDecision`：携带转发动作与待写消息。未改写时写原始字节，只有改写过的消息才写
+  替换载荷。
+- `BackendProvider`：目标连接的唯一获取入口。池化实现必须先要求
+  `SessionSnapshot.isReusableWithoutReset()` 并执行重置策略，无法证明可重置时必须销毁连接。
+
+禁止事项：
+
+- 禁止在未改写的情况下重新序列化消息。
+- 禁止绕过 `BackendProvider` 直接建立目标连接。
+- 禁止把改写拦截器注册在策略拦截器之前。
+
 ## 7. 测试规则
 
 新增或修改协议行为必须先有测试。
@@ -711,3 +793,60 @@ StartupMessage 或普通查询消息。
 
 单元测试不得依赖真实数据库。需要真实 MySQL、PostgreSQL 客户端和后端的测试
 必须归类为集成测试。
+
+## 8. 演进约束（连接池化 / SQL 改写 / 结果集脱敏）
+
+第一阶段是完整透明代理。后续演进到连接池化复用、SQL 改写或结果集脱敏时，必须满足
+以下约束。这些约束在演进开始前即生效，用于保证演进是增量而不是重写。
+
+### 8.1 数据路径
+
+- 未改写的消息一律写出原始字节，禁止为了统一而全量重新序列化。
+- 只有被显式改写的消息才允许重新序列化，且序列化的消息类型必须逐个开启。
+- 结果集必须流式处理，禁止把完整结果集 materialize 到内存后再输出。
+
+### 8.2 开启改写的门槛
+
+对每一种即将开启改写的消息类型，必须同时满足：
+
+1. 存在 `serialize(parse(bytes)) == bytes` 的往返测试，字节级等价。
+2. 对应改写器默认 fail-closed，失败时不产生任何部分改写输出。
+3. 审计存储中的 SQL 与结果必须与脱敏策略一致；否则脱敏等于失效。脱敏作用于审计出口，
+   策略判定必须基于原始语句：网关转发给目标库的字节不受脱敏影响。
+
+### 8.3 连接池化
+
+前提约束：客户端认证是面向**目标库握手盐值**的挑战-响应，盐值每条连接不同。因此
+"认证透传"与"后端连接复用"不可兼得：复用已认证的后端连接要求网关自己认证客户端，
+并以网关自身凭据认证后端，即 8.4 的认证终结。未完成认证终结前不得启用连接池化。
+
+- 处于事务中（PostgreSQL `T` / `E`，或 MySQL `SERVER_STATUS_IN_TRANS`）的后端连接，
+  绝不允许跨客户端复用。
+- 归还连接必须经过明确的 reset 策略：发送 `COM_RESET_CONNECTION`（MySQL）或
+  `DISCARD ALL`（PostgreSQL），否则必须销毁。
+- 无法证明可安全重置的连接不得进入池中；无法判定即视为脏。
+- 会话脏度必须保守：协议上不可见的会话状态（临时表、用户变量、advisory lock、
+  会话级 `SET`）一律视为脏，宁可销毁。
+- 只有置信度为 `CONFIRMED` 的会话状态才可用于池化与路由决策（见 2.10）。
+
+### 8.5 结果集脱敏规则
+
+默认不脱敏：规则注册表为空时原始值可见。脱敏只能由部署显式注册的规则触发。
+
+- **规则即注入点**：实现 `MaskingRule` 并注册为 bean 即生效，不需要改动引擎或数据路径。
+- **一个列只应用一条规则**。规则按优先级排序并取最高优先级；**同优先级多命中视为配置冲突**
+  并 fail-closed，禁止任意挑选。
+- **规则必须声明可产出的值类别**（`supportedCategories`）。引擎据此拒绝把不兼容的值写入
+  该列，例如把 `****` 写进 `int4` 列会让客户端解析失败。
+- **binary 格式暂不支持**：命中规则且列为 binary 时必须拒绝并上报，不得静默透传。
+- **失败一律 fail-closed**：规则抛异常、返回空值、或与列的格式/类别不匹配时，都不得把
+  原始值当作已脱敏转发。
+- **禁止叠加应用**：不得对同一值按顺序套用多条规则（会复合变换并损坏数据）；需要组合
+  语义时由单条规则内部实现。
+- 与 8.2 的**审计脱敏职责分离**：本节规则改的是线上响应，8.2 的脱敏只改审计文本。
+
+### 8.4 认证与能力
+
+- 任何"网关自己终结认证"的演进，都必须取客户端与目标数据库能力的交集，只声明网关
+  真正能兑现的能力（见 1.1）。
+- 不得为了让池化或改写生效而伪造握手、能力或认证结果。

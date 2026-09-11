@@ -15,4 +15,12 @@ public interface DatabaseTrafficObserver {
         return event -> {
         };
     }
+
+    /**
+     * Wraps a sink so observed SQL reaches it with literal values masked, while
+     * the bytes forwarded to the database stay unchanged (rule 8.2).
+     */
+    static DatabaseTrafficObserver masking(DatabaseTrafficObserver delegate) {
+        return new MaskingTrafficObserver(delegate);
+    }
 }

@@ -36,6 +36,10 @@ public class MySQLSession extends ProtocolSession {
     private int lastWarningCount;
     /** SQLSTATE reported by the last ERR packet. */
     private String lastSqlState;
+    /** Column count of the last observed result set; -1 when none was seen. */
+    private int lastResultSetColumnCount = -1;
+    /** Row count of the last observed result set. */
+    private long lastResultSetRowCount;
 
     public MySQLSession(String connectionId) {
         super("mysql", connectionId);
@@ -75,6 +79,7 @@ public class MySQLSession extends ProtocolSession {
                 ? TransactionStatus.IN_TRANSACTION
                 : TransactionStatus.IDLE;
         this.autocommit = (statusFlags & MySQLServerStatusFlag.SERVER_STATUS_AUTOCOMMIT.getFlag()) != 0;
+        setInTransaction(transactionStatus == TransactionStatus.IN_TRANSACTION);
     }
 
     public TransactionStatus getTransactionStatus() {
@@ -107,5 +112,54 @@ public class MySQLSession extends ProtocolSession {
 
     public void setLastSqlState(String lastSqlState) {
         this.lastSqlState = lastSqlState;
+    }
+
+    /**
+     * Starts observation of a new result set.
+     *
+     * <p>The gateway records the column count (rule 2.6) but never rewrites the
+     * description sent to the client.</p>
+     */
+    public void beginResultSet(int columnCount) {
+        this.lastResultSetColumnCount = columnCount;
+        this.lastResultSetRowCount = 0;
+    }
+
+    /** Counts one row packet of the current result set. */
+    public void incrementResultSetRows() {
+        this.lastResultSetRowCount++;
+    }
+
+    /**
+     * Column count of the last observed result set; {@code -1} when none was seen.
+     */
+    public int getLastResultSetColumnCount() {
+        return lastResultSetColumnCount;
+    }
+
+    /** Row count of the last observed result set. */
+    public long getLastResultSetRowCount() {
+        return lastResultSetRowCount;
+    }
+
+    /**
+     * Clears the session state a client can reset without re-authenticating
+     * ({@code COM_RESET_CONNECTION}).
+     *
+     * <p>The default database is retained, matching MySQL reset semantics. The
+     * transaction state and result metadata are observed again from the OK
+     * packet that answers the command.</p>
+     */
+    public void resetObservedState() {
+        this.transactionStatus = TransactionStatus.IDLE;
+        this.autocommit = true;
+        this.lastAffectedRows = 0;
+        this.lastWarningCount = 0;
+        this.lastSqlState = null;
+        this.lastResultSetColumnCount = -1;
+        this.lastResultSetRowCount = 0;
+        // A reset drops every server-side prepared statement of this session.
+        clearPreparedStatements();
+        setInTransaction(false);
     }
 }

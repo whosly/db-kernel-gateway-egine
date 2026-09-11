@@ -3,15 +3,21 @@ package com.whosly.gateway.adapter.protocol;
 /**
  * Inspects traffic while preserving transparent byte forwarding semantics.
  *
+ * <p>An inspector returns a {@link TrafficDecision}: forward the message as it
+ * arrived, forward a rewritten payload, deny it, or close the connection. Byte
+ * forwarding stays the default, and only an explicit rewrite changes it
+ * (rule 2.10).</p>
+ *
  * @author yueny09@163.com codealy
  * @since 2026-07-02
  */
 @FunctionalInterface
 public interface TrafficInspector {
 
-    TrafficAction onBytes(TrafficDirection direction, byte[] bytes, int offset, int length);
+    TrafficDecision inspect(WireMessage message);
 
+    /** Forwards every message unchanged. */
     static TrafficInspector passThrough() {
-        return (direction, bytes, offset, length) -> TrafficAction.FORWARD;
+        return message -> TrafficDecision.forward(message);
     }
 }

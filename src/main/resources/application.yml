@@ -18,20 +18,19 @@ gateway:
   # 代理端口
   proxy-port: ${GATEWAY_PROXY_PORT:5433}
 
+  # 最大并发代理连接数，超出后拒绝新连接（返回协议原生错误）
+  max-connections: ${GATEWAY_MAX_CONNECTIONS:200}
+  # 客户端连接空闲超时（秒），0 表示不限制
+  idle-timeout-seconds: ${GATEWAY_IDLE_TIMEOUT_SECONDS:0}
+  # 客户端地址白名单，逗号分隔的 CIDR（如 10.0.0.0/8,127.0.0.1）；留空表示不限制
+  allowed-client-cidrs: ${GATEWAY_ALLOWED_CLIENT_CIDRS:}
+
   # 目标数据库配置
   target:
     # 真实目标库凭据由环境变量或本地测试配置注入，避免写入可提交配置。
+    # 注意：透明代理使用客户端自身凭据连接目标库，此处仅用于展示/运维信息。
     host: ${GATEWAY_TARGET_HOST:localhost}
     port: ${GATEWAY_TARGET_PORT:5432}
     username: ${GATEWAY_TARGET_USERNAME:}
     password: ${GATEWAY_TARGET_PASSWORD:}
     database: ${GATEWAY_TARGET_DATABASE:}
-
-  connection:
-    pool:
-      initial-size: 5
-      max-size: 20
-      min-idle: 2
-  security:
-    authentication:
-      enabled: true

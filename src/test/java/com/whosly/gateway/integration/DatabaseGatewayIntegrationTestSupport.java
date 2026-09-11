@@ -55,6 +55,31 @@ abstract class DatabaseGatewayIntegrationTestSupport {
         return adapter.getActiveSessions().iterator().next();
     }
 
+    /**
+     * Waits for an observed statement whose text matches a prefix and length.
+     *
+     * <p>Used instead of full-string equality for very large statements so the
+     * assertion does not allocate another copy of megabytes of SQL.</p>
+     */
+    protected void assertObservedStatement(String prefix, int expectedLength) throws Exception {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (System.nanoTime() < deadline) {
+            if (hasObservedStatement(prefix, expectedLength)) {
+                return;
+            }
+            Thread.sleep(20);
+        }
+        assertThat(observedEvents)
+                .as("observed statement starting with [%s] and length %s", prefix, expectedLength)
+                .extracting(DatabaseTrafficEvent::getStatement)
+                .anyMatch(statement -> statement.startsWith(prefix) && statement.length() == expectedLength);
+    }
+
+    private boolean hasObservedStatement(String prefix, int expectedLength) {
+        return observedEvents.stream().anyMatch(event -> event.getStatement().startsWith(prefix)
+                && event.getStatement().length() == expectedLength);
+    }
+
     protected void assertObservedSql(String sql) throws Exception {
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3);
         while (System.nanoTime() < deadline) {

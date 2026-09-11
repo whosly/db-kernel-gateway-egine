@@ -1,6 +1,7 @@
 package com.whosly.gateway.adapter;
 
 import com.whosly.gateway.adapter.protocol.ProtocolSession;
+import com.whosly.gateway.adapter.protocol.SessionSnapshot;
 
 import java.util.Collection;
 
@@ -53,4 +54,21 @@ public interface ProtocolAdapter {
      * @return immutable snapshot of active sessions
      */
     Collection<ProtocolSession> getActiveSessions();
+
+    /**
+     * Consumable view of the sessions currently proxied by this adapter.
+     *
+     * <p>Unlike {@link #getActiveSessions()}, the snapshot carries no mutable
+     * protocol internals: it exposes the observed state together with how much
+     * that observation can be trusted, whether a transaction is open, and which
+     * session state would leak into a later client. Auditing, risk control,
+     * routing and connection pooling should consume this instead (rule 2.10/8.3).</p>
+     *
+     * @return immutable snapshot list of active sessions
+     */
+    default Collection<SessionSnapshot> getActiveSessionSnapshots() {
+        return getActiveSessions().stream()
+                .map(ProtocolSession::snapshot)
+                .toList();
+    }
 }

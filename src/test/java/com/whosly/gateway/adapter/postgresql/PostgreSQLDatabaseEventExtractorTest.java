@@ -192,6 +192,136 @@ class PostgreSQLDatabaseEventExtractorTest {
         assertThat(session.getAttribute("client.database")).contains("demo");
     }
 
+    @Test
+    void countsResultRowsAndCopyData() {
+        PostgreSQLSession session = new PostgreSQLSession("pg-row-counts");
+        PostgreSQLDatabaseEventExtractor countsExtractor =
+                new PostgreSQLDatabaseEventExtractor("PostgreSQL", "pg-row-counts", true, session);
+
+        inspectBackend(countsExtractor, 'T', shortBytes(2));
+        inspectBackend(countsExtractor, 'D', shortBytes(1), new byte[]{0x01, 'a'});
+        inspectBackend(countsExtractor, 'D', shortBytes(1), new byte[]{0x01, 'b'});
+        inspectBackend(countsExtractor, 'C', cstring("SELECT 2"));
+
+        assertThat(session.getLastResultRowCount()).isEqualTo(2);
+
+        inspectBackend(countsExtractor, 'G', new byte[]{0x00});
+        inspectBackend(countsExtractor, 'd', new byte[]{0x01, 'x'});
+        inspectBackend(countsExtractor, 'd', new byte[]{0x01, 'y'});
+        inspectBackend(countsExtractor, 'c');
+
+        assertThat(session.getLastCopyDataCount()).isEqualTo(2);
+    }
+
+    @Test
+    void movesSessionToClosingOnTerminate() {
+        PostgreSQLSession session = new PostgreSQLSession("pg-terminate");
+        PostgreSQLDatabaseEventExtractor terminateExtractor =
+                new PostgreSQLDatabaseEventExtractor("PostgreSQL", "pg-terminate", true, session);
+
+        byte[] terminate = typedMessage('X');
+        assertThat(terminateExtractor.inspect(TrafficDirection.CLIENT_TO_TARGET,
+                terminate, 0, terminate.length)).isEmpty();
+
+        assertThat(session.getState()).isEqualTo(ProtocolConnectionState.CLOSING);
+    }
+
+    @Test
+    void observesExtendedQueryAcknowledgementsSyncAndNotifications() {
+        PostgreSQLSession session = new PostgreSQLSession("pg-extended");
+        PostgreSQLDatabaseEventExtractor extendedExtractor =
+                new PostgreSQLDatabaseEventExtractor("PostgreSQL", "pg-extended", false, session);
+
+        byte[] startup = new byte[]{0x00, 0x00, 0x00, 0x08, 0x00, 0x03, 0x00, 0x02};
+        extendedExtractor.inspect(TrafficDirection.CLIENT_TO_TARGET, startup, 0, startup.length);
+        inspectBackend(extendedExtractor, 'Z', new byte[]{'I'});
+        assertThat(session.getState()).isEqualTo(ProtocolConnectionState.READY);
+
+        byte[] parse = typedMessage('P', cstring("stmt1"), cstring("select 1"), shortBytes(0));
+        byte[] bind = typedMessage('B', cstring("portal1"), cstring("stmt1"),
+                shortBytes(0), shortBytes(0), shortBytes(0));
+        byte[] sync = typedMessage('S');
+        byte[] batch = concat(parse, bind, sync);
+        extendedExtractor.extract(batch, 0, batch.length);
+
+        assertThat(session.isSyncPending()).isTrue();
+        assertThat(session.getState()).isEqualTo(ProtocolConnectionState.EXECUTING);
+
+        inspectBackend(extendedExtractor, '1');
+        inspectBackend(extendedExtractor, '2');
+        inspectBackend(extendedExtractor, 'n');
+        inspectBackend(extendedExtractor, 's');
+        inspectBackend(extendedExtractor, '3');
+        inspectBackend(extendedExtractor, 'A', intBytes(4711), cstring("events"), cstring("payload"));
+        inspectBackend(extendedExtractor, 'Z', new byte[]{'I'});
+
+        assertThat(session.getParseCompleteCount()).isEqualTo(1);
+        assertThat(session.getBindCompleteCount()).isEqualTo(1);
+        assertThat(session.getNoDataCount()).isEqualTo(1);
+        assertThat(session.getPortalSuspendedCount()).isEqualTo(1);
+        assertThat(session.getCloseCompleteCount()).isEqualTo(1);
+        assertThat(session.getLastNotificationProcessId()).isEqualTo(4711);
+        assertThat(session.getLastNotificationChannel()).contains("events");
+        assertThat(session.isSyncPending()).isFalse();
+        assertThat(session.getSyncCount()).isEqualTo(1);
+        assertThat(session.getState()).isEqualTo(ProtocolConnectionState.READY);
+    }
+
+    @Test
+    void associatesCancelRequestWithTheSessionThatOwnsTheKey() {
+        PostgreSQLCancelKeyRegistry registry = new PostgreSQLCancelKeyRegistry();
+        PostgreSQLSession session = new PostgreSQLSession("pg-cancel-target");
+        PostgreSQLDatabaseEventExtractor sessionExtractor = new PostgreSQLDatabaseEventExtractor(
+                "PostgreSQL", "pg-cancel-target", true, session, registry);
+
+        inspectBackend(sessionExtractor, 'K', intBytes(4711), intBytes(9911));
+        assertThat(registry.size()).isEqualTo(1);
+
+        PostgreSQLDatabaseEventExtractor cancelExtractor = new PostgreSQLDatabaseEventExtractor(
+                "PostgreSQL", "pg-cancel-request", false, null, registry);
+        byte[] cancelRequest = ByteBuffer.allocate(16)
+                .putInt(16)
+                .putInt(PostgreSQLFrameCodec.CANCEL_REQUEST_CODE)
+                .putInt(4711)
+                .putInt(9911)
+                .array();
+
+        assertThat(cancelExtractor.inspect(TrafficDirection.CLIENT_TO_TARGET,
+                cancelRequest, 0, cancelRequest.length)).isEmpty();
+
+        assertThat(cancelExtractor.getCancelTargetSessionId()).contains("pg-cancel-target");
+        assertThat(cancelExtractor.getCancelRequestProcessId()).isEqualTo(4711);
+
+        registry.unregister("pg-cancel-target");
+        assertThat(registry.size()).isZero();
+    }
+
+    @Test
+    void tracksNamedPreparedStatementsAcrossParseAndClose() {
+        PostgreSQLSession session = new PostgreSQLSession("pg-prepared");
+        PostgreSQLDatabaseEventExtractor preparedExtractor =
+                new PostgreSQLDatabaseEventExtractor("PostgreSQL", "pg-prepared", true, session);
+
+        byte[] parse = typedMessage('P', cstring("stmt1"), cstring("select 1"), shortBytes(0));
+        preparedExtractor.extract(parse, 0, parse.length);
+        assertThat(session.getOpenPreparedStatements()).isEqualTo(1);
+
+        // Re-parsing the same name replaces the statement instead of adding one.
+        preparedExtractor.extract(parse, 0, parse.length);
+        assertThat(session.getOpenPreparedStatements()).isEqualTo(1);
+
+        // The unnamed statement is overwritten by the next Parse and never accumulates.
+        byte[] unnamed = typedMessage('P', cstring(""), cstring("select 2"), shortBytes(0));
+        preparedExtractor.extract(unnamed, 0, unnamed.length);
+        assertThat(session.getOpenPreparedStatements()).isEqualTo(1);
+
+        byte[] close = typedMessage('C', cstring("S"), cstring("stmt1"));
+        preparedExtractor.extract(close, 0, close.length);
+
+        assertThat(session.getOpenPreparedStatements()).isZero();
+        assertThat(session.getDirtiness().isClean()).isTrue();
+    }
+
     private static byte[] startupMessage(String... keyValues) {
         ByteArrayOutputStream body = new ByteArrayOutputStream();
         body.writeBytes(intBytes(196608));
