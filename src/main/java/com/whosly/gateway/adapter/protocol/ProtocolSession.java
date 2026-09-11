@@ -74,6 +74,38 @@ public class ProtocolSession {
         this.state = nextState;
     }
 
+    /**
+     * Attempts a state transition without failing the caller.
+     *
+     * <p>Transparent proxies advance state from observed cleartext frames. When
+     * an observation is ambiguous the transition must never break byte
+     * forwarding, so illegal transitions are reported as {@code false} instead
+     * of throwing.</p>
+     *
+     * @return {@code true} when the transition was legal and applied
+     */
+    public boolean tryTransitionTo(ProtocolConnectionState nextState) {
+        try {
+            transitionTo(nextState);
+            return true;
+        } catch (ProtocolException e) {
+            return false;
+        }
+    }
+
+    /**
+     * Moves the session to {@link ProtocolConnectionState#CLOSED} without throwing.
+     */
+    public void close() {
+        if (state == ProtocolConnectionState.CLOSED) {
+            return;
+        }
+        if (state != ProtocolConnectionState.CLOSING) {
+            tryTransitionTo(ProtocolConnectionState.CLOSING);
+        }
+        tryTransitionTo(ProtocolConnectionState.CLOSED);
+    }
+
     public void putAttribute(String key, Object value) {
         attributes.put(key, value);
     }

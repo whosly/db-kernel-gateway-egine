@@ -1,6 +1,7 @@
 package com.whosly.gateway.adapter.postgresql;
 
 import com.whosly.gateway.adapter.protocol.DatabaseTrafficEvent;
+import com.whosly.gateway.adapter.protocol.ProtocolConnectionState;
 import com.whosly.gateway.adapter.protocol.TrafficDirection;
 
 import java.io.ByteArrayOutputStream;
@@ -12,37 +13,42 @@ import java.util.Map;
 import java.util.Optional;
 
 /**
- * Extracts SQL statements from cleartext PostgreSQL frontend messages.
+ * Extracts SQL statements from cleartext PostgreSQL frontend messages and
+ * observes backend {@code ReadyForQuery} transaction state.
  *
  * @author yueny09@163.com codealy
  * @since 2026-07-02
  */
 public class PostgreSQLDatabaseEventExtractor {
 
-    private static final int TYPED_HEADER_LENGTH = 5;
-    private static final int UNTYPED_STARTUP_HEADER_LENGTH = 4;
-    private static final int SSL_REQUEST_CODE = 80877103;
-    private static final int GSS_ENCRYPTION_REQUEST_CODE = 80877104;
-
     private final String protocolName;
     private final String sessionId;
     private final boolean skipInitialStartupMessage;
+    private final PostgreSQLSession session;
     private final ByteArrayOutputStream pendingBytes = new ByteArrayOutputStream();
+    private final ByteArrayOutputStream pendingBackendBytes = new ByteArrayOutputStream();
     private final Map<String, String> statementsByName = new HashMap<>();
     private final Map<String, String> statementsByPortal = new HashMap<>();
     private boolean startupMessageConsumed;
     private boolean awaitingEncryptionResponse;
     private boolean opaqueTunnel;
+    private boolean cancelRequest;
 
     public PostgreSQLDatabaseEventExtractor(String protocolName, String sessionId) {
-        this(protocolName, sessionId, true);
+        this(protocolName, sessionId, true, null);
     }
 
     public PostgreSQLDatabaseEventExtractor(String protocolName, String sessionId, boolean startupMessageConsumed) {
+        this(protocolName, sessionId, startupMessageConsumed, null);
+    }
+
+    public PostgreSQLDatabaseEventExtractor(String protocolName, String sessionId,
+                                            boolean startupMessageConsumed, PostgreSQLSession session) {
         this.protocolName = protocolName;
         this.sessionId = sessionId;
         this.skipInitialStartupMessage = !startupMessageConsumed;
         this.startupMessageConsumed = startupMessageConsumed;
+        this.session = session;
     }
 
     public List<DatabaseTrafficEvent> extract(byte[] bytes, int offset, int length) {
@@ -55,7 +61,7 @@ public class PostgreSQLDatabaseEventExtractor {
         }
 
         if (direction == TrafficDirection.TARGET_TO_CLIENT) {
-            observeBackendEncryptionResponse(bytes, offset, length);
+            observeBackendBytes(bytes, offset, length);
             return List.of();
         }
 
@@ -69,8 +75,15 @@ public class PostgreSQLDatabaseEventExtractor {
         return extractFrontendMessages(bytes, offset, length);
     }
 
+    /**
+     * @return {@code true} when this session was a PostgreSQL {@code CancelRequest}
+     */
+    public boolean isCancelRequest() {
+        return cancelRequest;
+    }
+
     private void observeBackendEncryptionResponse(byte[] bytes, int offset, int length) {
-        if (!awaitingEncryptionResponse || length <= 0) {
+        if (length <= 0) {
             return;
         }
 
@@ -82,6 +95,7 @@ public class PostgreSQLDatabaseEventExtractor {
          */
         int responseCode = bytes[offset] & 0xFF;
         awaitingEncryptionResponse = false;
+        pendingBackendBytes.reset();
         if (responseCode == 'S' || responseCode == 'G') {
             opaqueTunnel = true;
             pendingBytes.reset();
@@ -92,6 +106,62 @@ public class PostgreSQLDatabaseEventExtractor {
         }
     }
 
+    private void observeBackendBytes(byte[] bytes, int offset, int length) {
+        if (awaitingEncryptionResponse) {
+            observeBackendEncryptionResponse(bytes, offset, length);
+            return;
+        }
+        if (!startupMessageConsumed || cancelRequest) {
+            return;
+        }
+
+        pendingBackendBytes.write(bytes, offset, length);
+        byte[] buffered = pendingBackendBytes.toByteArray();
+        int cursor = 0;
+
+        while (buffered.length - cursor >= PostgreSQLFrameCodec.TYPED_HEADER_LENGTH) {
+            char type = (char) (buffered[cursor] & 0xFF);
+            int messageLength = PostgreSQLFrameCodec.readInt4(buffered, cursor + 1, buffered.length);
+            if (messageLength < PostgreSQLFrameCodec.MIN_MESSAGE_LENGTH) {
+                break;
+            }
+
+            int totalLength = 1 + messageLength;
+            if (buffered.length - cursor < totalLength) {
+                break;
+            }
+
+            observeBackendMessage(type, buffered, cursor + PostgreSQLFrameCodec.TYPED_HEADER_LENGTH,
+                    messageLength - PostgreSQLFrameCodec.UNTYPED_HEADER_LENGTH);
+            cursor += totalLength;
+        }
+
+        compactBackend(buffered, cursor);
+    }
+
+    private void observeBackendMessage(char type, byte[] message, int payloadOffset, int payloadLength) {
+        if (session == null || payloadLength < 1) {
+            return;
+        }
+
+        Optional<PostgreSQLBackendMessageType> backendType = PostgreSQLBackendMessageType.fromCode(type);
+        if (backendType.isEmpty() || backendType.get() != PostgreSQLBackendMessageType.READY_FOR_QUERY) {
+            return;
+        }
+
+        char status = (char) (message[payloadOffset] & 0xFF);
+        session.setTransactionStatus(transactionStatus(status));
+        session.tryTransitionTo(ProtocolConnectionState.READY);
+    }
+
+    private static PostgreSQLSession.TransactionStatus transactionStatus(char wireCode) {
+        return switch (wireCode) {
+            case 'T' -> PostgreSQLSession.TransactionStatus.IN_TRANSACTION;
+            case 'E' -> PostgreSQLSession.TransactionStatus.FAILED_TRANSACTION;
+            default -> PostgreSQLSession.TransactionStatus.IDLE;
+        };
+    }
+
     private List<DatabaseTrafficEvent> extractFrontendMessages(byte[] bytes, int offset, int length) {
         pendingBytes.write(bytes, offset, length);
         byte[] buffered = pendingBytes.toByteArray();
@@ -99,12 +169,12 @@ public class PostgreSQLDatabaseEventExtractor {
         List<DatabaseTrafficEvent> events = new ArrayList<>();
 
         if (skipInitialStartupMessage && !startupMessageConsumed) {
-            if (buffered.length < UNTYPED_STARTUP_HEADER_LENGTH) {
+            if (buffered.length < PostgreSQLFrameCodec.UNTYPED_HEADER_LENGTH) {
                 return List.of();
             }
 
-            int startupLength = int4(buffered, 0);
-            if (startupLength < UNTYPED_STARTUP_HEADER_LENGTH) {
+            int startupLength = PostgreSQLFrameCodec.readInt4(buffered, 0, buffered.length);
+            if (startupLength < PostgreSQLFrameCodec.UNTYPED_HEADER_LENGTH) {
                 compact(buffered, 0);
                 return List.of();
             }
@@ -119,14 +189,23 @@ public class PostgreSQLDatabaseEventExtractor {
                 return List.of();
             }
 
+            if (startupLength == 16 && isCancelRequest(buffered)) {
+                cancelRequest = true;
+                compact(buffered, startupLength);
+                return List.of();
+            }
+
+            observeStartupParameters(buffered, PostgreSQLFrameCodec.UNTYPED_HEADER_LENGTH, startupLength);
             cursor = startupLength;
             startupMessageConsumed = true;
+            sessionAdvance(ProtocolConnectionState.NEGOTIATING);
+            sessionAdvance(ProtocolConnectionState.AUTHENTICATING);
         }
 
-        while (buffered.length - cursor >= TYPED_HEADER_LENGTH) {
+        while (buffered.length - cursor >= PostgreSQLFrameCodec.TYPED_HEADER_LENGTH) {
             char type = (char) (buffered[cursor] & 0xFF);
-            int messageLength = int4(buffered, cursor + 1);
-            if (messageLength < 4) {
+            int messageLength = PostgreSQLFrameCodec.readInt4(buffered, cursor + 1, buffered.length);
+            if (messageLength < PostgreSQLFrameCodec.MIN_MESSAGE_LENGTH) {
                 break;
             }
 
@@ -135,8 +214,9 @@ public class PostgreSQLDatabaseEventExtractor {
                 break;
             }
 
-            Optional<DatabaseTrafficEvent> event = extractMessage(type, buffered, cursor + TYPED_HEADER_LENGTH,
-                    messageLength - 4);
+            Optional<DatabaseTrafficEvent> event = extractMessage(type, buffered,
+                    cursor + PostgreSQLFrameCodec.TYPED_HEADER_LENGTH,
+                    messageLength - PostgreSQLFrameCodec.UNTYPED_HEADER_LENGTH);
             event.ifPresent(events::add);
             cursor += totalLength;
         }
@@ -187,16 +267,47 @@ public class PostgreSQLDatabaseEventExtractor {
         return Optional.empty();
     }
 
-    private static int int4(byte[] bytes, int offset) {
-        return ((bytes[offset] & 0xFF) << 24)
-                | ((bytes[offset + 1] & 0xFF) << 16)
-                | ((bytes[offset + 2] & 0xFF) << 8)
-                | (bytes[offset + 3] & 0xFF);
+    private void observeStartupParameters(byte[] buffered, int payloadOffset, int payloadEnd) {
+        if (session == null) {
+            return;
+        }
+
+        // StartupMessage payload starts with a 4-byte protocol version.
+        int cursor = payloadOffset + 4;
+        while (cursor < payloadEnd && buffered[cursor] != 0) {
+            CString name = readCString(buffered, cursor, payloadEnd);
+            CString value = readCString(buffered, name.nextOffset(), payloadEnd);
+            cursor = value.nextOffset();
+            if (name.value().isEmpty()) {
+                break;
+            }
+
+            session.setParameter(name.value(), value.value());
+            if ("user".equals(name.value())) {
+                session.putAttribute("client.user", value.value());
+            } else if ("database".equals(name.value())) {
+                session.putAttribute("client.database", value.value());
+            }
+        }
+    }
+
+    private void sessionAdvance(ProtocolConnectionState state) {
+        if (session != null) {
+            session.tryTransitionTo(state);
+        }
     }
 
     private static boolean isEncryptionRequest(byte[] bytes) {
-        int requestCode = int4(bytes, 4);
-        return requestCode == SSL_REQUEST_CODE || requestCode == GSS_ENCRYPTION_REQUEST_CODE;
+        int requestCode = PostgreSQLFrameCodec.readInt4(bytes,
+                PostgreSQLFrameCodec.UNTYPED_HEADER_LENGTH, bytes.length);
+        return requestCode == PostgreSQLFrameCodec.SSL_REQUEST_CODE
+                || requestCode == PostgreSQLFrameCodec.GSSENC_REQUEST_CODE;
+    }
+
+    private static boolean isCancelRequest(byte[] bytes) {
+        int requestCode = PostgreSQLFrameCodec.readInt4(bytes,
+                PostgreSQLFrameCodec.UNTYPED_HEADER_LENGTH, bytes.length);
+        return requestCode == PostgreSQLFrameCodec.CANCEL_REQUEST_CODE;
     }
 
     private static CString readCString(byte[] bytes, int offset, int endExclusive) {
@@ -213,6 +324,13 @@ public class PostgreSQLDatabaseEventExtractor {
         pendingBytes.reset();
         if (consumed < buffered.length) {
             pendingBytes.write(buffered, consumed, buffered.length - consumed);
+        }
+    }
+
+    private void compactBackend(byte[] buffered, int consumed) {
+        pendingBackendBytes.reset();
+        if (consumed < buffered.length) {
+            pendingBackendBytes.write(buffered, consumed, buffered.length - consumed);
         }
     }
 

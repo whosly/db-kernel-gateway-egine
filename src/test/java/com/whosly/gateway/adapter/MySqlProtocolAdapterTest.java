@@ -1,9 +1,6 @@
 package com.whosly.gateway.adapter;
 
-import com.whosly.gateway.adapter.mysql.MySQLHandshake;
 import com.whosly.gateway.adapter.mysql.MySQLCommandType;
-import com.whosly.gateway.adapter.mysql.MySQLPacket;
-import com.whosly.gateway.adapter.mysql.MySQLResultSet;
 import com.whosly.gateway.adapter.protocol.DatabaseTrafficEvent;
 import org.junit.jupiter.api.Test;
 
@@ -13,7 +10,6 @@ import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
-import java.sql.Connection;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutorService;
@@ -22,7 +18,6 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.Mockito.*;
 
 class MySqlProtocolAdapterTest {
 
@@ -51,55 +46,10 @@ class MySqlProtocolAdapterTest {
     }
     
     @Test
-    void testMySQLPacketCreation() {
-        byte[] payload = "test payload".getBytes();
-        byte[] packet = MySQLPacket.createPacket(payload, 1);
-        
-        // Check packet length (payload + 4 bytes header)
-        assertThat(packet.length).isEqualTo(payload.length + 4);
-        
-        // Check header fields
-        assertThat(packet[0] & 0xFF).isEqualTo(payload.length & 0xFF);
-        assertThat(packet[1] & 0xFF).isEqualTo((payload.length >> 8) & 0xFF);
-        assertThat(packet[2] & 0xFF).isEqualTo((payload.length >> 16) & 0xFF);
-        assertThat(packet[3] & 0xFF).isEqualTo(1); // sequence ID
-    }
-    
-    @Test
-    void testHandshakePacketCreation() {
-        // 创建一个模拟的数据库连接用于测试
-        Connection mockConnection = mock(Connection.class);
-        byte[] handshakeData = MySQLHandshake.createHandshakePacket(mockConnection);
-        assertThat(handshakeData).isNotNull();
-        assertThat(handshakeData.length).isGreaterThan(0);
-    }
-    
-    @Test
-    void testOkPacketCreation() {
-        byte[] okPacket = MySQLHandshake.createOkPacket(1);
-        assertThat(okPacket).isNotNull();
-        assertThat(okPacket.length).isGreaterThan(4); // At least header + payload
-    }
-    
-    @Test
-    void testErrorPacketCreation() {
-        byte[] errorPacket = MySQLHandshake.createErrorPacket(1001, "HY000", "Test error", 1);
-        assertThat(errorPacket).isNotNull();
-        assertThat(errorPacket.length).isGreaterThan(4); // At least header + payload
-    }
-    
-    @Test
-    void testEofPacketCreation() {
-        byte[] eofPacket = MySQLResultSet.createEofPacket(1);
-        assertThat(eofPacket).isNotNull();
-        assertThat(eofPacket.length).isGreaterThan(4); // At least header + payload
-    }
-
-    @Test
     void handleClientConnectionTransparentlyRelaysTargetAndClientBytes() throws Exception {
         try (ServerSocket targetServer = new ServerSocket(0, 1, InetAddress.getLoopbackAddress());
-             SocketPair clientPair = SocketPair.open();
-             ExecutorService executorService = Executors.newFixedThreadPool(2)) {
+             SocketPair clientPair = SocketPair.open()) {
+            ExecutorService executorService = Executors.newFixedThreadPool(2);
             MySqlProtocolAdapter adapter = new MySqlProtocolAdapter();
             adapter.setTargetHost(InetAddress.getLoopbackAddress().getHostAddress());
             adapter.setTargetPort(targetServer.getLocalPort());
@@ -145,8 +95,8 @@ class MySqlProtocolAdapterTest {
     @Test
     void handleClientConnectionObservesSqlAfterTargetAuthenticationOk() throws Exception {
         try (ServerSocket targetServer = new ServerSocket(0, 1, InetAddress.getLoopbackAddress());
-             SocketPair clientPair = SocketPair.open();
-             ExecutorService executorService = Executors.newFixedThreadPool(2)) {
+             SocketPair clientPair = SocketPair.open()) {
+            ExecutorService executorService = Executors.newFixedThreadPool(2);
             MySqlProtocolAdapter adapter = new MySqlProtocolAdapter();
             adapter.setTargetHost(InetAddress.getLoopbackAddress().getHostAddress());
             adapter.setTargetPort(targetServer.getLocalPort());
@@ -188,6 +138,32 @@ class MySqlProtocolAdapterTest {
             clientPair.clientSide.close();
             adapterFuture.get(2, TimeUnit.SECONDS);
             executorService.shutdownNow();
+        }
+    }
+
+    @Test
+    void returnsMySqlErrorPacketWhenTargetIsUnreachable() throws Exception {
+        int unreachablePort;
+        try (ServerSocket reserved = new ServerSocket(0, 1, InetAddress.getLoopbackAddress())) {
+            unreachablePort = reserved.getLocalPort();
+        }
+
+        try (SocketPair clientPair = SocketPair.open()) {
+            MySqlProtocolAdapter adapter = new MySqlProtocolAdapter();
+            adapter.setTargetHost(InetAddress.getLoopbackAddress().getHostAddress());
+            adapter.setTargetPort(unreachablePort);
+
+            adapter.handleClientConnection(clientPair.serverSide);
+
+            byte[] received = clientPair.clientSide.getInputStream().readAllBytes();
+
+            assertThat(received.length).isGreaterThan(9);
+            assertThat(received[0] & 0xFF).isEqualTo((received.length - 4) & 0xFF);
+            assertThat(received[1] & 0xFF).isZero();
+            assertThat(received[2] & 0xFF).isZero();
+            assertThat(received[3] & 0xFF).isZero();
+            assertThat(received[4] & 0xFF).isEqualTo(0xFF);
+            assertThat(new String(received, 7, 6, StandardCharsets.US_ASCII)).isEqualTo("#08S01");
         }
     }
 

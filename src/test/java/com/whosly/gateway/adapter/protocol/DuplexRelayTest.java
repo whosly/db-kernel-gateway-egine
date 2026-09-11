@@ -6,7 +6,6 @@ import java.io.InputStream;
 import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
-import java.nio.charset.StandardCharsets;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -19,8 +18,8 @@ class DuplexRelayTest {
     @Test
     void relaysBytesInBothDirections() throws Exception {
         try (SocketPair left = SocketPair.open();
-             SocketPair right = SocketPair.open();
-             ExecutorService executorService = Executors.newSingleThreadExecutor()) {
+             SocketPair right = SocketPair.open()) {
+            ExecutorService executorService = Executors.newSingleThreadExecutor();
             DuplexRelay relay = new DuplexRelay("test");
             Future<?> relayFuture = executorService.submit(() -> {
                 try {

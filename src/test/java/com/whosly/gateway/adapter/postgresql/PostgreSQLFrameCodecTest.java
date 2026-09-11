@@ -54,6 +54,14 @@ class PostgreSQLFrameCodecTest {
     }
 
     @Test
+    void readsBigEndianInt4WithBoundsCheck() {
+        byte[] bytes = new byte[]{0x00, 0x00, 0x00, 0x2A};
+
+        assertThat(PostgreSQLFrameCodec.readInt4(bytes, 0, bytes.length)).isEqualTo(42);
+        assertThat(PostgreSQLFrameCodec.readInt4(bytes, 0, 3)).isEqualTo(-1);
+    }
+
+    @Test
     void rejectsTruncatedPayload() {
         ByteArrayInputStream input = new ByteArrayInputStream(new byte[] {'Q', 0, 0, 0, 8, 'a'});
 

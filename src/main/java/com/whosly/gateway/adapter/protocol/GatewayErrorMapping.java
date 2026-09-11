@@ -1,5 +1,8 @@
 package com.whosly.gateway.adapter.protocol;
 
+import java.io.IOException;
+import java.net.SocketTimeoutException;
+
 /**
  * Canonical gateway errors mapped to protocol-native SQLSTATE and errno values.
  *
@@ -44,5 +47,24 @@ public enum GatewayErrorMapping {
 
     public String getDescription() {
         return description;
+    }
+
+    /**
+     * Resolves a gateway-side failure to the canonical mapping.
+     *
+     * <p>Backend SQL errors never reach this method: they are forwarded verbatim
+     * by the transparent relay.</p>
+     */
+    public static GatewayErrorMapping fromThrowable(Throwable error) {
+        if (error instanceof SocketTimeoutException) {
+            return CONNECTION_TIMEOUT;
+        }
+        if (error instanceof ProtocolException) {
+            return PROTOCOL_VIOLATION;
+        }
+        if (error instanceof IOException) {
+            return TARGET_UNAVAILABLE;
+        }
+        return INTERNAL_GATEWAY_ERROR;
     }
 }

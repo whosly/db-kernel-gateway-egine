@@ -1,8 +1,12 @@
 package com.whosly.gateway.adapter;
 
-import com.whosly.gateway.adapter.protocol.DuplexRelay;
-import com.whosly.gateway.adapter.protocol.DatabaseTrafficInspector;
 import com.whosly.gateway.adapter.mysql.MySQLDatabaseEventExtractor;
+import com.whosly.gateway.adapter.mysql.MySQLFrameCodec;
+import com.whosly.gateway.adapter.mysql.MySQLSession;
+import com.whosly.gateway.adapter.mysql.MySqlGatewayErrorMapper;
+import com.whosly.gateway.adapter.protocol.DatabaseTrafficInspector;
+import com.whosly.gateway.adapter.protocol.DuplexRelay;
+import com.whosly.gateway.adapter.protocol.ProtocolMessage;
 import com.whosly.gateway.parser.DruidSqlParser;
 import com.whosly.gateway.parser.SqlParser;
 import org.slf4j.Logger;
@@ -26,6 +30,8 @@ public class MySqlProtocolAdapter extends AbstractProtocolAdapter {
     private static final String PROTOCOL_NAME = "MySQL";
     private static final int DEFAULT_PORT = 3307;
     private static final Duration TARGET_CONNECT_TIMEOUT = Duration.ofSeconds(10);
+    private static final MySqlGatewayErrorMapper GATEWAY_ERROR_MAPPER = new MySqlGatewayErrorMapper();
+    private static final MySQLFrameCodec FRAME_CODEC = new MySQLFrameCodec();
 
     public MySqlProtocolAdapter() {
         super(PROTOCOL_NAME, DEFAULT_PORT);
@@ -39,18 +45,43 @@ public class MySqlProtocolAdapter extends AbstractProtocolAdapter {
     @Override
     protected void handleClientConnection(Socket clientSocket) {
         String sessionId = "mysql-" + UUID.randomUUID();
-        try (Socket targetSocket = connectTarget()) {
+        MySQLSession session = new MySQLSession(sessionId);
+
+        Socket targetSocket;
+        try {
+            targetSocket = connectTarget();
+        } catch (IOException e) {
+            log.warn("MySQL proxy session {} could not reach target {}:{}: {}",
+                    sessionId, targetHost, targetPort, e.getMessage());
+            sendGatewayError(clientSocket, e);
+            session.close();
+            closeQuietly(clientSocket);
+            return;
+        }
+
+        try (Socket target = targetSocket) {
             log.info("MySQL proxy session {} connected {} to target {}:{}",
                     sessionId, clientSocket.getRemoteSocketAddress(), targetHost, targetPort);
             DatabaseTrafficInspector trafficInspector = new DatabaseTrafficInspector(
-                    new MySQLDatabaseEventExtractor(PROTOCOL_NAME, sessionId, false)::inspect,
+                    new MySQLDatabaseEventExtractor(PROTOCOL_NAME, sessionId, false, session)::inspect,
                     databaseTrafficObserver,
                     databaseRiskPolicy);
-            new DuplexRelay(sessionId, trafficInspector).relay(clientSocket, targetSocket);
+            new DuplexRelay(sessionId, trafficInspector).relay(clientSocket, target);
         } catch (IOException e) {
             log.warn("MySQL proxy session {} closed: {}", sessionId, e.getMessage());
         } finally {
+            session.close();
             closeQuietly(clientSocket);
+        }
+    }
+
+    private static void sendGatewayError(Socket clientSocket, IOException cause) {
+        try {
+            ProtocolMessage message = GATEWAY_ERROR_MAPPER.toErrorMessage(cause);
+            FRAME_CODEC.write(message, clientSocket.getOutputStream());
+            clientSocket.getOutputStream().flush();
+        } catch (IOException e) {
+            log.debug("MySQL proxy session failed to send gateway error: {}", e.getMessage());
         }
     }
 

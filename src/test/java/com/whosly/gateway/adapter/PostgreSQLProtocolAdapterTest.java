@@ -1,9 +1,9 @@
 package com.whosly.gateway.adapter;
 
 import com.whosly.gateway.adapter.protocol.DatabaseTrafficEvent;
+import com.whosly.gateway.adapter.protocol.GatewayErrorMapping;
 import org.junit.jupiter.api.Test;
 
-import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.nio.ByteBuffer;
 import java.net.InetAddress;
@@ -24,8 +24,8 @@ class PostgreSQLProtocolAdapterTest {
     @Test
     void handleClientConnectionTransparentlyRelaysStartupAndTargetResponses() throws Exception {
         try (ServerSocket targetServer = new ServerSocket(0, 1, InetAddress.getLoopbackAddress());
-             SocketPair clientPair = SocketPair.open();
-             ExecutorService executorService = Executors.newFixedThreadPool(2)) {
+             SocketPair clientPair = SocketPair.open()) {
+            ExecutorService executorService = Executors.newFixedThreadPool(2);
             PostgreSQLProtocolAdapter adapter = new PostgreSQLProtocolAdapter();
             adapter.setTargetHost(InetAddress.getLoopbackAddress().getHostAddress());
             adapter.setTargetPort(targetServer.getLocalPort());
@@ -72,8 +72,8 @@ class PostgreSQLProtocolAdapterTest {
     @Test
     void handleClientConnectionObservesSimpleQuerySql() throws Exception {
         try (ServerSocket targetServer = new ServerSocket(0, 1, InetAddress.getLoopbackAddress());
-             SocketPair clientPair = SocketPair.open();
-             ExecutorService executorService = Executors.newFixedThreadPool(2)) {
+             SocketPair clientPair = SocketPair.open()) {
+            ExecutorService executorService = Executors.newFixedThreadPool(2);
             PostgreSQLProtocolAdapter adapter = new PostgreSQLProtocolAdapter();
             adapter.setTargetHost(InetAddress.getLoopbackAddress().getHostAddress());
             adapter.setTargetPort(targetServer.getLocalPort());
@@ -109,6 +109,58 @@ class PostgreSQLProtocolAdapterTest {
             adapterFuture.get(2, TimeUnit.SECONDS);
             executorService.shutdownNow();
         }
+    }
+
+    @Test
+    void returnsErrorResponseWhenTargetIsUnreachable() throws Exception {
+        try (SocketPair clientPair = SocketPair.open()) {
+            PostgreSQLProtocolAdapter adapter = new PostgreSQLProtocolAdapter();
+            adapter.setTargetHost(InetAddress.getLoopbackAddress().getHostAddress());
+            adapter.setTargetPort(reserveUnreachablePort());
+
+            clientPair.clientSide.getOutputStream().write(startupMessage());
+            clientPair.clientSide.getOutputStream().flush();
+
+            adapter.handleClientConnection(clientPair.serverSide);
+
+            byte[] received = clientPair.clientSide.getInputStream().readAllBytes();
+            assertThat(received[0]).isEqualTo((byte) 'E');
+            assertThat(new String(received, StandardCharsets.UTF_8))
+                    .contains("C" + GatewayErrorMapping.TARGET_UNAVAILABLE.getPostgreSqlState());
+        }
+    }
+
+    @Test
+    void rejectsSslThenReturnsErrorResponseWhenTargetIsUnreachable() throws Exception {
+        try (SocketPair clientPair = SocketPair.open()) {
+            PostgreSQLProtocolAdapter adapter = new PostgreSQLProtocolAdapter();
+            adapter.setTargetHost(InetAddress.getLoopbackAddress().getHostAddress());
+            adapter.setTargetPort(reserveUnreachablePort());
+
+            clientPair.clientSide.getOutputStream().write(sslRequest());
+            clientPair.clientSide.getOutputStream().write(startupMessage());
+            clientPair.clientSide.getOutputStream().flush();
+
+            adapter.handleClientConnection(clientPair.serverSide);
+
+            byte[] received = clientPair.clientSide.getInputStream().readAllBytes();
+            assertThat(received[0]).isEqualTo((byte) 'N');
+            assertThat(received[1]).isEqualTo((byte) 'E');
+        }
+    }
+
+    private static int reserveUnreachablePort() throws Exception {
+        try (ServerSocket reserved = new ServerSocket(0, 1, InetAddress.getLoopbackAddress())) {
+            return reserved.getLocalPort();
+        }
+    }
+
+    private static byte[] startupMessage() {
+        return new byte[]{0x00, 0x00, 0x00, 0x08, 0x00, 0x03, 0x00, 0x00};
+    }
+
+    private static byte[] sslRequest() {
+        return new byte[]{0x00, 0x00, 0x00, 0x08, 0x04, (byte) 0xD2, 0x16, 0x2F};
     }
 
     private static byte[] readExact(InputStream inputStream, int length) throws Exception {

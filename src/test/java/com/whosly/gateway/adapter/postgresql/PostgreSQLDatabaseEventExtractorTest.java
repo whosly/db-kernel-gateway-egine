@@ -1,6 +1,7 @@
 package com.whosly.gateway.adapter.postgresql;
 
 import com.whosly.gateway.adapter.protocol.DatabaseTrafficEvent;
+import com.whosly.gateway.adapter.protocol.ProtocolConnectionState;
 import com.whosly.gateway.adapter.protocol.TrafficDirection;
 import org.junit.jupiter.api.Test;
 
@@ -133,6 +134,74 @@ class PostgreSQLDatabaseEventExtractorTest {
         assertThat(events).singleElement()
                 .extracting(DatabaseTrafficEvent::getStatement)
                 .isEqualTo("select 1");
+    }
+
+    @Test
+    void recognizesCancelRequestWithoutTreatingItAsStartupOrQuery() {
+        PostgreSQLDatabaseEventExtractor cancelExtractor =
+                new PostgreSQLDatabaseEventExtractor("PostgreSQL", "pg-cancel", false);
+        byte[] cancelRequest = ByteBuffer.allocate(16)
+                .putInt(16)
+                .putInt(PostgreSQLFrameCodec.CANCEL_REQUEST_CODE)
+                .putInt(4711)
+                .putInt(9911)
+                .array();
+
+        List<DatabaseTrafficEvent> events = cancelExtractor.inspect(TrafficDirection.CLIENT_TO_TARGET,
+                cancelRequest, 0, cancelRequest.length);
+
+        assertThat(events).isEmpty();
+        assertThat(cancelExtractor.isCancelRequest()).isTrue();
+    }
+
+    @Test
+    void tracksReadyForQueryTransactionStateAndMarksSessionReady() {
+        PostgreSQLSession session = new PostgreSQLSession("pg-session-state");
+        PostgreSQLDatabaseEventExtractor sessionExtractor =
+                new PostgreSQLDatabaseEventExtractor("PostgreSQL", "pg-session-state", false, session);
+        byte[] startup = new byte[]{0x00, 0x00, 0x00, 0x08, 0x00, 0x03, 0x00, 0x02};
+        sessionExtractor.inspect(TrafficDirection.CLIENT_TO_TARGET, startup, 0, startup.length);
+        assertThat(session.getState()).isEqualTo(ProtocolConnectionState.AUTHENTICATING);
+
+        byte[] inTransaction = new byte[]{'Z', 0x00, 0x00, 0x00, 0x05, 'T'};
+        sessionExtractor.inspect(TrafficDirection.TARGET_TO_CLIENT, inTransaction, 0, inTransaction.length);
+        assertThat(session.getReadyForQueryStatus()).isEqualTo('T');
+        assertThat(session.getState()).isEqualTo(ProtocolConnectionState.READY);
+
+        byte[] failedTransaction = new byte[]{'Z', 0x00, 0x00, 0x00, 0x05, 'E'};
+        sessionExtractor.inspect(TrafficDirection.TARGET_TO_CLIENT, failedTransaction, 0, failedTransaction.length);
+        assertThat(session.getReadyForQueryStatus()).isEqualTo('E');
+    }
+
+    @Test
+    void recordsStartupParametersOnSession() {
+        PostgreSQLSession session = new PostgreSQLSession("pg-startup");
+        PostgreSQLDatabaseEventExtractor startupExtractor =
+                new PostgreSQLDatabaseEventExtractor("PostgreSQL", "pg-startup", false, session);
+
+        byte[] startup = startupMessage(
+                "user", "postgres",
+                "database", "demo",
+                "application_name", "psql");
+        startupExtractor.inspect(TrafficDirection.CLIENT_TO_TARGET, startup, 0, startup.length);
+
+        assertThat(session.getParameter("user")).contains("postgres");
+        assertThat(session.getParameter("database")).contains("demo");
+        assertThat(session.getParameter("application_name")).contains("psql");
+        assertThat(session.getAttribute("client.user")).contains("postgres");
+        assertThat(session.getAttribute("client.database")).contains("demo");
+    }
+
+    private static byte[] startupMessage(String... keyValues) {
+        ByteArrayOutputStream body = new ByteArrayOutputStream();
+        body.writeBytes(intBytes(196608));
+        for (int index = 0; index + 1 < keyValues.length; index += 2) {
+            body.writeBytes(cstring(keyValues[index]));
+            body.writeBytes(cstring(keyValues[index + 1]));
+        }
+        body.write(0);
+        byte[] payload = body.toByteArray();
+        return concat(intBytes(payload.length + 4), payload);
     }
 
     private static byte[] typedMessage(char type, byte[]... bodies) {

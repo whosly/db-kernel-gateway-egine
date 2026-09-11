@@ -1,6 +1,7 @@
 package com.whosly.gateway.adapter.mysql;
 
 import com.whosly.gateway.adapter.protocol.DatabaseTrafficEvent;
+import com.whosly.gateway.adapter.protocol.ProtocolConnectionState;
 import com.whosly.gateway.adapter.protocol.TrafficDirection;
 
 import java.io.ByteArrayOutputStream;
@@ -17,7 +18,6 @@ import java.util.Optional;
  */
 public class MySQLDatabaseEventExtractor {
 
-    private static final int HEADER_LENGTH = 4;
     private static final int MYSQL_TYPE_DECIMAL = 0x00;
     private static final int MYSQL_TYPE_NULL = 0x06;
     private static final int MYSQL_TYPE_TINY = 0x01;
@@ -49,10 +49,13 @@ public class MySQLDatabaseEventExtractor {
 
     private final String protocolName;
     private final String sessionId;
+    private final MySQLSession session;
     private final boolean commandPhaseOnly;
     private final ByteArrayOutputStream pendingBytes = new ByteArrayOutputStream();
     private final ByteArrayOutputStream pendingTargetBytes = new ByteArrayOutputStream();
     private final ByteArrayOutputStream pendingHandshakeBytes = new ByteArrayOutputStream();
+    private final ByteArrayOutputStream pendingLogicalPayload = new ByteArrayOutputStream();
+    private boolean frameContinuation;
     private boolean readyForCommands;
     private boolean opaqueTunnel;
     private long clientCapabilityFlags;
@@ -60,14 +63,20 @@ public class MySQLDatabaseEventExtractor {
     private int[] lastQueryAttributeTypes = new int[0];
 
     public MySQLDatabaseEventExtractor(String protocolName, String sessionId) {
-        this(protocolName, sessionId, true);
+        this(protocolName, sessionId, true, null);
     }
 
     public MySQLDatabaseEventExtractor(String protocolName, String sessionId, boolean readyForCommands) {
+        this(protocolName, sessionId, readyForCommands, null);
+    }
+
+    public MySQLDatabaseEventExtractor(String protocolName, String sessionId,
+                                       boolean readyForCommands, MySQLSession session) {
         this.protocolName = protocolName;
         this.sessionId = sessionId;
         this.commandPhaseOnly = !readyForCommands;
         this.readyForCommands = readyForCommands;
+        this.session = session;
     }
 
     public List<DatabaseTrafficEvent> extract(byte[] bytes, int offset, int length) {
@@ -105,24 +114,24 @@ public class MySQLDatabaseEventExtractor {
          */
         pendingHandshakeBytes.write(bytes, offset, length);
         byte[] buffered = pendingHandshakeBytes.toByteArray();
-        if (buffered.length < HEADER_LENGTH + 4) {
+        if (buffered.length < MySQLFrameCodec.HEADER_LENGTH + 4) {
             return;
         }
 
-        int payloadLength = (buffered[0] & 0xFF)
-                | ((buffered[1] & 0xFF) << 8)
-                | ((buffered[2] & 0xFF) << 16);
-        if (payloadLength < 4 || buffered.length < HEADER_LENGTH + payloadLength) {
+        int payloadLength = MySQLFrameCodec.payloadLength(buffered, 0, buffered.length);
+        if (payloadLength < 4 || buffered.length < MySQLFrameCodec.HEADER_LENGTH + payloadLength) {
             return;
         }
 
-        long capabilityFlags = (buffered[HEADER_LENGTH] & 0xFFL)
-                | ((buffered[HEADER_LENGTH + 1] & 0xFFL) << 8)
-                | ((buffered[HEADER_LENGTH + 2] & 0xFFL) << 16)
-                | ((buffered[HEADER_LENGTH + 3] & 0xFFL) << 24);
+        int capabilityOffset = MySQLFrameCodec.HEADER_LENGTH;
+        long capabilityFlags = (buffered[capabilityOffset] & 0xFFL)
+                | ((buffered[capabilityOffset + 1] & 0xFFL) << 8)
+                | ((buffered[capabilityOffset + 2] & 0xFFL) << 16)
+                | ((buffered[capabilityOffset + 3] & 0xFFL) << 24);
         clientHandshakeResponseSeen = true;
         pendingHandshakeBytes.reset();
         clientCapabilityFlags |= capabilityFlags;
+        observeHandshakeResponse(buffered, payloadLength, capabilityFlags);
         if ((capabilityFlags & MySQLCapability.CLIENT_SSL.getFlag()) != 0
                 || (capabilityFlags & MySQLCapability.CLIENT_COMPRESS.getFlag()) != 0
                 || (capabilityFlags & MySQLCapability.CLIENT_ZSTD_COMPRESSION_ALGORITHM.getFlag()) != 0) {
@@ -130,7 +139,12 @@ public class MySQLDatabaseEventExtractor {
             pendingBytes.reset();
             pendingTargetBytes.reset();
             pendingHandshakeBytes.reset();
+            pendingLogicalPayload.reset();
+            frameContinuation = false;
         }
+
+        advanceSession(ProtocolConnectionState.NEGOTIATING);
+        advanceSession(ProtocolConnectionState.AUTHENTICATING);
     }
 
     private List<DatabaseTrafficEvent> extractClientCommandBytes(byte[] bytes, int offset, int length) {
@@ -139,22 +153,49 @@ public class MySQLDatabaseEventExtractor {
         int cursor = 0;
         List<DatabaseTrafficEvent> events = new ArrayList<>();
 
-        while (buffered.length - cursor >= HEADER_LENGTH) {
-            int payloadLength = (buffered[cursor] & 0xFF)
-                    | ((buffered[cursor + 1] & 0xFF) << 8)
-                    | ((buffered[cursor + 2] & 0xFF) << 16);
-            int packetLength = HEADER_LENGTH + payloadLength;
+        while (buffered.length - cursor >= MySQLFrameCodec.HEADER_LENGTH) {
+            int payloadLength = MySQLFrameCodec.payloadLength(buffered, cursor, buffered.length);
+            if (payloadLength < 0) {
+                break;
+            }
+            int packetLength = MySQLFrameCodec.HEADER_LENGTH + payloadLength;
             if (buffered.length - cursor < packetLength) {
                 break;
             }
 
-            Optional<DatabaseTrafficEvent> event = extractPacket(buffered, cursor + HEADER_LENGTH, payloadLength);
-            event.ifPresent(events::add);
+            int payloadOffset = cursor + MySQLFrameCodec.HEADER_LENGTH;
+            if (frameContinuation) {
+                appendLogicalPayload(buffered, payloadOffset, payloadLength);
+                if (payloadLength < MySQLFrameCodec.MAX_PAYLOAD_LENGTH) {
+                    dispatchLogicalPayload(events);
+                }
+            } else if (payloadLength == MySQLFrameCodec.MAX_PAYLOAD_LENGTH) {
+                /*
+                 * MySQL splits a logical packet whose payload reaches 2^24 - 1
+                 * into a run of maximum-length packets terminated by a shorter
+                 * one. Observation must reassemble the run before locating SQL.
+                 */
+                frameContinuation = true;
+                appendLogicalPayload(buffered, payloadOffset, payloadLength);
+            } else {
+                extractPacket(buffered, payloadOffset, payloadLength).ifPresent(events::add);
+            }
             cursor += packetLength;
         }
 
         compact(buffered, cursor);
         return events;
+    }
+
+    private void appendLogicalPayload(byte[] bytes, int offset, int length) {
+        pendingLogicalPayload.write(bytes, offset, length);
+    }
+
+    private void dispatchLogicalPayload(List<DatabaseTrafficEvent> events) {
+        byte[] logicalPayload = pendingLogicalPayload.toByteArray();
+        pendingLogicalPayload.reset();
+        frameContinuation = false;
+        extractPacket(logicalPayload, 0, logicalPayload.length).ifPresent(events::add);
     }
 
     private void observeTargetBytes(byte[] bytes, int offset, int length) {
@@ -166,18 +207,17 @@ public class MySQLDatabaseEventExtractor {
         byte[] buffered = pendingTargetBytes.toByteArray();
         int cursor = 0;
 
-        while (buffered.length - cursor >= HEADER_LENGTH + 1) {
-            int payloadLength = (buffered[cursor] & 0xFF)
-                    | ((buffered[cursor + 1] & 0xFF) << 8)
-                    | ((buffered[cursor + 2] & 0xFF) << 16);
-            int packetLength = HEADER_LENGTH + payloadLength;
+        while (buffered.length - cursor >= MySQLFrameCodec.HEADER_LENGTH + 1) {
+            int payloadLength = MySQLFrameCodec.payloadLength(buffered, cursor, buffered.length);
+            int packetLength = MySQLFrameCodec.HEADER_LENGTH + payloadLength;
             if (payloadLength <= 0 || buffered.length - cursor < packetLength) {
                 break;
             }
 
-            int firstPayloadByte = buffered[cursor + HEADER_LENGTH] & 0xFF;
+            int firstPayloadByte = buffered[cursor + MySQLFrameCodec.HEADER_LENGTH] & 0xFF;
             if (firstPayloadByte == 0x00) {
                 readyForCommands = true;
+                advanceSession(ProtocolConnectionState.READY);
                 pendingTargetBytes.reset();
                 return;
             }
@@ -202,6 +242,10 @@ public class MySQLDatabaseEventExtractor {
         }
 
         MySQLCommandType command = commandType.get();
+        if (command == MySQLCommandType.COM_INIT_DB) {
+            observeInitDb(packet, payloadOffset + 1, payloadOffset + payloadLength);
+            return Optional.empty();
+        }
         if (command != MySQLCommandType.COM_QUERY && command != MySQLCommandType.COM_STMT_PREPARE) {
             return Optional.empty();
         }
@@ -371,6 +415,98 @@ public class MySQLDatabaseEventExtractor {
         }
     }
 
+    private void advanceSession(ProtocolConnectionState state) {
+        if (session != null) {
+            session.tryTransitionTo(state);
+        }
+    }
+
+    /**
+     * Reads client identity and requested database from a MySQL Handshake
+     * Response 41, matching rule 3.4. Only identity fields are kept; the auth
+     * response is skipped and never stored or logged.
+     */
+    private void observeHandshakeResponse(byte[] buffered, int payloadLength, long capabilityFlags) {
+        if (session == null) {
+            return;
+        }
+
+        int payloadOffset = MySQLFrameCodec.HEADER_LENGTH;
+        int payloadEnd = payloadOffset + payloadLength;
+        int cursor = payloadOffset + 32;
+        if (cursor > payloadEnd) {
+            return;
+        }
+
+        CursorResult username = readNullTerminated(buffered, cursor, payloadEnd);
+        if (username == null) {
+            return;
+        }
+        session.putAttribute("client.user", username.value());
+        cursor = username.nextOffset();
+
+        cursor = skipAuthResponse(buffered, cursor, payloadEnd, capabilityFlags);
+        if (cursor < 0) {
+            return;
+        }
+
+        if ((capabilityFlags & MySQLCapability.CLIENT_CONNECT_WITH_DB.getFlag()) != 0) {
+            CursorResult database = readNullTerminated(buffered, cursor, payloadEnd);
+            if (database != null && !database.value().isEmpty()) {
+                session.setCurrentDatabase(database.value());
+                session.putAttribute("client.database", database.value());
+            }
+        }
+    }
+
+    private void observeInitDb(byte[] packet, int offset, int endExclusive) {
+        if (session == null || offset >= endExclusive) {
+            return;
+        }
+
+        String database = new String(packet, offset, endExclusive - offset, StandardCharsets.UTF_8);
+        if (!database.isBlank()) {
+            session.setCurrentDatabase(database);
+        }
+    }
+
+    private static CursorResult readNullTerminated(byte[] bytes, int offset, int endExclusive) {
+        if (offset >= endExclusive) {
+            return null;
+        }
+
+        int cursor = offset;
+        while (cursor < endExclusive && bytes[cursor] != 0) {
+            cursor++;
+        }
+        if (cursor >= endExclusive) {
+            return null;
+        }
+        return new CursorResult(new String(bytes, offset, cursor - offset, StandardCharsets.UTF_8), cursor + 1);
+    }
+
+    private static int skipAuthResponse(byte[] bytes, int offset, int endExclusive, long capabilityFlags) {
+        if (offset >= endExclusive) {
+            return -1;
+        }
+
+        if ((capabilityFlags & MySQLCapability.CLIENT_PLUGIN_AUTH_LENENC_CLIENT_DATA.getFlag()) != 0) {
+            LengthEncodedInteger length = readLengthEncodedInteger(bytes, offset, endExclusive);
+            int nextOffset = length.nextOffset() + safeLongToInt(length.value());
+            return nextOffset <= endExclusive ? nextOffset : -1;
+        }
+        if ((capabilityFlags & MySQLCapability.CLIENT_SECURE_CONNECTION.getFlag()) != 0) {
+            int nextOffset = offset + 1 + (bytes[offset] & 0xFF);
+            return nextOffset <= endExclusive ? nextOffset : -1;
+        }
+
+        CursorResult terminated = readNullTerminated(bytes, offset, endExclusive);
+        return terminated == null ? -1 : terminated.nextOffset();
+    }
+
     private record LengthEncodedInteger(long value, int nextOffset) {
+    }
+
+    private record CursorResult(String value, int nextOffset) {
     }
 }

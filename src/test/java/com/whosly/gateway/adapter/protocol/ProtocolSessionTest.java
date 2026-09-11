@@ -32,6 +32,29 @@ class ProtocolSessionTest {
     }
 
     @Test
+    void tryTransitionToReportsIllegalTransitionWithoutThrowing() {
+        ProtocolSession session = new ProtocolSession("mysql", "client-4");
+
+        assertThat(session.tryTransitionTo(ProtocolConnectionState.EXECUTING)).isFalse();
+        assertThat(session.getState()).isEqualTo(ProtocolConnectionState.CONNECTED);
+
+        assertThat(session.tryTransitionTo(ProtocolConnectionState.NEGOTIATING)).isTrue();
+        assertThat(session.getState()).isEqualTo(ProtocolConnectionState.NEGOTIATING);
+    }
+
+    @Test
+    void closeConvergesToClosedFromAnyState() {
+        ProtocolSession session = new ProtocolSession("postgresql", "client-5");
+        session.transitionTo(ProtocolConnectionState.NEGOTIATING);
+
+        session.close();
+
+        assertThat(session.getState()).isEqualTo(ProtocolConnectionState.CLOSED);
+        session.close();
+        assertThat(session.getState()).isEqualTo(ProtocolConnectionState.CLOSED);
+    }
+
+    @Test
     void storesSessionAttributesWithoutExposingMutableState() {
         ProtocolSession session = new ProtocolSession("postgresql", "client-3");
 
