@@ -58,6 +58,10 @@ replay_pid*
 .design/
 .data/
 
+# Audit trail runtime data: contains observed statements, never commit it.
+audit/
+*.spool
+
 # NOTE: docs/ is intentionally NOT ignored.
 # docs/rules/*.md are project governance rules and docs/PROTOCOL_REFERENCE_TABLES.md
 # is the mirrored reference table index; all of them must stay version controlled.

@@ -6,6 +6,7 @@ import com.whosly.gateway.adapter.protocol.DatabaseRiskPolicy;
 import com.whosly.gateway.adapter.protocol.DatabaseTrafficObserver;
 import com.whosly.gateway.adapter.protocol.DirectBackendProvider;
 import com.whosly.gateway.adapter.protocol.ProtocolSession;
+import com.whosly.gateway.adapter.protocol.RewriteLimits;
 import com.whosly.gateway.parser.SqlParser;
 import com.whosly.gateway.service.DatabaseConnectionService;
 import org.slf4j.Logger;
@@ -57,6 +58,8 @@ public abstract class AbstractProtocolAdapter implements ProtocolAdapter {
     protected DatabaseConnectionService databaseConnectionService;
     protected DatabaseTrafficObserver databaseTrafficObserver = DatabaseTrafficObserver.noop();
     protected DatabaseRiskPolicy databaseRiskPolicy = DatabaseRiskPolicy.allowAll();
+    /** Bounds applied when a rewrite needs a whole message; never used otherwise. */
+    protected RewriteLimits rewriteLimits = RewriteLimits.defaults();
     protected int port;
     protected String protocolName;
     private final Map<String, ProtocolSession> activeSessions = new ConcurrentHashMap<>();
@@ -129,6 +132,18 @@ public abstract class AbstractProtocolAdapter implements ProtocolAdapter {
         this.clientAddressPolicy = clientAddressPolicy != null
                 ? clientAddressPolicy
                 : ClientAddressPolicy.allowAll();
+    }
+
+    /**
+     * Bounds on assembling one whole message for a rewrite. Defaults to 1 MiB and
+     * one second; only a rewrite that needs whole messages can ever reach them.
+     */
+    public void setRewriteLimits(RewriteLimits rewriteLimits) {
+        this.rewriteLimits = rewriteLimits != null ? rewriteLimits : RewriteLimits.defaults();
+    }
+
+    public RewriteLimits getRewriteLimits() {
+        return rewriteLimits;
     }
 
     // 目标数据库配置的setter方法

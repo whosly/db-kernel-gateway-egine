@@ -1,6 +1,7 @@
 package com.whosly.gateway.adapter.mysql;
 
 import com.whosly.gateway.adapter.protocol.DatabaseTrafficEvent;
+import com.whosly.gateway.adapter.protocol.MessageBounder;
 import com.whosly.gateway.adapter.protocol.ProtocolConnectionState;
 import com.whosly.gateway.adapter.protocol.TrafficDirection;
 
@@ -108,8 +109,14 @@ public class MySQLDatabaseEventExtractor {
     private boolean resultSetInProgress;
     /** True while the client uploads LOAD DATA LOCAL INFILE content. */
     private boolean localInfileInProgress;
-    /** True after a TLS/compression switch: bytes become opaque and are not parsed. */
-    private boolean opaqueTunnel;
+    /**
+     * True after a TLS/compression switch: bytes become opaque and are not parsed.
+     *
+     * <p>Volatile because the two relay directions share this observer: the client
+     * direction detects the switch and the target direction must stop holding
+     * bytes for a rewrite (rule 2.10).</p>
+     */
+    private volatile boolean opaqueTunnel;
     /** Client capability flags from the handshake response; they drive optional layouts. */
     private long clientCapabilityFlags;
     /** True once the first client packet (handshake response) has been parsed. */
@@ -151,6 +158,28 @@ public class MySQLDatabaseEventExtractor {
 
     public List<DatabaseTrafficEvent> extract(byte[] bytes, int offset, int length) {
         return extractClientCommandBytes(bytes, offset, length);
+    }
+
+    /**
+     * Message boundaries this protocol layer can offer a rewrite (rule 2.10).
+     *
+     * <p>MySQL framing is the same in both directions (a 4-byte packet header), so
+     * only the opaque switch can take it away: an encrypted or compressed session
+     * has no cleartext headers to trust.</p>
+     *
+     * @param direction direction whose framing is needed; MySQL does not vary by
+     *                  direction
+     * @return the bounder, or {@code null} when this session cannot be framed
+     */
+    public MessageBounder messageBounder(TrafficDirection direction) {
+        /*
+         * The phase is read on every call, not when the bounder is created: the
+         * relay keeps one bounder for the whole session, so a captured flag would
+         * keep framing an already-opaque session as if it were cleartext.
+         */
+        return (bytes, offset, length) -> opaqueTunnel
+                ? null
+                : MySQLMessageFraming.completeMessageEnds(bytes, offset, length);
     }
 
     public List<DatabaseTrafficEvent> inspect(TrafficDirection direction, byte[] bytes, int offset, int length) {

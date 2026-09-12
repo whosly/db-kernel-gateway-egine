@@ -91,7 +91,8 @@ public class PostgreSQLProtocolAdapter extends AbstractProtocolAdapter {
                     session,
                     new StatementClassifier(sqlParser));
             MessagePipeline pipeline = MessagePipeline.of(trafficInspector);
-            new DuplexRelay(sessionId, pipeline, GATEWAY_ERROR_RESPONDER).relay(clientSocket, targetSocket);
+            new DuplexRelay(sessionId, pipeline, GATEWAY_ERROR_RESPONDER, rewriteLimits)
+                    .relay(clientSocket, targetSocket);
         } catch (IOException e) {
             log.warn("PostgreSQL proxy session {} closed: {}", sessionId, e.getMessage());
         } finally {
@@ -99,6 +100,8 @@ public class PostgreSQLProtocolAdapter extends AbstractProtocolAdapter {
             // Drop the cancel keys with the session so a later cancel cannot
             // resolve to a connection that no longer exists.
             cancelKeyRegistry.unregister(sessionId);
+            // Let the audit sink release the sequence counter of this session.
+            databaseTrafficObserver.onSessionClosed(sessionId);
             unregisterSession(session);
             backendProvider.release(targetSocket);
             closeQuietly(clientSocket);

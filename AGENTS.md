@@ -39,6 +39,12 @@ Before changing database protocol code, read and follow:
    capability the gateway does not implement.
 6. Observation state carries confidence. State that is not confirmed must not be
    used for routing or connection-pooling decisions.
+7. Protocol state has one owner. The two relay directions share one observation
+   state machine per connection, so it is driven inside a single per-connection
+   monitor. That monitor covers protocol state only: never hold it across audit
+   delivery, risk evaluation or any other blocking I/O, or one direction's slow
+   downstream would stall the other. Readers get an immutable snapshot taken under
+   the same monitor; never read protocol fields unprotected.
 
 ## Reference tables have a single source of truth
 

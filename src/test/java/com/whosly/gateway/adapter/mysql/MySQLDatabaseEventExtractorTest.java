@@ -438,6 +438,29 @@ class MySQLDatabaseEventExtractorTest {
         assertThat(session.getLastResultSetColumnCount()).isEqualTo(-1);
     }
 
+    @Test
+    void offersPacketBoundariesUntilTheSessionBecomesOpaque() {
+        MySQLDatabaseEventExtractor boundaryExtractor =
+                new MySQLDatabaseEventExtractor("MySQL", "mysql-bounder", false, null);
+
+        var bounder = boundaryExtractor.messageBounder(TrafficDirection.CLIENT_TO_TARGET);
+        assertThat(bounder).isNotNull();
+        byte[] packet = rawPacket(0, new byte[]{0x01, 0x02, 0x03});
+        assertThat(bounder.completeMessageEnds(packet, 0, packet.length)).containsExactly(packet.length);
+
+        // A handshake response that opts into TLS turns the session into an opaque
+        // tunnel, where there is no cleartext framing left to trust.
+        byte[] sslResponse = rawPacket(1, capabilityPayload(
+                MySQLCapability.CLIENT_PROTOCOL_41.getFlag() | MySQLCapability.CLIENT_SSL.getFlag()));
+        boundaryExtractor.inspect(TrafficDirection.CLIENT_TO_TARGET, sslResponse, 0, sslResponse.length);
+
+        // The bounder stays valid for the session and now reports that no boundary
+        // can be trusted: an opaque tunnel has no cleartext framing left.
+        assertThat(boundaryExtractor.messageBounder(TrafficDirection.TARGET_TO_CLIENT)
+                .completeMessageEnds(packet, 0, packet.length)).isNull();
+        assertThat(bounder.completeMessageEnds(packet, 0, packet.length)).isNull();
+    }
+
     private static byte[] handshakeResponse(long capabilities, String username, byte[] authResponse,
                                             String database, String authPlugin) {
         ByteArrayOutputStream payload = new ByteArrayOutputStream();

@@ -38,4 +38,19 @@ public final class MaskingTrafficObserver implements DatabaseTrafficObserver {
     public void onEvent(DatabaseTrafficEvent event) {
         delegate.onEvent(event.withStatement(masker.mask(event.getStatement())));
     }
+
+    /**
+     * Mandatory-ness belongs to the sink that stores the event, never to the
+     * decorator: masking must not quietly downgrade a compliance trail to a
+     * best-effort one (rule 8.5).
+     */
+    @Override
+    public boolean isDeliveryMandatory() {
+        return delegate.isDeliveryMandatory();
+    }
+
+    @Override
+    public void onSessionClosed(String sessionId) {
+        delegate.onSessionClosed(sessionId);
+    }
 }

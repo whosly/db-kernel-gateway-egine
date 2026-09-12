@@ -322,6 +322,38 @@ class PostgreSQLDatabaseEventExtractorTest {
         assertThat(session.getDirtiness().isClean()).isTrue();
     }
 
+    @Test
+    void offersFramingBoundariesThatFollowTheSessionPhase() {
+        PostgreSQLSession session = new PostgreSQLSession("pg-bounder");
+        PostgreSQLDatabaseEventExtractor boundaryExtractor =
+                new PostgreSQLDatabaseEventExtractor("PostgreSQL", "pg-bounder", false, session);
+
+        byte[] startup = new byte[]{0x00, 0x00, 0x00, 0x08, 0x00, 0x03, 0x00, 0x00};
+        var clientBounder = boundaryExtractor.messageBounder(TrafficDirection.CLIENT_TO_TARGET);
+        assertThat(clientBounder).isNotNull();
+        // The leading client message has no type byte, so it is length-prefixed only.
+        assertThat(clientBounder.completeMessageEnds(startup, 0, startup.length))
+                .containsExactly(startup.length);
+
+        // The backend has nothing trustworthy to send before the startup message.
+        assertThat(boundaryExtractor.messageBounder(TrafficDirection.TARGET_TO_CLIENT)
+                .completeMessageEnds(startup, 0, startup.length)).isNull();
+
+        boundaryExtractor.inspect(TrafficDirection.CLIENT_TO_TARGET, startup, 0, startup.length);
+
+        byte[] readyForQuery = typedMessage('Z', new byte[]{'I'});
+        assertThat(boundaryExtractor.messageBounder(TrafficDirection.TARGET_TO_CLIENT)
+                .completeMessageEnds(readyForQuery, 0, readyForQuery.length))
+                .containsExactly(readyForQuery.length);
+        /*
+         * The client bounder was taken before the startup message was consumed, and
+         * it must still frame correctly afterwards: the shape is resolved per call,
+         * not captured when the bounder is handed out.
+         */
+        assertThat(clientBounder.completeMessageEnds(readyForQuery, 0, readyForQuery.length))
+                .containsExactly(readyForQuery.length);
+    }
+
     private static byte[] startupMessage(String... keyValues) {
         ByteArrayOutputStream body = new ByteArrayOutputStream();
         body.writeBytes(intBytes(196608));

@@ -1,6 +1,7 @@
 package com.whosly.gateway.adapter.postgresql;
 
 import com.whosly.gateway.adapter.protocol.DatabaseTrafficEvent;
+import com.whosly.gateway.adapter.protocol.MessageBounder;
 import com.whosly.gateway.adapter.protocol.ProtocolConnectionState;
 import com.whosly.gateway.adapter.protocol.TrafficDirection;
 import org.slf4j.Logger;
@@ -54,14 +55,20 @@ public class PostgreSQLDatabaseEventExtractor {
     private final Map<String, String> statementsByName = new HashMap<>();
     /** Bind-time mapping of portal name to SQL text. */
     private final Map<String, String> statementsByPortal = new HashMap<>();
-    /** True once the StartupMessage has been consumed. */
-    private boolean startupMessageConsumed;
+    /**
+     * True once the StartupMessage has been consumed.
+     *
+     * <p>The framing fields below are volatile because the two relay directions
+     * share this observer: one direction decides which framing shape the stream
+     * is in and the other must not hold bytes against a stale shape.</p>
+     */
+    private volatile boolean startupMessageConsumed;
     /** True while waiting for the single-byte SSL/GSS encoding response. */
-    private boolean awaitingEncryptionResponse;
+    private volatile boolean awaitingEncryptionResponse;
     /** True after accepted encryption: bytes become opaque and are not parsed. */
-    private boolean opaqueTunnel;
+    private volatile boolean opaqueTunnel;
     /** True when this session was a CancelRequest. */
-    private boolean cancelRequest;
+    private volatile boolean cancelRequest;
     /** Optional index correlating CancelRequest keys with sessions. */
     private final PostgreSQLCancelKeyRegistry cancelKeyRegistry;
     /** Process id carried by an observed CancelRequest; -1 when none was seen. */
@@ -127,6 +134,59 @@ public class PostgreSQLDatabaseEventExtractor {
      */
     public boolean isCancelRequest() {
         return cancelRequest;
+    }
+
+    /**
+     * Message boundaries this protocol layer can offer a rewrite (rule 2.10).
+     *
+     * <p>PostgreSQL has no single framing rule, so the shape is resolved from the
+     * session phase and from the direction:</p>
+     * <ul>
+     *   <li>an opaque tunnel has no framing at all;</li>
+     *   <li>the backend's answer to SSLRequest/GSSENCRequest is one lone byte;</li>
+     *   <li>backend messages are always typed, which is why the direction matters:
+     *       only the client's first message can be untyped;</li>
+     *   <li>before the startup message is consumed there is nothing trustworthy for
+     *       the backend to send.</li>
+     * </ul>
+     *
+     * @param direction direction whose framing is needed
+     * @return the bounder, or {@code null} when this session cannot be framed
+     */
+    public MessageBounder messageBounder(TrafficDirection direction) {
+        /*
+         * The shape is resolved on every call, not when the bounder is created: the
+         * relay keeps one bounder for the whole session, and the stream moves from
+         * the startup family to typed framing exactly once, partway through it.
+         */
+        return (bytes, offset, length) -> {
+            PostgreSQLMessageFraming.Framing framing = framingFor(direction);
+            return framing == null
+                    ? null
+                    : PostgreSQLMessageFraming.completeMessageEnds(bytes, offset, length, framing);
+        };
+    }
+
+    /**
+     * Framing shape of a direction right now, or {@code null} when no boundary can
+     * be trusted.
+     */
+    private PostgreSQLMessageFraming.Framing framingFor(TrafficDirection direction) {
+        if (opaqueTunnel) {
+            return null;
+        }
+        if (direction == TrafficDirection.TARGET_TO_CLIENT) {
+            if (awaitingEncryptionResponse) {
+                return PostgreSQLMessageFraming.Framing.ENCRYPTION_RESPONSE;
+            }
+            if (!startupMessageConsumed || cancelRequest) {
+                return null;
+            }
+            return PostgreSQLMessageFraming.Framing.TYPED;
+        }
+        return startupMessageConsumed
+                ? PostgreSQLMessageFraming.Framing.TYPED
+                : PostgreSQLMessageFraming.Framing.STARTUP_FAMILY;
     }
 
     private void observeBackendEncryptionResponse(byte[] bytes, int offset, int length) {

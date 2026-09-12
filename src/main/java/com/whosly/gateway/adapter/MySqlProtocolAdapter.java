@@ -80,11 +80,14 @@ public class MySqlProtocolAdapter extends AbstractProtocolAdapter {
                     session,
                     new StatementClassifier(sqlParser));
             MessagePipeline pipeline = MessagePipeline.of(trafficInspector);
-            new DuplexRelay(sessionId, pipeline, GATEWAY_ERROR_RESPONDER).relay(clientSocket, targetSocket);
+            new DuplexRelay(sessionId, pipeline, GATEWAY_ERROR_RESPONDER, rewriteLimits)
+                    .relay(clientSocket, targetSocket);
         } catch (IOException e) {
             log.warn("MySQL proxy session {} closed: {}", sessionId, e.getMessage());
         } finally {
             session.close();
+            // Let the audit sink release the sequence counter of this session.
+            databaseTrafficObserver.onSessionClosed(sessionId);
             unregisterSession(session);
             backendProvider.release(targetSocket);
             closeQuietly(clientSocket);

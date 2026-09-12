@@ -253,8 +253,13 @@ public class ProtocolSession {
     /**
      * A consumable view of this session for auditing, risk control, routing and
      * connection pooling (rule 2.10/8.3).
+     *
+     * <p>Synchronized on the session, which is the monitor the data path holds
+     * while it drives the extractor. Reading the fields without it would let a
+     * consumer see a half-applied transition — a state that never existed — and
+     * then make a routing or pooling decision on it (rule 8.3).</p>
      */
-    public SessionSnapshot snapshot() {
+    public synchronized SessionSnapshot snapshot() {
         return new SessionSnapshot(protocolName, connectionId, state, observationConfidence, inTransaction,
                 clientAttribute("client.user"), clientAttribute("client.database"),
                 getDirtiness(), connectedAt, lastActivity);

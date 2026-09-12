@@ -52,6 +52,24 @@ public final class MessagePipeline implements TrafficInspector {
         return interceptors;
     }
 
+    /**
+     * {@inheritDoc}
+     *
+     * <p>Reports the first bounder any interceptor declares, in phase order. When
+     * none does — the case for every deployment that only observes — the relay
+     * keeps forwarding each read immediately and no message is ever held.</p>
+     */
+    @Override
+    public MessageBounder messageBounder(TrafficDirection direction) {
+        for (MessageInterceptor interceptor : interceptors) {
+            MessageBounder bounder = interceptor.messageBounder(direction);
+            if (bounder != null) {
+                return bounder;
+            }
+        }
+        return null;
+    }
+
     @Override
     public TrafficDecision inspect(WireMessage message) {
         WireMessage current = message;
