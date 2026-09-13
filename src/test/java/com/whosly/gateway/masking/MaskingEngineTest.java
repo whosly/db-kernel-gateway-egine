@@ -25,15 +25,17 @@ class MaskingEngineTest {
     }
 
     @Test
-    void refusesToMaskABinaryFormattedColumn() {
+    void appliesARuleToABinaryFormattedColumn() {
         MaskingEngine engine = new MaskingEngine(new MaskingRuleRegistry(List.of(
                 new NullingRule("null-all", 0, ColumnSelector.all()))));
         ColumnMetadata binary = new ColumnMetadata("payload", Optional.empty(), "bytea",
                 ColumnMetadata.Category.BINARY, ColumnMetadata.ValueFormat.BINARY, true);
 
-        assertThatThrownBy(() -> engine.apply(binary, MaskedValue.of(new byte[]{1})))
-                .isInstanceOf(MaskingException.class)
-                .hasMessageContaining("Binary result format");
+        // Whether the masked value can be written in the column's format is the protocol
+        // layer's decision, not the engine's: a NULL mask is representable everywhere.
+        MaskedValue result = engine.apply(binary, MaskedValue.of(new byte[]{1}));
+
+        assertThat(result.isNull()).isTrue();
     }
 
     @Test

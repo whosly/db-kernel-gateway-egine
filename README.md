@@ -25,9 +25,25 @@ MySQL 或 PostgreSQL wire protocol 流量透明转发到真实数据库，同时
   （`CONFIRMED` / `UNCERTAIN` / `SUSPENDED`）。
 - 审计出口可按需启用 SQL 字面量脱敏：`DatabaseTrafficObserver.masking(sink)` 在事件进入审计
   存储前把字符串与数值字面量替换为 `?`，**转发给数据库的字节完全不受影响**。
-- 结果集脱敏按规则注入、**默认关闭（原始值可见）**：实现 `MaskingRule` 注册为 bean 即生效，
-  内置置 NULL、固定值、部分保留、SHA-256 哈希与 AES-GCM 可逆加密；同优先级冲突、binary
-  格式与不兼容类别一律 fail-closed。
+- **结果集脱敏（MySQL 文本协议 + PostgreSQL，已接线）**：`MaskingRule` bean 被
+  `MaskingRuleRegistry` 收集，`MaskingEngine` 负责「一列一规则」与 fail-closed 判定（内置置 NULL、
+  固定值、部分保留、SHA-256 哈希、AES-GCM 可逆加密）；`MySQLResultSetMaskingInterceptor` /
+  `PostgreSQLResultSetMaskingInterceptor` 在 REWRITE 相位**逐行**改写：**只有被规则命中的列会变**。
+  列元数据不全、行值个数与表头不符、命中列的值无法在该类型上表示，一律
+  **拒绝该结果集**（协议原生错误），绝不返回本该脱敏却未脱敏的数据；元数据随命令周期失效
+  （PostgreSQL 在 `ReadyForQuery` 后清除），不会被下一个结果集复用。
+  **未注册任何规则时整条路径不启用**，转发与今天逐字节一致。
+- **二进制结果集的支持边界**按「**能否为该类型产出合法的二进制值**」界定（客户端会用自己请求的
+  类型去解析这些字节，填错就是损坏的结果集，而不是脱敏后的结果集）：
+  - **置 NULL 对任何类型都可用**——写协议自身的 NULL 标记，不需要重新编码（PostgreSQL 的
+    `DataRow` 在两种格式下帧完全相同，差别只在值编码）；
+  - 非空改写仅在该类型的二进制表示**可复现**时允许：PostgreSQL 的 `text`/`varchar`/`bpchar`/
+    `name`/`char`/`json`/`xml`/`bytea` 就是原始字节，`jsonb` 需补一个版本字节；
+  - 其余类型（定长数值、时间、布尔、`uuid`、未知 OID）的非空改写**拒绝**；
+  - **MySQL 的二进制行（预处理语句执行结果）整体仍拒绝**：它按列类型布局并带 null 位图，改写
+    需先实现按类型的二进制行编解码，尚未实现。
+  PostgreSQL 的 `RowDescription` 不携带可空性，按「可脱敏」方向取 `nullable=true` 并写明；
+  MySQL 则依据列定义的 `NOT_NULL` 标志。
 - 需要整条消息的改写由**协议层给出消息边界**（MySQL 逻辑包、PostgreSQL typed/启动家族/
   SSL 回应），数据路径不重复实现分帧；会话进入 TLS/压缩后立即停止持有。
 - 改写只在需要整条消息时才持有字节，且受两个**可配置**上界约束：
@@ -259,7 +275,13 @@ src/test/resources/integration-test-local.properties
 | `batch-size` / `max-batch-delay-millis` | `32` / `1` | group commit 的两个触发阈值 |
 | `max-pending-records` / `max-enqueue-wait-millis` | `4096` / `10` | 队列上界与入队等待，超时即拒绝 |
 | `max-spool-bytes` | `1073741824` | 磁盘配额，触顶即拒绝 |
+| `segment-bytes` | `67108864` | 段大小：超过即轮转；**已投递的段可整段删除**，这是磁盘能回收的前提 |
 | `grade-writes` | `true` | 按语句分级（写严格、只读走窗口） |
+| `mask-statements` | `true` | 审计存储是否先脱敏；`false` 表示保存原始语句 |
+| `destination` | `spool` | `spool`（本地文件即最终态）\| `jdbc`（搬运到独立数据库）；非法值启动即失败 |
+| `ship-interval-millis` / `ship-batch-size` | `1000` / `500` | 搬运频率与批量（`destination=jdbc` 时生效） |
+| `jdbc.url` / `jdbc.username` / `jdbc.password` | 空 | 必须独立于被代理库的数据源 |
+| `jdbc.table` | `gateway_audit_record` | 表名；需建 `PRIMARY KEY (session_id, record_sequence)` |
 
 验收（`AuditTrailAcceptanceTest`）：并发写入下「每条语句**恰好一次**、按会话保序」；开启审计
 **不改变**转发给数据库的字节（规则 2.10）；组提交把刷盘摊薄到整批，且单条 append 延迟被
@@ -277,11 +299,59 @@ src/test/resources/integration-test-local.properties
 - **spool 放独立磁盘**：审计 fsync 与目标库自身 WAL 的 fsync 会争抢 IO，同盘部署会同时拉低两者。
 - **配额与队列是硬边界**：触顶即拒绝（fail-closed）。长期触顶说明投递能力不足，应扩容或接入
   异步投递，而不是放宽上界——放宽只是把「拒绝」推迟成「内存耗尽」。
+- **配额要按"最长只进不出的时间"来定**：`destination=jdbc` 时目的端不可用，记录只进不出，
+  spool 填满后**操作会被拒绝**（这是设计使然，不是故障）。同时监控检查点与 spool 大小的差距，
+  它就是「未投递积压」。`destination=spool` 时磁盘只受人工归档节奏影响，配额要覆盖两次归档之间的量。
+- **归档 `spool` 目的端时不要动活动段**：活动段正在被写；把已写满的旧段整体搬走即可，
+  重启后 spool 会自动从现存的段继续。
+- **目的端表必须能去重**：主键缺失等于放弃「恰好一次」，重放会重复计数，审计报表将无法自证。
 - **停机刷盘**：优雅停机先把已接收的记录刷完；非优雅停机在 `strict` 档不会丢已确认的语句。
 - **审计目录不进版本控制**（`.gitignore` 已忽略 `audit/`、`*.spool`）：其中是真实业务语句。
 
-> 尚未完成：最终 sink 投递。`spool → 数据库` 的搬运需要一个**可去重的目的端**（见运维要点里的
-> 幂等要求），在确定目标表与独立连接配置之前不实现，避免先写出一段无法保证语义的搬运代码。
+### 搬运到数据库（`destination=jdbc`）
+
+`AuditShipper` 用独立线程把 spool 搬进数据库，语义是 **至少一次 + 目的端去重**：
+
+- 检查点（`<spool>.offset`，原子替换）**只在整批写库成功后推进**，所以崩溃只会「重发一批」，绝不会跳过记录；
+- 目的端表必须建 `PRIMARY KEY (session_id, record_sequence)`（建表脚本见
+  `docs/sql/audit-sink-schema.sql`）：网关把重复键当成「已存在」，于是库侧收敛为**恰好一次**；
+- 目的端不可用时搬运停止并保留检查点，记录继续留在 spool，不丢；
+- 检查点指向 spool 之外（spool 被替换或截断）时按 `0` 重发——宁可重复，绝不跳过；
+- 搬运**不做删除**：spool 的保留与轮转是运维策略，不是投递路径的职责。
+
+验收（`shipsEveryStatementToTheDatabaseExactlyOnceAcrossReplays`）：20 条语句写库后行数正确；再搬一次
+不新增；**删掉检查点模拟崩溃重放**，全量重发后行数仍不变。
+
+### 脱敏开关一览（如何关闭脱敏）
+
+网关有三处和「脱敏」有关的东西，开关各不相同：
+
+| 层 | 现状 | 默认 | 如何关闭 |
+|---|---|---|---|
+| **审计语句脱敏**（写入 spool 的内容） | 已生效 | **开** | `gateway.audit.mask-statements=false`（或环境变量 `GATEWAY_AUDIT_MASK_STATEMENTS=false`） |
+| **结果集脱敏**（改写返回给客户端的数据） | **已接线（MySQL + PostgreSQL）** | 关 | 不注册任何 `MaskingRule` bean——空注册表就是「不脱敏」，也是 `MaskingEngine.isActive()` 的判据 |
+| **转发字节** | 从不改写 | — | 无需配置：未改写的消息一律写出原始字节 |
+
+一致性要求（规则 §8.2）：审计里保存的内容必须与脱敏策略一致。若结果集脱敏开启而
+`mask-statements=false`，审计就会保存脱敏规则想隐藏的原始语句——两层应当使用同一套策略。
+
+### 轮转与磁盘回收
+
+记录按**段**存放（`audit.spool.000001`、`audit.spool.000002`…）：写者只追加到最新段，段超过
+`segment-bytes` 就轮转（**在帧边界轮转**，不会把一条记录切开），检查点记录的是「段号 + 段内偏移」。
+
+回收规则只有两条，且都朝安全方向：
+
+- **只删除完全落在检查点之前的段**，且**活动段永不删除**——所以「先推进检查点、再删除」的崩溃
+  只会留下一个多余的段，绝不会少一条记录；
+- 检查点用段号定位，因此删掉旧段之后它仍然指向同一条记录（这正是检查点必须带段号的原因）。
+
+磁盘行为按目的端不同：
+
+| 目的端 | 磁盘是否会回收 | 运维动作 |
+|---|---|---|
+| `jdbc` | **是**，每次搬运后自动删除已投递的段 | 配额按「目的端最长可接受停机时间」定 |
+| `spool`（默认） | **否**，本地文件就是审计成品，删了就没了 | 定期把已写满的段归档搬走（活动段在被写，不要动） |
 
 ## 开发约定
 

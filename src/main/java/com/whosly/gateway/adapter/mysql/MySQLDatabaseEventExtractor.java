@@ -4,6 +4,7 @@ import com.whosly.gateway.adapter.protocol.DatabaseTrafficEvent;
 import com.whosly.gateway.adapter.protocol.MessageBounder;
 import com.whosly.gateway.adapter.protocol.ProtocolConnectionState;
 import com.whosly.gateway.adapter.protocol.TrafficDirection;
+import com.whosly.gateway.masking.ColumnMetadata;
 
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
@@ -123,6 +124,14 @@ public class MySQLDatabaseEventExtractor {
     private boolean clientHandshakeResponseSeen;
     /** Shape the command in flight declared it would produce; null when none. */
     private MySQLResponseShape pendingResponseShape;
+    /** Command whose response is being observed; null when none. */
+    private MySQLCommandType pendingCommand;
+    /** Column metadata of the result set being observed, in column order. */
+    private final List<ColumnMetadata> currentResultSetColumns = new ArrayList<>();
+    /** Declared column count of the result set being observed. */
+    private int currentResultSetColumnCount;
+    /** True when the server packet just observed was a result-set row. */
+    private boolean lastResponsePacketWasResultSetRow;
     /** True when response observation stopped and waits for the next command. */
     private boolean responseObservationSuspended;
     /** Column definitions counted while consuming a COM_FIELD_LIST response. */
@@ -171,6 +180,52 @@ public class MySQLDatabaseEventExtractor {
      *                  direction
      * @return the bounder, or {@code null} when this session cannot be framed
      */
+    /**
+     * Captures the metadata of one column definition.
+     *
+     * <p>The row masking path needs it to decide which columns to touch and which
+     * values it may rewrite at all. A packet this cannot parse simply leaves the
+     * column list incomplete, which that path treats as "not safe to mask".</p>
+     */
+    private void observeColumnDefinition(byte[] packet, int payloadOffset, int payloadLength) {
+        MySQLColumnMetadata.parse(packet, payloadOffset, payloadLength, resultSetValueFormat())
+                .ifPresent(currentResultSetColumns::add);
+    }
+
+    /**
+     * Wire format of the rows a result set will carry.
+     *
+     * <p>The text protocol carries text values, while an executed prepared statement
+     * carries type-encoded binary values. Masking must tell them apart: rewriting a
+     * binary value as text would corrupt the result set.</p>
+     */
+    private ColumnMetadata.ValueFormat resultSetValueFormat() {
+        return pendingCommand == MySQLCommandType.COM_STMT_EXECUTE
+                || pendingCommand == MySQLCommandType.COM_STMT_FETCH
+                ? ColumnMetadata.ValueFormat.BINARY
+                : ColumnMetadata.ValueFormat.TEXT;
+    }
+
+    /** Column metadata observed for the result set in flight, in column order. */
+    public List<ColumnMetadata> currentResultSetColumns() {
+        return List.copyOf(currentResultSetColumns);
+    }
+
+    /** Declared column count of the result set in flight; 0 when none is observed. */
+    public int currentResultSetColumnCount() {
+        return currentResultSetColumnCount;
+    }
+
+    /** True when the server packet just observed was a result-set row. */
+    public boolean lastResponsePacketWasResultSetRow() {
+        return lastResponsePacketWasResultSetRow;
+    }
+
+    /** Command whose response is being observed, when one is in flight. */
+    public Optional<MySQLCommandType> pendingCommand() {
+        return Optional.ofNullable(pendingCommand);
+    }
+
     public MessageBounder messageBounder(TrafficDirection direction) {
         /*
          * The phase is read on every call, not when the bounder is created: the
@@ -657,10 +712,13 @@ public class MySQLDatabaseEventExtractor {
             return;
         }
 
+        // Reset per packet: the flag must describe this packet, not the previous one.
+        lastResponsePacketWasResultSetRow = false;
         int firstByte = packet[payloadOffset] & 0xFF;
         switch (responsePhase) {
             case IDLE, RESPONSE_HEADER -> handleResponseHeader(packet, payloadOffset, payloadLength, firstByte);
             case COLUMN_DEFINITIONS -> {
+                observeColumnDefinition(packet, payloadOffset, payloadLength);
                 remainingColumnDefinitions--;
                 if (remainingColumnDefinitions <= 0) {
                     responsePhase = hasCapability(MySQLCapability.CLIENT_DEPRECATE_EOF)
@@ -674,8 +732,11 @@ public class MySQLDatabaseEventExtractor {
             case ROWS -> {
                 if (firstByte == EOF_PACKET_HEADER) {
                     observeResultSetTerminator(packet, payloadOffset, payloadLength);
-                } else if (resultSetInProgress && session != null) {
-                    session.incrementResultSetRows();
+                } else if (resultSetInProgress) {
+                    lastResponsePacketWasResultSetRow = true;
+                    if (session != null) {
+                        session.incrementResultSetRows();
+                    }
                 }
             }
         }
@@ -760,9 +821,14 @@ public class MySQLDatabaseEventExtractor {
                 readLengthEncodedInteger(packet, payloadOffset, payloadOffset + payloadLength);
         remainingColumnDefinitions = safeLongToInt(columnCount.value());
         resultSetInProgress = remainingColumnDefinitions > 0;
-        if (resultSetInProgress && session != null) {
-            // Result set metadata observation (rule 2.6).
-            session.beginResultSet(remainingColumnDefinitions);
+        if (resultSetInProgress) {
+            // The column list describes exactly one result set.
+            currentResultSetColumns.clear();
+            currentResultSetColumnCount = remainingColumnDefinitions;
+            if (session != null) {
+                // Result set metadata observation (rule 2.6).
+                session.beginResultSet(remainingColumnDefinitions);
+            }
         }
         responsePhase = resultSetInProgress
                 ? MySQLResponsePhase.COLUMN_DEFINITIONS
@@ -997,6 +1063,10 @@ public class MySQLDatabaseEventExtractor {
         responsePhase = MySQLResponsePhase.IDLE;
         resultSetInProgress = false;
         pendingResponseShape = null;
+        pendingCommand = null;
+        currentResultSetColumns.clear();
+        currentResultSetColumnCount = 0;
+        lastResponsePacketWasResultSetRow = false;
         advanceSession(ProtocolConnectionState.READY);
     }
 
@@ -1022,6 +1092,7 @@ public class MySQLDatabaseEventExtractor {
         }
 
         pendingResponseShape = shape;
+        pendingCommand = command;
         if (shape == MySQLResponseShape.PREPARE) {
             preparePhase = MySQLPreparePhase.HEADER;
             prepareParamDefinitions = 0;

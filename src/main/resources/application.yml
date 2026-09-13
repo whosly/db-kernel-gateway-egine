@@ -41,8 +41,24 @@ gateway:
     max-pending-records: ${GATEWAY_AUDIT_MAX_PENDING_RECORDS:4096}
     max-enqueue-wait-millis: ${GATEWAY_AUDIT_MAX_ENQUEUE_WAIT_MILLIS:10}
     max-spool-bytes: ${GATEWAY_AUDIT_MAX_SPOOL_BYTES:1073741824}
+    # 段大小：超过即轮转；已投递的段可整段删除，因此这是"磁盘能回收"的前提
+    segment-bytes: ${GATEWAY_AUDIT_SEGMENT_BYTES:67108864}
+    # 审计存储是否先脱敏：true=落盘的是脱敏后语句（默认）；false=保存原始语句
+    mask-statements: ${GATEWAY_AUDIT_MASK_STATEMENTS:true}
     # 按语句分级：写语句强制严格，只有被证明只读的语句才走窗口档
     grade-writes: ${GATEWAY_AUDIT_GRADE_WRITES:true}
+    # 最终 sink：spool（本地文件即最终态）| jdbc（搬运到独立数据库）
+    destination: ${GATEWAY_AUDIT_DESTINATION:spool}
+    # 搬运（destination=jdbc 时生效）：多久搬一次、一批最多搬多少条
+    ship-interval-millis: ${GATEWAY_AUDIT_SHIP_INTERVAL_MILLIS:1000}
+    ship-batch-size: ${GATEWAY_AUDIT_SHIP_BATCH_SIZE:500}
+    jdbc:
+      # 必须是独立于被代理库的数据源：规则 8.5 禁止把审计写回被代理的目标库
+      url: ${GATEWAY_AUDIT_JDBC_URL:}
+      username: ${GATEWAY_AUDIT_JDBC_USERNAME:}
+      password: ${GATEWAY_AUDIT_JDBC_PASSWORD:}
+      # 表必须建 PRIMARY KEY (session_id, record_sequence)，见 docs/sql/audit-sink-schema.sql
+      table: ${GATEWAY_AUDIT_JDBC_TABLE:gateway_audit_record}
 
   # SQL 改写 / 结果集脱敏的持有边界。
   # 默认不启用任何脱敏规则；未命中改写的消息始终立即转发，

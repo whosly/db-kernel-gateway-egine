@@ -64,6 +64,48 @@ class GatewayConfigTest {
     void spoolsMaskedStatementsAndFlushesThemOnShutdown() throws Exception {
         Path spoolDir = tempDir.resolve("audit");
         GatewayConfig config = new GatewayConfig();
+        applyAuditFields(config, spoolDir);
+
+        DatabaseTrafficObserver observer = config.databaseTrafficObserver();
+        assertThat(observer.isDeliveryMandatory()).isTrue();
+
+        observer.onEvent(event("select * from accounts where id = 4711"));
+        // Shutdown must flush what was already accepted.
+        config.destroy();
+
+        // Segments are named after the spool, first one numbered 000001.
+        List<AuditRecord> records = readRecords(spoolDir.resolve("audit.spool.000001"));
+        assertThat(records).hasSize(1);
+        String payload = new String(records.get(0).payload(), StandardCharsets.UTF_8);
+        assertThat(payload).contains("statement=select").contains("operation=COM_QUERY");
+        // Masking runs before the spool: the literal never reaches the trail.
+        assertThat(payload).doesNotContain("4711");
+    }
+
+    @Test
+    void keepsRawStatementsOnlyWhenStatementMaskingIsTurnedOffOnPurpose() throws Exception {
+        Path spoolDir = tempDir.resolve("audit-raw");
+        GatewayConfig config = new GatewayConfig();
+        applyAuditFields(config, spoolDir);
+        ReflectionTestUtils.setField(config, "auditMaskStatements", false);
+
+        DatabaseTrafficObserver observer = config.databaseTrafficObserver();
+        observer.onEvent(event("select * from accounts where id = 4711"));
+        observer.onEvent(event("insert into t values (1)"));
+        config.destroy();
+
+        String payload = new String(readRecords(spoolDir.resolve("audit.spool.000001")).get(0).payload(),
+                StandardCharsets.UTF_8);
+        // Masking is off, so the literal is kept: the deployment asked for raw statements.
+        assertThat(payload).contains("4711");
+    }
+
+    private static DatabaseTrafficEvent event(String statement) {
+        return DatabaseTrafficEvent.builder("MySQL", "session-audit", "COM_QUERY", statement).build();
+    }
+
+    /** The audit settings a deployment would provide through configuration. */
+    private static void applyAuditFields(GatewayConfig config, Path spoolDir) {
         ReflectionTestUtils.setField(config, "auditEnabled", true);
         ReflectionTestUtils.setField(config, "auditSpoolDir", spoolDir.toString());
         ReflectionTestUtils.setField(config, "auditFileName", "audit.spool");
@@ -73,25 +115,9 @@ class GatewayConfigTest {
         ReflectionTestUtils.setField(config, "auditMaxPendingRecords", 4096);
         ReflectionTestUtils.setField(config, "auditMaxEnqueueWaitMillis", 10L);
         ReflectionTestUtils.setField(config, "auditMaxSpoolBytes", 1024L * 1024);
+        ReflectionTestUtils.setField(config, "auditSegmentBytes", 64L * 1024);
         ReflectionTestUtils.setField(config, "auditGradeWrites", true);
-
-        DatabaseTrafficObserver observer = config.databaseTrafficObserver();
-        assertThat(observer.isDeliveryMandatory()).isTrue();
-
-        observer.onEvent(event("select * from accounts where id = 4711"));
-        // Shutdown must flush what was already accepted.
-        config.destroy();
-
-        List<AuditRecord> records = readRecords(spoolDir.resolve("audit.spool"));
-        assertThat(records).hasSize(1);
-        String payload = new String(records.get(0).payload(), StandardCharsets.UTF_8);
-        assertThat(payload).contains("statement=select").contains("operation=COM_QUERY");
-        // Masking runs before the spool: the literal never reaches the trail.
-        assertThat(payload).doesNotContain("4711");
-    }
-
-    private static DatabaseTrafficEvent event(String statement) {
-        return DatabaseTrafficEvent.builder("MySQL", "session-audit", "COM_QUERY", statement).build();
+        ReflectionTestUtils.setField(config, "auditMaskStatements", true);
     }
 
     private static List<AuditRecord> readRecords(Path spoolFile) throws Exception {

@@ -2,6 +2,7 @@ package com.whosly.gateway.adapter;
 
 import com.whosly.gateway.adapter.postgresql.PostgreSQLCancelKeyRegistry;
 import com.whosly.gateway.adapter.postgresql.PostgreSQLDatabaseEventExtractor;
+import com.whosly.gateway.adapter.postgresql.PostgreSQLResultSetMaskingInterceptor;
 import com.whosly.gateway.adapter.postgresql.PostgreSQLFrameCodec;
 import com.whosly.gateway.adapter.postgresql.PostgreSQLProtocolErrorMapper;
 import com.whosly.gateway.adapter.postgresql.PostgreSQLSession;
@@ -83,14 +84,24 @@ public class PostgreSQLProtocolAdapter extends AbstractProtocolAdapter {
         try {
             log.info("PostgreSQL proxy session {} connected {} to target {}:{}",
                     sessionId, clientSocket.getRemoteSocketAddress(), targetHost, targetPort);
+            PostgreSQLDatabaseEventExtractor extractor = new PostgreSQLDatabaseEventExtractor(
+                    PROTOCOL_NAME, sessionId, false, session, cancelKeyRegistry);
             DatabaseTrafficInspector trafficInspector = new DatabaseTrafficInspector(
-                    new PostgreSQLDatabaseEventExtractor(PROTOCOL_NAME, sessionId, false, session,
-                            cancelKeyRegistry)::inspect,
+                    extractor::inspect,
                     databaseTrafficObserver,
                     databaseRiskPolicy,
                     session,
                     new StatementClassifier(sqlParser));
-            MessagePipeline pipeline = MessagePipeline.of(trafficInspector);
+            /*
+             * Result-set masking shares the extractor with the observer, exactly as on the
+             * MySQL side: the RowDescription is already tracked there, and a second state
+             * machine would drift from it (rule 2.10). With no rule registered the engine
+             * is inactive and the pipeline is unchanged.
+             */
+            MessagePipeline pipeline = maskingEngine.isActive()
+                    ? MessagePipeline.of(trafficInspector,
+                            new PostgreSQLResultSetMaskingInterceptor(extractor, maskingEngine))
+                    : MessagePipeline.of(trafficInspector);
             new DuplexRelay(sessionId, pipeline, GATEWAY_ERROR_RESPONDER, rewriteLimits)
                     .relay(clientSocket, targetSocket);
         } catch (IOException e) {

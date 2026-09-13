@@ -3,6 +3,7 @@ package com.whosly.gateway.adapter.postgresql;
 import com.whosly.gateway.adapter.protocol.DatabaseTrafficEvent;
 import com.whosly.gateway.adapter.protocol.ProtocolConnectionState;
 import com.whosly.gateway.adapter.protocol.TrafficDirection;
+import com.whosly.gateway.masking.ColumnMetadata;
 import org.junit.jupiter.api.Test;
 
 import java.io.ByteArrayOutputStream;
@@ -383,9 +384,39 @@ class PostgreSQLDatabaseEventExtractorTest {
         backendExtractor.inspect(TrafficDirection.TARGET_TO_CLIENT, errorResponse, 0, errorResponse.length);
 
         assertThat(session.getLastRowDescriptionFieldCount()).isEqualTo(3);
+        // The description declared three fields but carried none: keeping the declared
+        // count is what lets the rewrite path refuse rather than guess.
+        assertThat(backendExtractor.currentResultSetColumnCount()).isEqualTo(3);
+        assertThat(backendExtractor.currentResultSetColumns()).isEmpty();
         assertThat(session.getLastCommandTag()).contains("SELECT 3");
         assertThat(session.getLastSqlState()).contains("42601");
         assertThat(session.getLastSeverity()).contains("ERROR");
+    }
+
+    @Test
+    void retainsRowDescriptionMetadataForTheRewritePath() {
+        PostgreSQLSession session = new PostgreSQLSession("pg-columns");
+        PostgreSQLDatabaseEventExtractor columnExtractor =
+                new PostgreSQLDatabaseEventExtractor("PostgreSQL", "pg-columns", true, session);
+
+        byte[] description = typedMessage('T', PostgreSQLColumnMetadata.payload(List.of(
+                new PostgreSQLColumnMetadata.Field("id", 0, PostgreSQLTypeOid.INT4.getOid(), 0),
+                new PostgreSQLColumnMetadata.Field("email", 0, PostgreSQLTypeOid.VARCHAR.getOid(), 1))));
+        columnExtractor.inspect(TrafficDirection.TARGET_TO_CLIENT, description, 0, description.length);
+
+        assertThat(columnExtractor.currentResultSetColumnCount()).isEqualTo(2);
+        assertThat(columnExtractor.currentResultSetColumns())
+                .extracting(ColumnMetadata::name)
+                .containsExactly("id", "email");
+        assertThat(columnExtractor.currentResultSetColumns())
+                .extracting(ColumnMetadata::format)
+                .containsExactly(ColumnMetadata.ValueFormat.TEXT, ColumnMetadata.ValueFormat.BINARY);
+
+        // The description stops describing anything once the command cycle ends.
+        byte[] readyForQuery = typedMessage('Z', new byte[]{'I'});
+        columnExtractor.inspect(TrafficDirection.TARGET_TO_CLIENT, readyForQuery, 0, readyForQuery.length);
+        assertThat(columnExtractor.currentResultSetColumns()).isEmpty();
+        assertThat(columnExtractor.currentResultSetColumnCount()).isZero();
     }
 
     @Test

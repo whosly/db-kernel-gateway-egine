@@ -223,8 +223,24 @@ public class DuplexRelay {
                     continue;
                 }
 
-                WireMessage message = RawBackedMessage.of(trafficDirection, window.bytes(), 0, window.completeBytes());
-                if (!dispatch(message, direction, outputStream, clientSocket)) {
+                /*
+                 * One message per inspection. The bounder reported where each message
+                 * ends, and an interceptor that must rewrite a whole message can only
+                 * reason about exactly one of them: handing it two packets at once
+                 * would make it parse values across a message boundary.
+                 */
+                boolean keepRelaying = true;
+                int start = 0;
+                for (int end : window.messageEnds()) {
+                    WireMessage message =
+                            RawBackedMessage.of(trafficDirection, window.bytes(), start, end - start);
+                    if (!dispatch(message, direction, outputStream, clientSocket)) {
+                        keepRelaying = false;
+                        break;
+                    }
+                    start = end;
+                }
+                if (!keepRelaying) {
                     break;
                 }
             }

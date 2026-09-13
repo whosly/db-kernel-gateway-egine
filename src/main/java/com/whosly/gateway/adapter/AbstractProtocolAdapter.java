@@ -7,6 +7,7 @@ import com.whosly.gateway.adapter.protocol.DatabaseTrafficObserver;
 import com.whosly.gateway.adapter.protocol.DirectBackendProvider;
 import com.whosly.gateway.adapter.protocol.ProtocolSession;
 import com.whosly.gateway.adapter.protocol.RewriteLimits;
+import com.whosly.gateway.masking.MaskingEngine;
 import com.whosly.gateway.parser.SqlParser;
 import com.whosly.gateway.service.DatabaseConnectionService;
 import org.slf4j.Logger;
@@ -60,6 +61,12 @@ public abstract class AbstractProtocolAdapter implements ProtocolAdapter {
     protected DatabaseRiskPolicy databaseRiskPolicy = DatabaseRiskPolicy.allowAll();
     /** Bounds applied when a rewrite needs a whole message; never used otherwise. */
     protected RewriteLimits rewriteLimits = RewriteLimits.defaults();
+    /**
+     * Masking rules in effect. Inactive by default, which keeps the result-set
+     * rewriting path switched off entirely: no rule registered means nothing is
+     * rewritten and no bytes are ever held (rule 2.10).
+     */
+    protected MaskingEngine maskingEngine = MaskingEngine.inactive();
     protected int port;
     protected String protocolName;
     private final Map<String, ProtocolSession> activeSessions = new ConcurrentHashMap<>();
@@ -144,6 +151,15 @@ public abstract class AbstractProtocolAdapter implements ProtocolAdapter {
 
     public RewriteLimits getRewriteLimits() {
         return rewriteLimits;
+    }
+
+    /** Masking rules to apply to result sets; an inactive engine means none. */
+    public void setMaskingEngine(MaskingEngine maskingEngine) {
+        this.maskingEngine = maskingEngine != null ? maskingEngine : MaskingEngine.inactive();
+    }
+
+    public MaskingEngine getMaskingEngine() {
+        return maskingEngine;
     }
 
     // 目标数据库配置的setter方法

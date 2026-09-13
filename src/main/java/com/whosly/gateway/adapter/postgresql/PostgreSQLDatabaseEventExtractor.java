@@ -2,6 +2,7 @@ package com.whosly.gateway.adapter.postgresql;
 
 import com.whosly.gateway.adapter.protocol.DatabaseTrafficEvent;
 import com.whosly.gateway.adapter.protocol.MessageBounder;
+import com.whosly.gateway.masking.ColumnMetadata;
 import com.whosly.gateway.adapter.protocol.ProtocolConnectionState;
 import com.whosly.gateway.adapter.protocol.TrafficDirection;
 import org.slf4j.Logger;
@@ -77,6 +78,10 @@ public class PostgreSQLDatabaseEventExtractor {
     private int cancelRequestSecretKey;
     /** Session id the observed CancelRequest targets, when the key is known. */
     private String cancelTargetSessionId;
+    /** Column metadata of the result set in flight, in column order. */
+    private final List<ColumnMetadata> currentResultSetColumns = new ArrayList<>();
+    /** Field count the current {@code RowDescription} declared. */
+    private int currentResultSetColumnCount;
     /** Count of malformed-frame anomalies; forwarding is never affected by them. */
     private final AtomicLong protocolAnomalies = new AtomicLong();
     private final AtomicBoolean protocolAnomalyLogged = new AtomicBoolean();
@@ -134,6 +139,19 @@ public class PostgreSQLDatabaseEventExtractor {
      */
     public boolean isCancelRequest() {
         return cancelRequest;
+    }
+
+    /** Column metadata of the result set in flight, in column order. */
+    public List<ColumnMetadata> currentResultSetColumns() {
+        return List.copyOf(currentResultSetColumns);
+    }
+
+    /**
+     * Field count declared by the current {@code RowDescription}; 0 when none is
+     * observed.
+     */
+    public int currentResultSetColumnCount() {
+        return currentResultSetColumnCount;
     }
 
     /**
@@ -311,6 +329,13 @@ public class PostgreSQLDatabaseEventExtractor {
         // ReadyForQuery is also the answer to a pending Sync (rule 4.7).
         session.markSyncCompleted();
         session.tryTransitionTo(ProtocolConnectionState.READY);
+        /*
+         * The command cycle is over, so the description in flight describes nothing.
+         * Keeping it would let a later row be attributed to a column of a finished
+         * result set, which is exactly the mis-attribution masking must never make.
+         */
+        currentResultSetColumns.clear();
+        currentResultSetColumnCount = 0;
     }
 
     /**
@@ -334,9 +359,21 @@ public class PostgreSQLDatabaseEventExtractor {
             return;
         }
 
+        /*
+         * The metadata is retained, not just counted: a rewrite needs to know which
+         * column is which, and this is the only message that says so. Fields that
+         * cannot be parsed are dropped, and a row whose field count no longer matches
+         * is refused rather than attributed to the wrong column (rule 8.2).
+         */
+        int fieldCount = ((message[payloadOffset] & 0xFF) << 8) | (message[payloadOffset + 1] & 0xFF);
+        List<ColumnMetadata> columns =
+                PostgreSQLColumnMetadata.parse(message, payloadOffset, payloadLength);
+        currentResultSetColumns.clear();
+        currentResultSetColumns.addAll(columns);
+        currentResultSetColumnCount = fieldCount;
+
         // A RowDescription also marks the start of a new result set.
         session.beginResultSet();
-        int fieldCount = ((message[payloadOffset] & 0xFF) << 8) | (message[payloadOffset + 1] & 0xFF);
         session.setLastRowDescriptionFieldCount(fieldCount);
     }
 

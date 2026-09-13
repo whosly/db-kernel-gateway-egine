@@ -2,6 +2,7 @@ package com.whosly.gateway.adapter;
 
 import com.whosly.gateway.adapter.mysql.MySQLDatabaseEventExtractor;
 import com.whosly.gateway.adapter.mysql.MySQLFrameCodec;
+import com.whosly.gateway.adapter.mysql.MySQLResultSetMaskingInterceptor;
 import com.whosly.gateway.adapter.mysql.MySQLSession;
 import com.whosly.gateway.adapter.mysql.MySqlGatewayErrorMapper;
 import com.whosly.gateway.adapter.protocol.BackendProvider;
@@ -73,13 +74,25 @@ public class MySqlProtocolAdapter extends AbstractProtocolAdapter {
         try {
             log.info("MySQL proxy session {} connected {} to target {}:{}",
                     sessionId, clientSocket.getRemoteSocketAddress(), targetHost, targetPort);
+            MySQLDatabaseEventExtractor extractor =
+                    new MySQLDatabaseEventExtractor(PROTOCOL_NAME, sessionId, false, session);
             DatabaseTrafficInspector trafficInspector = new DatabaseTrafficInspector(
-                    new MySQLDatabaseEventExtractor(PROTOCOL_NAME, sessionId, false, session)::inspect,
+                    extractor::inspect,
                     databaseTrafficObserver,
                     databaseRiskPolicy,
                     session,
                     new StatementClassifier(sqlParser));
-            MessagePipeline pipeline = MessagePipeline.of(trafficInspector);
+            /*
+             * Result-set masking shares the extractor with the observer: the column
+             * metadata and the result-set phase are already tracked there, and a second
+             * state machine would inevitably drift from it (rule 2.10). With no rule
+             * registered the engine is inactive and the pipeline is what it always was,
+             * so the rewriting path costs nothing until a deployment asks for it.
+             */
+            MessagePipeline pipeline = maskingEngine.isActive()
+                    ? MessagePipeline.of(trafficInspector,
+                            new MySQLResultSetMaskingInterceptor(extractor, maskingEngine))
+                    : MessagePipeline.of(trafficInspector);
             new DuplexRelay(sessionId, pipeline, GATEWAY_ERROR_RESPONDER, rewriteLimits)
                     .relay(clientSocket, targetSocket);
         } catch (IOException e) {

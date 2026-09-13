@@ -461,6 +461,68 @@ class MySQLDatabaseEventExtractorTest {
         assertThat(bounder.completeMessageEnds(packet, 0, packet.length)).isNull();
     }
 
+    @Test
+    void capturesResultSetColumnMetadataForTheMaskingPath() {
+        MySQLSession session = new MySQLSession("mysql-columns");
+        MySQLDatabaseEventExtractor columnsExtractor =
+                new MySQLDatabaseEventExtractor("MySQL", "mysql-columns", true, session);
+
+        byte[] query = packet(0, MySQLCommandType.COM_QUERY.getCode(), "select id, email from accounts");
+        columnsExtractor.inspect(TrafficDirection.CLIENT_TO_TARGET, query, 0, query.length);
+        inspectTarget(columnsExtractor, 1, new byte[]{0x02});
+        inspectTarget(columnsExtractor, 2, columnDefinitionPayload("id", 0x08, 255));
+        inspectTarget(columnsExtractor, 3, columnDefinitionPayload("email", 0x0F, 255));
+        inspectTarget(columnsExtractor, 4, new byte[]{(byte) 0xFE, 0x00, 0x00, 0x02, 0x00});
+        inspectTarget(columnsExtractor, 5, new byte[]{0x01, '1', 0x03, 'a', 'b', 'c'});
+
+        assertThat(columnsExtractor.currentResultSetColumnCount()).isEqualTo(2);
+        // A COM_QUERY result set carries text values; the masking path relies on it.
+        assertThat(columnsExtractor.pendingCommand()).contains(MySQLCommandType.COM_QUERY);
+        assertThat(columnsExtractor.currentResultSetColumns())
+                .extracting(com.whosly.gateway.masking.ColumnMetadata::format)
+                .containsOnly(com.whosly.gateway.masking.ColumnMetadata.ValueFormat.TEXT);
+        assertThat(columnsExtractor.currentResultSetColumns())
+                .extracting(com.whosly.gateway.masking.ColumnMetadata::name,
+                        com.whosly.gateway.masking.ColumnMetadata::category)
+                .containsExactly(
+                        org.assertj.core.groups.Tuple.tuple(
+                                "id", com.whosly.gateway.masking.ColumnMetadata.Category.NUMERIC),
+                        org.assertj.core.groups.Tuple.tuple(
+                                "email", com.whosly.gateway.masking.ColumnMetadata.Category.TEXT));
+        // The row packet is what a row masker would rewrite.
+        assertThat(columnsExtractor.lastResponsePacketWasResultSetRow()).isTrue();
+
+        // Ending the response drops the metadata, so no later result set sees stale columns.
+        inspectTarget(columnsExtractor, 6, new byte[]{(byte) 0xFE, 0x00, 0x00, 0x02, 0x00});
+        assertThat(columnsExtractor.currentResultSetColumns()).isEmpty();
+        assertThat(columnsExtractor.lastResponsePacketWasResultSetRow()).isFalse();
+    }
+
+    private static byte[] columnDefinitionPayload(String name, int type, int collation) {
+        ByteArrayOutputStream payload = new ByteArrayOutputStream();
+        writeLengthEncodedString(payload, "def");
+        writeLengthEncodedString(payload, "shop");
+        writeLengthEncodedString(payload, "accounts");
+        writeLengthEncodedString(payload, "accounts");
+        writeLengthEncodedString(payload, name);
+        writeLengthEncodedString(payload, name);
+        payload.write(0x0C);
+        payload.write(collation & 0xFF);
+        payload.write((collation >> 8) & 0xFF);
+        payload.writeBytes(new byte[]{0x00, 0x00, 0x00, 0x00});
+        payload.write(type);
+        payload.writeBytes(new byte[]{0x00, 0x00});
+        payload.write(0x00);
+        payload.writeBytes(new byte[]{0x00, 0x00});
+        return payload.toByteArray();
+    }
+
+    private static void writeLengthEncodedString(ByteArrayOutputStream payload, String value) {
+        byte[] bytes = value.getBytes(StandardCharsets.US_ASCII);
+        payload.write(bytes.length);
+        payload.writeBytes(bytes);
+    }
+
     private static byte[] handshakeResponse(long capabilities, String username, byte[] authResponse,
                                             String database, String authPlugin) {
         ByteArrayOutputStream payload = new ByteArrayOutputStream();
