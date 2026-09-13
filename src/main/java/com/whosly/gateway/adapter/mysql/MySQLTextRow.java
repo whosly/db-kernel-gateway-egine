@@ -113,6 +113,37 @@ public final class MySQLTextRow {
         };
     }
 
+    /**
+     * Reads a length-encoded integer at {@code cursor}.
+     *
+     * <p>Returns both the value and how many bytes its prefix occupies, which is what a
+     * binary row needs to skip a length-encoded value.</p>
+     *
+     * @return the prefix size and value, or empty when the bytes are not a valid prefix
+     */
+    static Optional<LengthPrefix> readLengthEncodedLength(byte[] payload, int cursor, int end) {
+        if (payload == null || cursor < 0 || cursor >= end) {
+            return Optional.empty();
+        }
+        int prefix = payload[cursor] & 0xFF;
+        int headerLength = lengthFieldSize(prefix);
+        if (headerLength < 0 || cursor + headerLength > end) {
+            return Optional.empty();
+        }
+        if (prefix < NULL_MARKER) {
+            return Optional.of(new LengthPrefix(prefix, 1));
+        }
+        long length = 0;
+        for (int index = headerLength - 1; index >= 1; index--) {
+            length = (length << 8) | (payload[cursor + index] & 0xFF);
+        }
+        return Optional.of(new LengthPrefix(length, headerLength));
+    }
+
+    /** A length-encoded integer as it appears on the wire. */
+    record LengthPrefix(long value, int length) {
+    }
+
     private static long readLength(byte[] payload, int cursor, int prefix, int end) {
         int headerLength = lengthFieldSize(prefix);
         if (headerLength < 0 || cursor + headerLength > end) {
@@ -128,7 +159,13 @@ public final class MySQLTextRow {
         return length;
     }
 
-    private static void writeLength(ByteArrayOutputStream payload, int length) {
+    /**
+     * Writes a length-encoded integer.
+     *
+     * <p>Package-private because the binary row's string family uses the same prefix
+     * scheme: one implementation of the encoding, not two that can drift.</p>
+     */
+    static void writeLength(ByteArrayOutputStream payload, int length) {
         if (length < SINGLE_BYTE_LIMIT) {
             payload.write(length);
         } else if (length <= TWO_BYTE_LIMIT) {

@@ -4,6 +4,7 @@ import com.whosly.gateway.adapter.protocol.DatabaseRiskPolicy;
 import com.whosly.gateway.adapter.protocol.DatabaseTrafficInspector;
 import com.whosly.gateway.adapter.protocol.DatabaseTrafficObserver;
 import com.whosly.gateway.adapter.protocol.DuplexRelay;
+import com.whosly.gateway.adapter.protocol.LoopbackSockets;
 import com.whosly.gateway.adapter.protocol.MessagePipeline;
 import com.whosly.gateway.adapter.protocol.ProtocolErrorResponder;
 import com.whosly.gateway.adapter.protocol.RewriteLimits;
@@ -15,9 +16,11 @@ import com.whosly.gateway.parser.DruidSqlParser;
 import com.whosly.gateway.parser.StatementClassifier;
 import org.junit.jupiter.api.Test;
 
+import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -41,13 +44,14 @@ import static org.assertj.core.api.Assertions.assertThat;
 class MySQLResultSetMaskingRelayTest {
 
     private static final int HEADER_LENGTH = MySQLFrameCodec.HEADER_LENGTH;
-    private static final int INT4_TYPE = 0x08;
+    /** MySQL type codes: {@code LONG} is a four-byte integer, two bytes narrower than {@code LONGLONG}. */
+    private static final int INT4_TYPE = 0x03;
     private static final int VARCHAR_TYPE = 0x0F;
 
     @Test
     void masksARowAcrossTheRelayAndLeavesTheOtherColumnIntact() throws Exception {
-        try (MySQLTestFrames.SocketPair client = MySQLTestFrames.SocketPair.open();
-             MySQLTestFrames.SocketPair database = MySQLTestFrames.SocketPair.open()) {
+        try (LoopbackSockets.Pair client = LoopbackSockets.open();
+             LoopbackSockets.Pair database = LoopbackSockets.open()) {
             ExecutorService executor = Executors.newSingleThreadExecutor();
             try {
                 Future<?> relayFuture = startRelay(executor, client, database);
@@ -92,8 +96,8 @@ class MySQLResultSetMaskingRelayTest {
 
     @Test
     void masksEveryRowWhenSeveralArriveInOneRead() throws Exception {
-        try (MySQLTestFrames.SocketPair client = MySQLTestFrames.SocketPair.open();
-             MySQLTestFrames.SocketPair database = MySQLTestFrames.SocketPair.open()) {
+        try (LoopbackSockets.Pair client = LoopbackSockets.open();
+             LoopbackSockets.Pair database = LoopbackSockets.open()) {
             ExecutorService executor = Executors.newSingleThreadExecutor();
             try {
                 Future<?> relayFuture = startRelay(executor, client, database);
@@ -137,8 +141,8 @@ class MySQLResultSetMaskingRelayTest {
 
     @Test
     void refusesAResultSetItCannotMaskInsteadOfForwardingIt() throws Exception {
-        try (MySQLTestFrames.SocketPair client = MySQLTestFrames.SocketPair.open();
-             MySQLTestFrames.SocketPair database = MySQLTestFrames.SocketPair.open()) {
+        try (LoopbackSockets.Pair client = LoopbackSockets.open();
+             LoopbackSockets.Pair database = LoopbackSockets.open()) {
             ExecutorService executor = Executors.newSingleThreadExecutor();
             try {
                 Future<?> relayFuture = startRelay(executor, client, database);
@@ -178,8 +182,82 @@ class MySQLResultSetMaskingRelayTest {
         }
     }
 
-    private static Future<?> startRelay(ExecutorService executor, MySQLTestFrames.SocketPair client,
-                                        MySQLTestFrames.SocketPair database) {
+    @Test
+    void masksARowOfAPreparedStatementAcrossTheRelay() throws Exception {
+        try (LoopbackSockets.Pair client = LoopbackSockets.open();
+             LoopbackSockets.Pair database = LoopbackSockets.open()) {
+            ExecutorService executor = Executors.newSingleThreadExecutor();
+            try {
+                Future<?> relayFuture = startRelay(executor, client, database);
+                byte[] execute = MySQLTestFrames.commandPacket(MySQLCommandType.COM_STMT_EXECUTE);
+                client.clientSide().getOutputStream().write(execute);
+                client.clientSide().getOutputStream().flush();
+                MySQLTestFrames.readExact(database.clientSide().getInputStream(), execute.length);
+
+                OutputStream toRelay = database.clientSide().getOutputStream();
+                toRelay.write(MySQLTestFrames.packet(new byte[]{0x02}, 1));
+                toRelay.write(MySQLTestFrames.packet(
+                        MySQLTestFrames.columnPayload("id", INT4_TYPE, MySQLTestFrames.UTF8_COLLATION), 2));
+                toRelay.write(MySQLTestFrames.packet(
+                        MySQLTestFrames.columnPayload("email", VARCHAR_TYPE, MySQLTestFrames.UTF8_COLLATION), 3));
+                toRelay.write(MySQLTestFrames.columnDefinitionsTerminator(4));
+                /*
+                 * A prepared statement's row: 0x00, the null bitmap (one byte for two
+                 * columns), then each value in its own binary layout — a little-endian int
+                 * and a length-encoded string.
+                 */
+                byte[] row = binaryRowPacket(5);
+                toRelay.write(row);
+                toRelay.flush();
+
+                InputStream fromRelay = client.clientSide().getInputStream();
+                for (int sequenceId = 1; sequenceId <= 4; sequenceId++) {
+                    MySQLTestFrames.readPacket(fromRelay);
+                }
+
+                byte[] masked = MySQLTestFrames.readPacket(fromRelay);
+                assertThat(masked[3] & 0xFF).isEqualTo(5);
+                assertThat(masked[4] & 0xFF).isZero();
+                // Column 1's bit is bit 3, because the bitmap starts two bits in.
+                assertThat(masked[5] & 0xFF).isEqualTo(0x08);
+                // The int column keeps its bytes, and the masked string is gone entirely:
+                // in a binary row NULL is a bit, not a value, so the row really shrank.
+                assertThat(Arrays.copyOfRange(masked, 6, 10)).isEqualTo(littleEndian(7, 4));
+                assertThat(masked.length).isEqualTo(row.length - LENGTH_ENCODED_EMAIL_LENGTH);
+                assertThat(MySQLFrameCodec.payloadLength(masked, 0, masked.length))
+                        .isEqualTo(masked.length - HEADER_LENGTH);
+
+                endSession(client, database, relayFuture);
+            } finally {
+                executor.shutdownNow();
+            }
+        }
+    }
+
+    /** {@code "alice@example.com"} plus its one-byte length prefix. */
+    private static final int LENGTH_ENCODED_EMAIL_LENGTH = 1 + "alice@example.com".length();
+
+    private static byte[] binaryRowPacket(int sequenceId) {
+        ByteArrayOutputStream payload = new ByteArrayOutputStream();
+        payload.write(0x00);                                    // a value row
+        payload.write(0x00);                                    // null bitmap: no NULLs yet
+        payload.writeBytes(littleEndian(7, 4));
+        byte[] email = "alice@example.com".getBytes(StandardCharsets.US_ASCII);
+        payload.write(email.length);
+        payload.writeBytes(email);
+        return MySQLTestFrames.packet(payload.toByteArray(), sequenceId);
+    }
+
+    private static byte[] littleEndian(long value, int width) {
+        byte[] bytes = new byte[width];
+        for (int index = 0; index < width; index++) {
+            bytes[index] = (byte) ((value >> (8 * index)) & 0xFF);
+        }
+        return bytes;
+    }
+
+    private static Future<?> startRelay(ExecutorService executor, LoopbackSockets.Pair client,
+                                        LoopbackSockets.Pair database) {
         String sessionId = "mysql-mask-relay";
         MySQLSession session = new MySQLSession(sessionId);
         MySQLDatabaseEventExtractor extractor =
@@ -207,7 +285,7 @@ class MySQLResultSetMaskingRelayTest {
         });
     }
 
-    private static void endSession(MySQLTestFrames.SocketPair client, MySQLTestFrames.SocketPair database,
+    private static void endSession(LoopbackSockets.Pair client, LoopbackSockets.Pair database,
                                    Future<?> relayFuture) throws Exception {
         client.clientSide().close();
         database.clientSide().close();

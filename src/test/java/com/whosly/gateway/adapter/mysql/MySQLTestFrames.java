@@ -1,10 +1,9 @@
 package com.whosly.gateway.adapter.mysql;
 
+import com.whosly.gateway.adapter.protocol.LoopbackSockets;
+
 import java.io.ByteArrayOutputStream;
 import java.io.InputStream;
-import java.net.InetAddress;
-import java.net.ServerSocket;
-import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
@@ -93,36 +92,7 @@ public final class MySQLTestFrames {
     }
 
     public static byte[] readExact(InputStream inputStream, int length) throws Exception {
-        byte[] bytes = new byte[length];
-        int offset = 0;
-        while (offset < length) {
-            int count = inputStream.read(bytes, offset, length - offset);
-            if (count < 0) {
-                throw new AssertionError("Unexpected end of stream");
-            }
-            offset += count;
-        }
-        return bytes;
-    }
-
-    /**
-     * A pair of sockets connected to each other, standing in for a client and the
-     * database behind the relay.
-     */
-    public record SocketPair(Socket clientSide, Socket serverSide) implements AutoCloseable {
-
-        public static SocketPair open() throws Exception {
-            try (ServerSocket serverSocket = new ServerSocket(0, 1, InetAddress.getLoopbackAddress())) {
-                Socket client = new Socket(InetAddress.getLoopbackAddress(), serverSocket.getLocalPort());
-                Socket server = serverSocket.accept();
-                return new SocketPair(client, server);
-            }
-        }
-
-        @Override
-        public void close() throws Exception {
-            clientSide.close();
-            serverSide.close();
-        }
+        // One implementation of "read exactly this many bytes" for the whole test tree.
+        return LoopbackSockets.readExact(inputStream, length);
     }
 }

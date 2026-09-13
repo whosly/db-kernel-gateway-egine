@@ -117,19 +117,63 @@ class MySQLResultSetMaskingInterceptorTest {
     }
 
     @Test
-    void refusesAColumnWhoseValuesAreNotText() {
+    void nullsAColumnOfAPreparedStatementRow() {
         MySQLDatabaseEventExtractor extractor = commandPhaseExtractor();
         MySQLResultSetMaskingInterceptor interceptor = interceptor(extractor,
-                new NullingRule("null-email", 10, ColumnSelector.named("email")));
-        // A prepared-statement execution carries binary values in the same shape.
-        feedResultSet(extractor, MySQLCommandType.COM_STMT_EXECUTE, column("email", 0x0F));
+                new NullingRule("null-id", 10, ColumnSelector.named("id")));
+        feedResultSet(extractor, MySQLCommandType.COM_STMT_EXECUTE, column("id", 0x03), column("email", 0x0F));
 
-        byte[] row = FRAME_CODEC.packet(rowPayload("alice@example.com"), 4);
+        byte[] row = binaryRow(extractor, littleEndian(7, 4), lengthEncoded("alice@example.com"));
         observeTarget(extractor, row);
 
         TrafficDecision decision = interceptor.intercept(
                 RawBackedMessage.of(TrafficDirection.TARGET_TO_CLIENT, row, 0, row.length));
 
+        assertThat(decision.action()).isEqualTo(TrafficAction.FORWARD);
+        assertThat(binaryValues(extractor, decision).get(0)).isNull();
+        // The column behind it keeps its exact bytes, and the row really shrank by the
+        // four bytes the int value occupied.
+        assertThat(binaryValues(extractor, decision).get(1)).isEqualTo(lengthEncoded("alice@example.com"));
+        assertThat(decision.message().outputLength()).isEqualTo(row.length - 4);
+        // The packet's own length field must agree with what was written.
+        assertThat(MySQLFrameCodec.payloadLength(decision.message().outputBytes(), 0,
+                decision.message().outputLength())).isEqualTo(decision.message().outputLength() - HEADER_LENGTH);
+    }
+
+    @Test
+    void masksABinaryTextValueWithTheMasksLengthPrefixedBytes() {
+        MySQLDatabaseEventExtractor extractor = commandPhaseExtractor();
+        MySQLResultSetMaskingInterceptor interceptor = interceptor(extractor,
+                new FixedValueRule("fixed", 10, ColumnSelector.named("email"), "***"));
+        feedResultSet(extractor, MySQLCommandType.COM_STMT_EXECUTE, column("email", 0x0F));
+
+        byte[] row = binaryRow(extractor, lengthEncoded("alice@example.com"));
+        observeTarget(extractor, row);
+
+        TrafficDecision decision = interceptor.intercept(
+                RawBackedMessage.of(TrafficDirection.TARGET_TO_CLIENT, row, 0, row.length));
+
+        assertThat(decision.action()).isEqualTo(TrafficAction.FORWARD);
+        // A varchar's binary value is a length-encoded string, so the mask is written the
+        // same way — no text marker, no trailing NUL.
+        assertThat(binaryValues(extractor, decision).get(0)).isEqualTo(lengthEncoded("***"));
+    }
+
+    @Test
+    void refusesAPreparedStatementRowWhoseColumnLayoutIsUnknown() {
+        MySQLDatabaseEventExtractor extractor = commandPhaseExtractor();
+        MySQLResultSetMaskingInterceptor interceptor = interceptor(extractor,
+                new NullingRule("null-flags", 10, ColumnSelector.named("flags")));
+        feedResultSet(extractor, MySQLCommandType.COM_STMT_EXECUTE, column("flags", 0x10));
+
+        byte[] row = binaryRow(extractor, littleEndian(1, 1));
+        observeTarget(extractor, row);
+
+        TrafficDecision decision = interceptor.intercept(
+                RawBackedMessage.of(TrafficDirection.TARGET_TO_CLIENT, row, 0, row.length));
+
+        // A BIT value's width is not reproduced, so where it ends is unknown: the row is
+        // refused rather than parsed with a guess that would shift every value behind it.
         assertThat(decision.action()).isEqualTo(TrafficAction.DENY);
     }
 
@@ -248,6 +292,36 @@ class MySQLResultSetMaskingInterceptorTest {
         }
         byte[] terminator = FRAME_CODEC.packet(new byte[]{(byte) 0xFE, 0x00, 0x00, 0x02, 0x00}, sequence);
         extractor.inspect(TrafficDirection.TARGET_TO_CLIENT, terminator, 0, terminator.length);
+    }
+
+    /** A prepared-statement row, built from the columns the extractor observed. */
+    private static byte[] binaryRow(MySQLDatabaseEventExtractor extractor, byte[]... values) {
+        return FRAME_CODEC.packet(
+                MySQLBinaryRow.encode(extractor.currentResultSetColumns(), List.of(values)), 5);
+    }
+
+    /** The values of the row a decision carries, read back as a binary row. */
+    private static List<byte[]> binaryValues(MySQLDatabaseEventExtractor extractor,
+                                             TrafficDecision decision) {
+        return MySQLBinaryRow.parse(decision.message().outputBytes(), HEADER_LENGTH,
+                decision.message().outputLength() - HEADER_LENGTH,
+                extractor.currentResultSetColumns()).orElseThrow();
+    }
+
+    private static byte[] littleEndian(long value, int width) {
+        byte[] bytes = new byte[width];
+        for (int index = 0; index < width; index++) {
+            bytes[index] = (byte) ((value >> (8 * index)) & 0xFF);
+        }
+        return bytes;
+    }
+
+    private static byte[] lengthEncoded(String value) {
+        byte[] bytes = value.getBytes(StandardCharsets.US_ASCII);
+        byte[] encoded = new byte[bytes.length + 1];
+        encoded[0] = (byte) bytes.length;
+        System.arraycopy(bytes, 0, encoded, 1, bytes.length);
+        return encoded;
     }
 
     /** The observer drives the extractor before the rewrite phase sees the message. */

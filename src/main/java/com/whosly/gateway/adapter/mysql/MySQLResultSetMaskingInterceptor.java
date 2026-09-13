@@ -21,7 +21,8 @@ import java.util.Objects;
 import java.util.Optional;
 
 /**
- * Applies masking rules to the rows of a MySQL text-protocol result set.
+ * Applies masking rules to the rows of a MySQL result set, text protocol and binary
+ * protocol alike.
  *
  * <p>This is the interceptor that finally makes {@code MaskingRule} beans take
  * effect on the data path. It rewrites only result-set rows of the direction that
@@ -34,8 +35,12 @@ import java.util.Optional;
  * <ul>
  *   <li>a result set whose column definitions could not all be parsed is refused,
  *       because a value could not be attributed to the column a rule claims;</li>
- *   <li>a column a rule matches but whose values are not text is refused, because
- *       this interceptor can only re-encode text values;</li>
+ *   <li>a non-null masked value for a column whose binary layout is not reproduced —
+ *       packed decimals, temporal types and anything unknown — is refused; a NULL mask
+ *       works for every type, because it is written through the row's null bitmap;</li>
+ *   <li>a binary row is parsed only when its column layouts are known and it consumes
+ *       its payload exactly: a wrong width would not fail loudly, it would shift every
+ *       following value into the wrong column;</li>
  *   <li>a row whose value count disagrees with the header is refused, because the
  *       values would be attributed to the wrong columns;</li>
  *   <li>a row that grows past the packet limit is refused, because the gateway must
@@ -104,6 +109,16 @@ public final class MySQLResultSetMaskingInterceptor implements MessageIntercepto
                     + " of " + extractor.currentResultSetColumnCount() + ")");
         }
 
+        /*
+         * A MySQL result set has one wire format for all of its columns: it is decided by
+         * the command, not by the column. A set that mixes the two cannot be interpreted
+         * column by column, so it is refused rather than parsed by halves.
+         */
+        boolean binaryRow = columns.get(0).format() == ColumnMetadata.ValueFormat.BINARY;
+        if (columns.stream().anyMatch(column -> column.format() != columns.get(0).format())) {
+            return refuse(message, "result set mixes text and binary column formats");
+        }
+
         try {
             List<MaskingRule> rules = rulesFor(columns);
             if (rules.stream().allMatch(Objects::isNull)) {
@@ -126,10 +141,11 @@ public final class MySQLResultSetMaskingInterceptor implements MessageIntercepto
                 return refuse(message, "message does not contain exactly one MySQL packet");
             }
 
-            Optional<List<byte[]>> parsed = MySQLTextRow.parse(
-                    message.originalBytes(), payloadOffset, payloadLength);
+            Optional<List<byte[]>> parsed = binaryRow
+                    ? MySQLBinaryRow.parse(message.originalBytes(), payloadOffset, payloadLength, columns)
+                    : MySQLTextRow.parse(message.originalBytes(), payloadOffset, payloadLength);
             if (parsed.isEmpty()) {
-                return refuse(message, "row payload is not a valid text-protocol row");
+                return refuse(message, "row payload could not be parsed for this result set's column types");
             }
             List<byte[]> values = parsed.get();
             if (values.size() != columns.size()) {
@@ -137,11 +153,11 @@ public final class MySQLResultSetMaskingInterceptor implements MessageIntercepto
                         + " column(s)");
             }
 
-            List<byte[]> masked = mask(values, columns, rules);
+            List<byte[]> masked = mask(values, columns, rules, binaryRow);
             if (masked == null) {
                 return TrafficDecision.forward(message);
             }
-            return TrafficDecision.forward(message.withReplacement(reEncode(message, masked)));
+            return TrafficDecision.forward(message.withReplacement(reEncode(message, masked, columns, binaryRow)));
         } catch (MaskingException e) {
             /*
              * Every masking refusal has the same answer: do not return data the
@@ -156,7 +172,8 @@ public final class MySQLResultSetMaskingInterceptor implements MessageIntercepto
      *
      * @return the new values, or {@code null} when masking changed nothing
      */
-    private List<byte[]> mask(List<byte[]> values, List<ColumnMetadata> columns, List<MaskingRule> rules) {
+    private List<byte[]> mask(List<byte[]> values, List<ColumnMetadata> columns, List<MaskingRule> rules,
+                              boolean binaryRow) {
         List<byte[]> masked = null;
         for (int index = 0; index < columns.size(); index++) {
             MaskingRule rule = rules.get(index);
@@ -172,13 +189,27 @@ public final class MySQLResultSetMaskingInterceptor implements MessageIntercepto
             if (masked == null) {
                 masked = new ArrayList<>(values);
             }
-            masked.set(index, replacement.isNull() ? null : replacement.bytes());
+            /*
+             * NULL is written through the protocol's own NULL representation — the row's
+             * null bitmap for a binary row, a marker byte for a text row — so it works for
+             * every column type. A non-null value must be encoded for its column, and a
+             * type whose binary layout is not reproduced is refused instead of filled with
+             * bytes the client would fail to parse.
+             */
+            masked.set(index, replacement.isNull()
+                    ? null
+                    : encodeValue(binaryRow, columns.get(index), replacement));
         }
         return masked;
     }
 
-    private byte[] reEncode(WireMessage message, List<byte[]> values) {
-        byte[] payload = MySQLTextRow.encode(values);
+    private static byte[] encodeValue(boolean binaryRow, ColumnMetadata column, MaskedValue replacement) {
+        return binaryRow ? MySQLBinaryValues.encode(column, replacement) : replacement.bytes();
+    }
+
+    private byte[] reEncode(WireMessage message, List<byte[]> values, List<ColumnMetadata> columns,
+                            boolean binaryRow) {
+        byte[] payload = binaryRow ? MySQLBinaryRow.encode(columns, values) : MySQLTextRow.encode(values);
         if (payload.length > MySQLFrameCodec.MAX_PAYLOAD_LENGTH) {
             throw new MaskingException("Masked row no longer fits one MySQL packet: " + payload.length
                     + " bytes");
@@ -208,25 +239,15 @@ public final class MySQLResultSetMaskingInterceptor implements MessageIntercepto
         return resolvedRules;
     }
 
+    /**
+     * Rule that claims a column, or {@code null} when none does.
+     *
+     * <p>Deliberately not filtered by the wire format: NULL is representable for every
+     * type — through the row's null bitmap in a binary row — so whether a mask can be
+     * applied is decided per value, when the replacement is known.</p>
+     */
     private MaskingRule engineRule(ColumnMetadata column) {
-        MaskingRule rule = engine.ruleFor(column).orElse(null);
-        if (rule == null) {
-            return null;
-        }
-        /*
-         * A binary row (the result of an executed prepared statement) is encoded per
-         * column type behind a null bitmap, and rewriting any value in it means
-         * reproducing that type's binary layout. Until that codec exists, the whole
-         * result set is refused instead of returning a claimed column unmasked.
-         * PostgreSQL binary results are supported, because there a row is a flat list of
-         * length-prefixed values and only the value encoding differs.
-         */
-        if (column.format() != ColumnMetadata.ValueFormat.TEXT) {
-            throw new MaskingException("Column " + column.name()
-                    + " is matched by rule " + rule.name()
-                    + " but binary rows of prepared statements are not supported yet");
-        }
-        return rule;
+        return engine.ruleFor(column).orElse(null);
     }
 
     private static MaskedValue toValue(byte[] value) {

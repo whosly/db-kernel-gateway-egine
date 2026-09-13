@@ -4,6 +4,7 @@ import com.whosly.gateway.adapter.mysql.MySQLCommandType;
 import com.whosly.gateway.adapter.mysql.MySQLFrameCodec;
 import com.whosly.gateway.adapter.mysql.MySQLTestFrames;
 import com.whosly.gateway.adapter.mysql.MySQLTextRow;
+import com.whosly.gateway.adapter.protocol.LoopbackSockets;
 import com.whosly.gateway.masking.ColumnSelector;
 import com.whosly.gateway.masking.MaskingEngine;
 import com.whosly.gateway.masking.MaskingRuleRegistry;
@@ -70,7 +71,7 @@ class MySqlProtocolAdapterMaskingTest {
      */
     private static byte[] runSession(MaskingEngine engine) throws Exception {
         try (ServerSocket targetServer = new ServerSocket(0, 1, InetAddress.getLoopbackAddress());
-             MySQLTestFrames.SocketPair client = MySQLTestFrames.SocketPair.open()) {
+             LoopbackSockets.Pair client = LoopbackSockets.open()) {
             ExecutorService executor = Executors.newFixedThreadPool(2);
             MySqlProtocolAdapter adapter = new MySqlProtocolAdapter();
             adapter.setTargetHost(InetAddress.getLoopbackAddress().getHostAddress());
