@@ -22,12 +22,6 @@ import java.io.IOException;
 import java.net.Socket;
 import java.util.UUID;
 
-/**
- * MySQL transparent protocol proxy adapter.
- *
- * @author yueny09@163.com codealy
- * @since 2026-07-02
- */
 public class MySqlProtocolAdapter extends AbstractProtocolAdapter {
 
     private static final Logger log = LoggerFactory.getLogger(MySqlProtocolAdapter.class);
@@ -78,7 +72,7 @@ public class MySqlProtocolAdapter extends AbstractProtocolAdapter {
                     databaseRiskPolicy,
                     session,
                     new StatementClassifier(sqlParser),
-                    extractor::isOpaqueTunnel,
+                    null,
                     isRequireCleartextInspection(),
                     getRuntimeMetrics());
             MessagePipeline pipeline = maskingEngine.isActive()
