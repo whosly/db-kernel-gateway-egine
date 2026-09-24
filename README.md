@@ -60,7 +60,7 @@
 | 连接上限 / CIDR / idle | **已实现** | `max-connections`、`allowed-client-cidrs`、`idle-timeout-seconds` |
 | 后端 failover 列表 | **部分** | `backend-endpoints` **仅顺序 failover**；无按库/用户/权重路由 |
 | PG Cancel | **部分** | `CancelRequest` 与 `BackendKeyData` **仅关联索引**；**不代发** cancel；MySQL `COM_PROCESS_KILL` 透传 |
-| 风控策略 | **部分** | 接口就绪，默认 `DatabaseRiskPolicy.allowAll()`；**无内置规则配置** |
+| 风控策略 | **部分** | `DenyListDatabaseRiskPolicy` 可配置拒绝清单；空配置默认 `allowAll()` |
 | TLS / 压缩 | **部分** | 接受后变 opaque tunnel；可选 `require-cleartext-inspection` 拒绝；**未做 TLS 终止 / 产品化** |
 | NIO 事件驱动 | **未实现** | 阻塞 socket + 每连接线程（可选虚拟线程） |
 | 连接池化 | **未实现** | `SessionSnapshot` / 脏度已预留 |
@@ -88,13 +88,11 @@
 
 | 文件 | 用途 |
 |---|---|
-| `src/main/resources/application.yml` | 通用默认（**注意扁平键漂移，见下**） |
+| `src/main/resources/application.yml` | 通用默认（嵌套 `gateway.target.*`，与 `GatewayConfig` 对齐） |
 | `src/main/resources/application-dev.yml` | 本地开发（已 gitignore） |
 | `application-mysql-template.yml` / `application-postgresql-template.yml` | 推荐复制为 `application-dev.yml` 的模板 |
 
-**以 `GatewayConfig` 的 `@Value` 为准**：请使用嵌套键 `gateway.target.*`（与模板一致）。
-
-> **P0-2 警告**：默认 `application.yml` 里仍存在扁平别名（如 `target-host`、`idle-timeout-millis`），**不会**绑定到当前 `GatewayConfig`。直接改默认 yml 或混用扁平键会导致「配了但不生效」。请始终用模板中的嵌套键，或只改 `application-dev.yml`。详见 [`docs/STATUS_AND_GAPS.md`](docs/STATUS_AND_GAPS.md) §3。
+**以 `GatewayConfig` 的 `@Value` 为准**：默认 `application.yml` 与模板均使用嵌套键 `gateway.target.*` 和 `gateway.idle-timeout-seconds`（P0-2 已对齐）。本地开发仍建议复制模板为 `application-dev.yml`。详见 [`docs/STATUS_AND_GAPS.md`](docs/STATUS_AND_GAPS.md) §3。
 
 | 键 | 含义 |
 |---|---|
@@ -110,6 +108,8 @@
 | `gateway.require-cleartext-inspection` | 拒绝 TLS opaque（未设时随审计开关） |
 | `gateway.rewrite.max-message-bytes` / `max-hold-millis` | 改写持有上界 |
 | `gateway.audit.*` | 见 [审计与脱敏](#审计与脱敏) |
+| `gateway.risk.denied-operations` | 逗号分隔协议操作名拒绝清单（空=allow-all） |
+| `gateway.risk.denied-statement-keywords` | 逗号分隔语句关键字子串拒绝清单（空=allow-all） |
 
 ## 快速开始 · MySQL
 

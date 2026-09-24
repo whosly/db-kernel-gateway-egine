@@ -8,12 +8,12 @@
 
 | 项 | 现状 | 证据 |
 |---|---|---|
-| 非集成 `@Test`/`@ParameterizedTest` 注解数 | **326**（历史基线 323 + `VirtualThreadExecutorsTest` 3） | `mvn test` Results；排除 `*IntegrationTest` |
+| 非集成 `@Test`/`@ParameterizedTest` 注解数 | **339**（326 + P0-3/P0-4 新增 13） | `mvn test` Results；排除 `*IntegrationTest` |
 | 集成测试 | 14 条注解；默认 surefire **排除** `*IntegrationTest`；本机 `-Pintegration-test` **14/14** 绿（2026-09-24，Docker MySQL `:13308` + PG `:5432`） | `pom.xml` surefire excludes；`-Pintegration-test` 才跑 |
-| 本环境 `mvn test`（`JAVA_HOME`=JDK 17） | **BUILD SUCCESS：Tests run 326, Failures 0, Errors 0, Skipped 0** | 日志 `/workspace/repos/mvn-test-jdk17-after-vt-fix.log`；VT 经反射，JDK 17 回退固定池 |
+| 本环境 `mvn test`（`JAVA_HOME`=JDK 17） | **BUILD SUCCESS：Tests run 339, Failures 0, Errors 0, Skipped 0** | 日志 `/workspace/gap-fix-p0/mvn-test.log`；VT 经反射，JDK 17 回退固定池 |
 | `pom.xml` 编译目标 | `maven.compiler.source/target=17` | **保持 17**；不升到 21 |
 
-**结论**：编译目标保持 17；VT 仅在 JDK 21+ 运行期启用。当前 `mvn test` 为 **326** 全绿（323 历史基线 + 3 条 VT helper 测试）。见 P0-1。
+**结论**：编译目标保持 17；VT 仅在 JDK 21+ 运行期启用。当前 `mvn test` 为 **339** 全绿（原 326 + 审计专用测试 + 风控策略测试）。见 P0-1～P0-4。
 
 ## 2. 能力总览（按主题）
 
@@ -22,8 +22,8 @@
 | MySQL / PG 透明转发 | **done** | 阻塞 `ServerSocket` + 双工 `DuplexRelay` 逐字节转发 |
 | 明文观测 / 状态机 | **partial** | 命令/消息抽取与会话状态齐全；TLS/压缩后 opaque |
 | 结果集脱敏 | **partial** | MySQL 文本+二进制、PG 已接线；类型边界见 README；无规则时透明 |
-| 审计 spool / JDBC ship | **partial** | 实现齐全；**缺专用单元/验收测试**；默认关闭 |
-| 风控策略 | **partial** | 接口 + `allowAll()` 默认；**无内置规则、无配置装配** |
+| 审计 spool / JDBC ship | **partial** | 实现齐全；专用单元测试已补（P0-3）；默认关闭 |
+| 风控策略 | **partial** | `DenyListDatabaseRiskPolicy` + `gateway.risk.*` 装配；空配置仍 `allowAll()` |
 | 连接治理 | **partial** | `max-connections`、CIDR、idle timeout 有；配置键见 §3 |
 | 多后端 | **partial** | 有序 failover；**无按库/用户/权重路由** |
 | Cancel | **partial** | PG：识别+键索引关联，不代发；MySQL：`COM_PROCESS_KILL` 透传 |
@@ -34,8 +34,7 @@
 
 ## 3. 配置键（以 `GatewayConfig` 绑定为准）
 
-Spring 实际读取的键（`@Value`）与模板一致的是嵌套 `gateway.target.*`。  
-`src/main/resources/application.yml` 里的扁平 `target-host` / `idle-timeout-millis` **不会**绑定到当前 `GatewayConfig`，属文档与默认文件漂移（P0-2）。
+Spring 实际读取的键（`@Value`）与默认 `application.yml`、模板一致：嵌套 `gateway.target.*` + `idle-timeout-seconds`（P0-2 已对齐）。
 
 | 键 | 默认（代码） | 说明 |
 |---|---|---|
@@ -43,15 +42,17 @@ Spring 实际读取的键（`@Value`）与模板一致的是嵌套 `gateway.targ
 | `gateway.proxy-port` | `3307` | 协议代理监听端口 |
 | `gateway.target.host` / `.port` / `.username` / `.password` / `.database` | 见代码默认 | 单后端；模板见 `application-*-template.yml` |
 | `gateway.backend-endpoints` | 空 | `host:port,...` 追加 failover 列表 |
-| `gateway.max-connections` | `200`（yml 曾写 256，以代码为准） | `Semaphore` 限流 |
-| `gateway.idle-timeout-seconds` | `0` | 映射为 `SoTimeout`；**不是** `idle-timeout-millis` |
+| `gateway.max-connections` | `200` | `Semaphore` 限流 |
+| `gateway.idle-timeout-seconds` | `0` | 映射为 `SoTimeout`（秒，非 millis） |
 | `gateway.allowed-client-cidrs` | 空 | 空=`allowAll`；否则 `CidrClientAddressPolicy` |
 | `gateway.virtual-threads` | `true` | 请求 VT；JDK 17 反射不可用时回退固定池（见 P0-1） |
 | `gateway.require-cleartext-inspection` | 未设时跟随 `audit.enabled` | TLS opaque 会话可拒绝 |
 | `gateway.rewrite.max-message-bytes` / `max-hold-millis` | `1048576` / `1000` | 改写持有上界，超限 fail-closed |
 | `gateway.audit.*` | 见 README 审计表 | 默认 `enabled=false` |
+| `gateway.risk.denied-operations` | 空 | 逗号分隔操作名；空则不按操作拒绝 |
+| `gateway.risk.denied-statement-keywords` | 空 | 逗号分隔语句子串；空则不按关键字拒绝 |
 
-风控：**没有** `gateway.risk.*` 配置项；`GatewayConfig` **未**调用 `setDatabaseRiskPolicy`，保持 `DatabaseRiskPolicy.allowAll()`。
+风控：`GatewayConfig` 调用 `setDatabaseRiskPolicy(DenyListDatabaseRiskPolicy.of(...))`；两份清单皆空时退回 `DatabaseRiskPolicy.allowAll()`（向后兼容）。
 
 ## 4. P0 / P1 / P2 缺口明细
 
@@ -60,9 +61,9 @@ Spring 实际读取的键（`@Value`）与模板一致的是嵌套 `gateway.targ
 | ID | 项 | 状态 | 证据 | 建议下一步 |
 |---|---|---|---|---|
 | P0-1 | JDK 17 与虚拟线程 API | **fixed** | `VirtualThreadExecutors` 用 MethodHandles 反射调用 `ofVirtual` / `newThreadPerTaskExecutor`；`AbstractProtocolAdapter` / `DuplexRelay` 无直接符号；`pom` 保持 17；JDK 17 回退平台池 | 已落地反射方案；JDK 21+ 运行时仍可用 VT；勿把 `pom` 升到 21 |
-| P0-2 | `application.yml` 与 `GatewayConfig` 键不一致 | **partial/bug** | yml：`target-host`、`idle-timeout-millis`；代码：`gateway.target.host`、`idle-timeout-seconds` | 统一为嵌套 `target.*` + `idle-timeout-seconds`（与模板一致），或改 `@Value` 兼容扁平键 |
-| P0-3 | 审计专用验收测试缺失 | **missing** | `src/test` **无** audit 测试类；README 已改为明确「验收测试仍缺」、不再引用 `AuditTrailAcceptanceTest` | 补 `AuditSpool`/`AuditShipper`/`SpoolingTrafficObserver` 单元与并发验收 |
-| P0-4 | 风控默认全放行且无装配 | **partial** | `DatabaseRiskPolicy.allowAll()`；`GatewayConfig` 不注入策略 | 至少提供可配置拒绝清单（语句类型/关键字）或文档明确「默认无风控」并提供示例 `@Bean` |
+| P0-2 | `application.yml` 与 `GatewayConfig` 键不一致 | **fixed** | 默认 yml 改为嵌套 `gateway.target.*` + `idle-timeout-seconds`；模板补充同键；README 移除扁平键警告 | 勿再引入扁平别名；环境变量用 `GATEWAY_IDLE_TIMEOUT_SECONDS` |
+| P0-3 | 审计专用验收测试缺失 | **fixed** | `src/test/.../audit/{AuditSpool,AuditShipper,SpoolingTrafficObserver}Test`；覆盖启用 spool/ship 与禁用 noop | JDBC destination 真库验收仍属集成范围 |
+| P0-4 | 风控默认全放行且无装配 | **fixed** | `DenyListDatabaseRiskPolicy` + `gateway.risk.denied-operations` / `denied-statement-keywords`；`GatewayConfig` 注入；空配置 allow-all | 可按需扩展 allow-list / 分级策略 |
 
 ### P1（协议完整度 / 安全边界）
 
@@ -83,7 +84,7 @@ Spring 实际读取的键（`@Value`）与模板一致的是嵌套 `gateway.targ
 | P2-2 | JDBC vs 协议代理分裂 | **partial** | `DatabaseConnectionService`（DriverManager）字段存在但 wire 路径未调用 | 删除或隔离为管理面工具；避免与透明代理语义混淆 |
 | P2-3 | HTTP 管控面 | **partial** | `GatewayController` / `CommandLineInterface` 启动代理；CLI 读 `System.in` | 非交互启动默认 `start`；Actuator 暴露 sessions/metrics |
 | P2-4 | Metrics 出口 | **partial** | `GatewayRuntimeMetrics` 计数器在内存 | Micrometer/Actuator 绑定；拒绝连接/failover/opaque 告警 |
-| P2-5 | 审计测试与运维手册 | **partial** | 实现在 `audit/*`；缺测试；README 运维段落较长 | 测试见 P0-3；运维手册可拆「开启清单 / 告警清单」 |
+| P2-5 | 审计测试与运维手册 | **partial** | 实现在 `audit/*`；P0-3 单测已补；README 运维段落较长 | 运维手册可拆「开启清单 / 告警清单」；JDBC 真库验收仍缺 |
 | P2-6 | 集成测试在 CI 可复现 | **partial** | 依赖本机 `integration-test-local.properties` | Testcontainers 或文档化跳过策略 |
 | P2-7 | Oracle / SQL Server 等 | **missing** | 规则文档允许扩展；无 adapter | 不在本阶段范围 |
 
@@ -94,8 +95,8 @@ Spring 实际读取的键（`@Value`）与模板一致的是嵌套 `gateway.targ
 | MySQL/PG framing、session、masking interceptor | 有 | 有（大量单元） |
 | DuplexRelay / RewriteLimits / Inspector 并发 | 有 | 有 |
 | Failover / CIDR / GatewayConfig | 有 | 有 |
-| Audit spool / shipper / JDBC destination | **有** | **基本无**（P0-3） |
-| 内置 RiskPolicy 实现 | **无** | N/A |
+| Audit spool / shipper / JDBC destination | **有** | **有**（P0-3 专用单测；`GatewayConfigTest` 亦覆盖开关） |
+| 内置 RiskPolicy 实现 | `DenyListDatabaseRiskPolicy` | `DenyListDatabaseRiskPolicyTest` + `GatewayConfigTest` 装配 |
 | 虚拟线程回退路径 | `VirtualThreadExecutors` + 固定池回退 | `VirtualThreadExecutorsTest` 在 JDK 17 验证不抛并执行任务 |
 | 真库集成 + 脱敏 | 有 | 需 `-Pintegration-test` + 本地库 |
 

@@ -15,3 +15,12 @@ gateway:
     username: postgres
     password: change-me
     database: postgres
+
+  # Client SoTimeout in seconds; 0 disables (matches GatewayConfig).
+  idle-timeout-seconds: 0
+  # max-connections: 200
+  # allowed-client-cidrs:
+  # Risk deny lists (empty / omitted = allow-all, backward compatible).
+  # risk:
+  #   denied-operations:           # e.g. COM_PROCESS_KILL
+  #   denied-statement-keywords:   # e.g. drop table,truncate

@@ -6,6 +6,8 @@ import com.whosly.gateway.adapter.PostgreSQLProtocolAdapter;
 import com.whosly.gateway.adapter.ProtocolAdapter;
 import com.whosly.gateway.adapter.protocol.ClientAddressPolicy;
 import com.whosly.gateway.adapter.protocol.CidrClientAddressPolicy;
+import com.whosly.gateway.adapter.protocol.DatabaseRiskPolicy;
+import com.whosly.gateway.adapter.protocol.DenyListDatabaseRiskPolicy;
 import com.whosly.gateway.adapter.protocol.DatabaseTrafficObserver;
 import com.whosly.gateway.adapter.protocol.RewriteLimits;
 import com.whosly.gateway.audit.AuditDestination;
@@ -73,6 +75,21 @@ public class GatewayConfig implements DisposableBean {
 
     @Value("${gateway.allowed-client-cidrs:}")
     private String allowedClientCidrs;
+
+    /**
+     * Comma-separated protocol operation names to deny (case-insensitive),
+     * e.g. {@code COM_PROCESS_KILL,DROP}. Empty keeps allow-all.
+     */
+    @Value("${gateway.risk.denied-operations:}")
+    private String riskDeniedOperations;
+
+    /**
+     * Comma-separated statement keyword substrings to deny (case-insensitive),
+     * e.g. {@code drop table,truncate}. Empty keeps allow-all when operations
+     * are also empty.
+     */
+    @Value("${gateway.risk.denied-statement-keywords:}")
+    private String riskDeniedStatementKeywords;
 
     @Value("${gateway.backend-endpoints:}")
     private String backendEndpoints;
@@ -264,6 +281,7 @@ public class GatewayConfig implements DisposableBean {
         adapter.setMaxConnections(maxConnections);
         adapter.setIdleTimeoutSeconds(idleTimeoutSeconds);
         adapter.setClientAddressPolicy(clientAddressPolicy());
+        adapter.setDatabaseRiskPolicy(databaseRiskPolicy());
         adapter.setRewriteLimits(rewriteLimits());
         adapter.setMaskingEngine(maskingEngine());
         adapter.setVirtualThreadsEnabled(virtualThreads);
@@ -310,6 +328,19 @@ public class GatewayConfig implements DisposableBean {
             return ClientAddressPolicy.allowAll();
         }
         return CidrClientAddressPolicy.of(Arrays.asList(allowedClientCidrs.split(",")));
+    }
+
+    private DatabaseRiskPolicy databaseRiskPolicy() {
+        return DenyListDatabaseRiskPolicy.of(
+                splitCsv(riskDeniedOperations),
+                splitCsv(riskDeniedStatementKeywords));
+    }
+
+    private static List<String> splitCsv(String csv) {
+        if (csv == null || csv.isBlank()) {
+            return List.of();
+        }
+        return Arrays.asList(csv.split(","));
     }
 
     public String getTargetHost() { return targetHost; }

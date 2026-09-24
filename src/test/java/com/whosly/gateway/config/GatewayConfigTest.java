@@ -1,6 +1,9 @@
 package com.whosly.gateway.config;
 
+import com.whosly.gateway.adapter.AbstractProtocolAdapter;
+import com.whosly.gateway.adapter.protocol.DatabaseRiskPolicy;
 import com.whosly.gateway.adapter.protocol.DatabaseTrafficEvent;
+import com.whosly.gateway.adapter.protocol.RiskDecision;
 import com.whosly.gateway.adapter.protocol.DatabaseTrafficObserver;
 import com.whosly.gateway.audit.AuditRecord;
 import com.whosly.gateway.audit.AuditRecordCodec;
@@ -98,6 +101,55 @@ class GatewayConfigTest {
                 StandardCharsets.UTF_8);
         // Masking is off, so the literal is kept: the deployment asked for raw statements.
         assertThat(payload).contains("4711");
+    }
+
+
+    @Test
+    void keepsAllowAllRiskPolicyWhenDenyListsAreEmpty() {
+        GatewayConfig config = new GatewayConfig();
+        ReflectionTestUtils.setField(config, "proxyDbType", "mysql");
+        ReflectionTestUtils.setField(config, "proxyPort", 3307);
+        ReflectionTestUtils.setField(config, "targetHost", "127.0.0.1");
+        ReflectionTestUtils.setField(config, "targetPort", 3306);
+        ReflectionTestUtils.setField(config, "maxConnections", 200);
+        ReflectionTestUtils.setField(config, "idleTimeoutSeconds", 0L);
+        ReflectionTestUtils.setField(config, "auditEnabled", false);
+        ReflectionTestUtils.setField(config, "virtualThreads", false);
+        ReflectionTestUtils.setField(config, "rewriteMaxMessageBytes", 1048576);
+        ReflectionTestUtils.setField(config, "rewriteMaxHoldMillis", 1000L);
+        ReflectionTestUtils.setField(config, "riskDeniedOperations", "");
+        ReflectionTestUtils.setField(config, "riskDeniedStatementKeywords", "");
+
+        AbstractProtocolAdapter adapter = (AbstractProtocolAdapter) config.protocolAdapter();
+        DatabaseRiskPolicy policy = (DatabaseRiskPolicy) ReflectionTestUtils.getField(adapter, "databaseRiskPolicy");
+
+        RiskDecision decision = policy.evaluate(event("drop table accounts"));
+        assertThat(decision.isAllowed()).isTrue();
+        config.destroy();
+    }
+
+    @Test
+    void wiresDenyListRiskPolicyOntoProtocolAdapterFromConfiguration() {
+        GatewayConfig config = new GatewayConfig();
+        ReflectionTestUtils.setField(config, "proxyDbType", "mysql");
+        ReflectionTestUtils.setField(config, "proxyPort", 3307);
+        ReflectionTestUtils.setField(config, "targetHost", "127.0.0.1");
+        ReflectionTestUtils.setField(config, "targetPort", 3306);
+        ReflectionTestUtils.setField(config, "maxConnections", 200);
+        ReflectionTestUtils.setField(config, "idleTimeoutSeconds", 0L);
+        ReflectionTestUtils.setField(config, "auditEnabled", false);
+        ReflectionTestUtils.setField(config, "virtualThreads", false);
+        ReflectionTestUtils.setField(config, "rewriteMaxMessageBytes", 1048576);
+        ReflectionTestUtils.setField(config, "rewriteMaxHoldMillis", 1000L);
+        ReflectionTestUtils.setField(config, "riskDeniedOperations", "");
+        ReflectionTestUtils.setField(config, "riskDeniedStatementKeywords", "drop table");
+
+        AbstractProtocolAdapter adapter = (AbstractProtocolAdapter) config.protocolAdapter();
+        DatabaseRiskPolicy policy = (DatabaseRiskPolicy) ReflectionTestUtils.getField(adapter, "databaseRiskPolicy");
+
+        assertThat(policy.evaluate(event("select 1")).isAllowed()).isTrue();
+        assertThat(policy.evaluate(event("DROP TABLE accounts")).isAllowed()).isFalse();
+        config.destroy();
     }
 
     private static DatabaseTrafficEvent event(String statement) {
