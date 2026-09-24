@@ -6,6 +6,7 @@ import com.whosly.gateway.adapter.mysql.MySQLResultSetMaskingInterceptor;
 import com.whosly.gateway.adapter.mysql.MySQLSession;
 import com.whosly.gateway.adapter.mysql.MySqlGatewayErrorMapper;
 import com.whosly.gateway.adapter.protocol.BackendProvider;
+import com.whosly.gateway.adapter.protocol.RoutingContext;
 import com.whosly.gateway.adapter.protocol.DatabaseTrafficInspector;
 import com.whosly.gateway.adapter.protocol.DuplexRelay;
 import com.whosly.gateway.adapter.protocol.GatewayErrorMapping;
@@ -50,7 +51,7 @@ public class MySqlProtocolAdapter extends AbstractProtocolAdapter {
         BackendProvider backendProvider = backendProvider();
         Socket targetSocket;
         try {
-            targetSocket = backendProvider.acquire();
+            targetSocket = backendProvider.acquire(RoutingContext.empty());
         } catch (IOException e) {
             log.warn("MySQL proxy session {} could not reach target {}:{}: {}",
                     sessionId, targetHost, targetPort, e.getMessage());

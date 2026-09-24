@@ -23,7 +23,7 @@
 
 | 项 | 本分支（`future/database-wire-protocol-foundation` / `a725050`） |
 |---|---|
-| 默认单元测试 | **368** 条全绿（JDK 17；`pom` 排除 `*IntegrationTest`；以 STATUS §1 为准） |
+| 默认单元测试 | **398** 条全绿（JDK 17；`pom` 排除 `*IntegrationTest`；以 STATUS §1 为准） |
 | 真库集成 `-Pintegration-test` | **14 / 14** 全绿（2026-09-24，本地 Docker MySQL `:13308` + PostgreSQL `:5432`） |
 | JDK / 编译 | `pom` 目标 **17**；虚拟线程经 `VirtualThreadExecutors` **反射**在 JDK 21+ 启用，JDK 17 回退平台线程池（STATUS P0-1） |
 | 核心数据路径 | 透明代理、查询/结果、预处理、错误透传、脱敏 happy path、PG `COPY` — **已在集成中 live-proven** |
@@ -58,7 +58,7 @@
 | 结果集脱敏（类型边界） | **部分** | decimal/时间/`geometry`/未知类型等非空改写常拒绝；MySQL `bit` 与 PG 整数/bool/浮点二进制可改写；见 STATUS §4.2 |
 | 审计 spool / JDBC 搬运 | **已接线·默认关** | fail-closed；P0-3 专用单测已补；真库 JDBC 验收仍属集成 |
 | 连接上限 / CIDR / idle | **已实现** | `max-connections`、`allowed-client-cidrs`、`idle-timeout-seconds` |
-| 后端 failover 列表 | **部分** | `backend-endpoints` **仅顺序 failover**；无按库/用户/权重路由 |
+| 后端 failover / 路由 | **部分** | `backend-endpoints` 顺序 failover；可选 `gateway.routing.*` 按库名/用户/权重（默认关；协议无关） |
 | PG Cancel | **部分** | `CancelRequest` 与 `BackendKeyData` **仅关联索引**；**不代发** cancel；MySQL `COM_PROCESS_KILL` 透传 |
 | 风控策略 | **部分** | `DenyListDatabaseRiskPolicy` 可配置拒绝清单；空配置默认 `allowAll()` |
 | TLS / 压缩 | **部分** | 默认 opaque / 可选拒绝；**可选 TLS 终止**（`gateway.tls.*`，协议无关）；压缩后仍 opaque |
@@ -84,7 +84,8 @@
 1. 实现 `ProtocolAdapter`（通常继承 `AbstractProtocolAdapter`）与 framing/session。
 2. （可选）实现 `BackendSessionReset` 做池化 wire reset。
 3. `ProtocolAdapterRegistry.register("mydb", MyDbAdapter::new, MyDbReset::new)`（或仅 adapter）。
-4. 设置 `gateway.proxy-db-type=mydb`。池/TLS 等治理由基类继承，无需改 `PooledBackendProvider`。
+4. 设置 `gateway.proxy-db-type=mydb`。池/TLS/路由等治理由基类继承，无需改 `PooledBackendProvider` / `RoutingBackendProvider`。
+5. 身份感知路由：在 `acquire` 前填充 `RoutingContext`（database/username）；未填充时走默认 failover 列表。
 
 内置：`mysql`、`postgresql`（别名 `postgres`）。预留 stub：`oracle`、`sqlserver`（别名 `mssql`）— 选择后启动失败并提示未实现。
 
@@ -96,6 +97,22 @@ gateway:
     enabled: true
     reset-mode: protocol   # 默认 none（仅 close-if-unsafe）
 ```
+
+### 启用按库/用户路由（P1-4）
+
+```yaml
+gateway:
+  backend-endpoints: host1:3306,host2:3306   # 默认/未命中时的 failover
+  routing:
+    enabled: true
+    rules:
+      - match-database: app_a
+        endpoints: hostA:3306,hostA2:3306:2   # 可选 :weight
+      - match-username: readonly
+        endpoints: hostR:3306
+```
+
+组合顺序：**Routing → Pool → Failover/Fixed**。`routing.enabled=false`（默认）时行为与仅 failover 相同。Oracle / SQL Server 适配器填充同一 `RoutingContext` 即可复用。
 
 ## 环境要求
 
@@ -121,6 +138,7 @@ gateway:
 | `gateway.proxy-db-type` | `mysql` \| `postgresql`（经 `ProtocolAdapterRegistry`；`oracle`/`sqlserver`/`mssql` stub） |
 | `gateway.target.host` / `port` / `username` / `password` / `database` | 主后端（**嵌套**） |
 | `gateway.backend-endpoints` | 可选 `host:port,host:port` failover |
+| `gateway.routing.enabled` / `rules` | 可选按库名/用户/权重路由（默认关） |
 | `gateway.max-connections` | 并发连接上限（代码默认 200） |
 | `gateway.idle-timeout-seconds` | 客户端 `SoTimeout`；`0` 关闭（**不是** `idle-timeout-millis`） |
 | `gateway.allowed-client-cidrs` | 可选 CIDR 白名单 |

@@ -3,6 +3,7 @@ package com.whosly.gateway.config;
 import com.whosly.gateway.adapter.AbstractProtocolAdapter;
 import com.whosly.gateway.adapter.mysql.MySqlBackendSessionReset;
 import com.whosly.gateway.adapter.protocol.BackendSessionReset;
+import com.whosly.gateway.adapter.protocol.RoutingRule;
 import com.whosly.gateway.adapter.protocol.DatabaseRiskPolicy;
 import com.whosly.gateway.adapter.protocol.DatabaseTrafficEvent;
 import com.whosly.gateway.adapter.protocol.RiskDecision;
@@ -274,6 +275,57 @@ class GatewayConfigTest {
                 .hasMessageContaining("reset-mode");
     }
 
+
+    @Test
+    void keepsRoutingDisabledByDefault() {
+        GatewayConfig config = new GatewayConfig();
+        applyMinimalAdapterFields(config);
+
+        AbstractProtocolAdapter adapter = (AbstractProtocolAdapter) config.protocolAdapter();
+        assertThat(adapter.isRoutingEnabled()).isFalse();
+        assertThat(adapter.getRoutingRules()).isEmpty();
+        config.destroy();
+    }
+
+    @Test
+    void wiresRoutingRulesOntoProtocolAdapterWhenEnabled() {
+        GatewayConfig config = new GatewayConfig();
+        applyMinimalAdapterFields(config);
+        GatewayRoutingProperties props = new GatewayRoutingProperties();
+        props.setEnabled(true);
+        GatewayRoutingProperties.Rule rule = new GatewayRoutingProperties.Rule();
+        rule.setMatchDatabase("app_a");
+        rule.setEndpoints("db-a:3306,db-b:3306:2");
+        props.setRules(List.of(rule));
+        ReflectionTestUtils.setField(config, "routingProperties", props);
+
+        AbstractProtocolAdapter adapter = (AbstractProtocolAdapter) config.protocolAdapter();
+        assertThat(adapter.isRoutingEnabled()).isTrue();
+        assertThat(adapter.getRoutingRules()).hasSize(1);
+        RoutingRule wired = adapter.getRoutingRules().get(0);
+        assertThat(wired.matchDatabase()).contains("app_a");
+        assertThat(wired.endpoints()).hasSize(2);
+        assertThat(wired.endpoints().get(1).weight()).isEqualTo(2);
+        config.destroy();
+    }
+
+    @Test
+    void rejectsRoutingRuleWithoutEndpoints() {
+        GatewayConfig config = new GatewayConfig();
+        applyMinimalAdapterFields(config);
+        GatewayRoutingProperties props = new GatewayRoutingProperties();
+        props.setEnabled(true);
+        GatewayRoutingProperties.Rule rule = new GatewayRoutingProperties.Rule();
+        rule.setMatchUsername("readonly");
+        rule.setEndpoints("");
+        props.setRules(List.of(rule));
+        ReflectionTestUtils.setField(config, "routingProperties", props);
+
+        assertThatThrownBy(config::protocolAdapter)
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("endpoints");
+    }
+
     private static void applyMinimalAdapterFields(GatewayConfig config) {
         ReflectionTestUtils.setField(config, "proxyDbType", "mysql");
         ReflectionTestUtils.setField(config, "proxyPort", 3307);
@@ -295,5 +347,6 @@ class GatewayConfigTest {
         ReflectionTestUtils.setField(config, "tlsKeystorePassword", "");
         ReflectionTestUtils.setField(config, "tlsKeystoreType", "");
         ReflectionTestUtils.setField(config, "tlsKeyAlias", "");
+        ReflectionTestUtils.setField(config, "routingProperties", new GatewayRoutingProperties());
     }
 }

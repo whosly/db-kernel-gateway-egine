@@ -1,6 +1,6 @@
 # 功能现状与缺口（本分支）
 
-> **分支**：`future/database-wire-protocol-foundation`（对照 commit `a725050`）  
+> **分支**：`future/database-wire-protocol-foundation`  
 > **更新原则**：只写有代码/测试/配置证据的结论；「规划中」不得写成「已实现」。  
 > **导航**：见 [README.md](README.md)。
 
@@ -8,12 +8,12 @@
 
 | 项 | 现状 | 证据 |
 |---|---|---|
-| 非集成 `@Test`/`@ParameterizedTest` 注解数 | **368** | `mvn test` Results；排除 `*IntegrationTest` | **368**（357 + pool/TLS ~11） | `mvn test` Results；排除 `*IntegrationTest` |
+| 非集成 `@Test`/`@ParameterizedTest` 注解数 | **398** | `mvn test` Results；排除 `*IntegrationTest` |
 | 集成测试 | 14 条注解；默认 surefire **排除** `*IntegrationTest`；无 local props 时 `-Pintegration-test` **assumeTrue 跳过**；本机有库时可 14/14 绿 | `pom.xml` excludes；跳过策略见 `docs/OPS.md` / `integration-test.properties` |
-| 本环境 `mvn test`（`JAVA_HOME`=JDK 17） | **BUILD SUCCESS：Tests run 368, Failures 0, Errors 0, Skipped 0** | 日志 `/workspace/gap-fix-p2/mvn-test.log`；VT 经反射，JDK 17 回退固定池 |
+| 本环境 `mvn test`（`JAVA_HOME`=JDK 17） | **BUILD SUCCESS：Tests run 398, Failures 0, Errors 0, Skipped 0** | surefire；含 P1-4 routing |
 | `pom.xml` 编译目标 | `maven.compiler.source/target=17` | **保持 17**；不升到 21 |
 
-**结论**：编译目标保持 17；VT 仅在 JDK 21+ 运行期启用。当前 `mvn test` 为 **368** 全绿（P2 基线 357 + pool/TLS 增量）。见 P0 / P1 / P2。
+**结论**：编译目标保持 17；VT 仅在 JDK 21+ 运行期启用。当前 `mvn test` 为 **398** 全绿（含 P1-4 routing）。见 P0 / P1 / P2。
 
 ## 2. 能力总览（按主题）
 
@@ -25,7 +25,7 @@
 | 审计 spool / JDBC ship | **partial** | 实现齐全；专用单元测试已补（P0-3）；默认关闭 |
 | 风控策略 | **partial** | `DenyListDatabaseRiskPolicy` + `gateway.risk.*` 装配；空配置仍 `allowAll()` |
 | 连接治理 | **partial** | `max-connections`、CIDR、idle timeout 有；配置键见 §3 |
-| 多后端 | **partial** | 有序 failover + 失败端点冷却跳过；**无按库/用户/权重路由** |
+| 多后端 | **partial（improved）** | 有序 failover + 冷却；**可选**按库名/用户/权重路由（`gateway.routing.*`，默认关） |
 | Cancel | **done（设计如此）** | PG：识别+键索引关联，**不代发**（透明转发 CancelRequest）；MySQL：`COM_PROCESS_KILL` 透传 |
 | TLS 终止 / 明文强制 | **partial（improved）** | 可选 `gateway.tls.*` 客户端 TLS 终止（共享基础设施）；未启用时仍 opaque / `require-cleartext-inspection` |
 | NIO / 事件驱动 | **missing（刻意）** | 阻塞流 + 每连接线程/VT；**不以 NIO 重写为当前方向**（见 P2-1） |
@@ -42,6 +42,8 @@ Spring 实际读取的键（`@Value`）与默认 `application.yml`、模板一�
 | `gateway.proxy-port` | `3307` | 协议代理监听端口 |
 | `gateway.target.host` / `.port` / `.username` / `.password` / `.database` | 见代码默认 | 单后端；模板见 `application-*-template.yml` |
 | `gateway.backend-endpoints` | 空 | `host:port,...` 追加 failover 列表 |
+| `gateway.routing.enabled` | `false` | 按库名/用户路由；false 时行为与仅 failover 相同 |
+| `gateway.routing.rules[]` | 空 | `match-database` / `match-username` + `endpoints`（`host:port` 或 `host:port:weight`） |
 | `gateway.max-connections` | `200` | `Semaphore` 限流 |
 | `gateway.idle-timeout-seconds` | `0` | 映射为 `SoTimeout`（秒，非 millis） |
 | `gateway.allowed-client-cidrs` | 空 | 空=`allowAll`；否则 `CidrClientAddressPolicy` |
@@ -77,7 +79,7 @@ Spring 实际读取的键（`@Value`）与默认 `application.yml`、模板一�
 | P1-1 | TLS/压缩可观测性 | **partial（improved）** | extractor `opaqueTunnel`；`require-cleartext-inspection`；**可选 TLS 终止**（`ClientTlsTerminator` + `gateway.tls.*`，协议无关 accept 路径）；单测用测试 keystore | 压缩后仍 opaque；协议内建 SSL 协商（MySQL capability / PG SSLRequest）仍非终止路径；后端 mTLS 未做 |
 | P1-2 | MySQL `COM_STMT_EXECUTE` 参数观测 | **partial（improved）** | PREPARE 登记 `statement_id→param_count`；EXECUTE 发出事件（statement id + 可解析时的 param types）；**不**把绑定值写入 statement 文本；单测覆盖 | 可选：审计侧对 string 类型参数做脱敏摘要；仍无改写 EXECUTE |
 | P1-3 | PG Cancel 只关联不代发 | **done（设计如此）** | `PostgreSQLCancelKeyRegistry` 仅索引；adapter / 单测明确「associate-only」；CancelRequest 仍由客户端短连接透明转发 | 若需网关代发 cancel，需 session→backend socket 映射，另开设计 |
-| P1-4 | 多后端仅 failover | **partial（improved）** | `FailoverBackendProvider` 顺序尝试 + **失败端点冷却跳过**（默认 30s，可测）；单测覆盖 | 仍无按库名/用户/权重路由；半开熔断可再增强 |
+| P1-4 | 多后端仅 failover | **partial（improved）** | failover + 冷却；**`RoutingBackendProvider`**（`gateway.routing.enabled`，默认 false）按 `match-database` / `match-username` / 权重选路；组合 **Routing → Pool → Failover/Fixed**；未命中回退默认列表；`RoutingContext` 协议无关（Oracle/SQL Server 可复用）；单测覆盖 match/weight/fallback/disabled | 半开熔断可再增强；MySQL/PG 仍在握手前 `acquire(empty)`——身份感知需 adapter 填充 `RoutingContext`（如 PG StartupMessage peek） |
 | P1-5 | 结果集脱敏类型边界 | **partial（improved）** | MySQL：`bit` 按长度前缀可读可改写；PG：`int2/4/8`、`bool`、`float4/8` 二进制改写；decimal/时间/uuid/geometry 等仍 fail-closed；边界表见 §4.2 | decimal/时间编码若要做需独立设计 |
 | P1-6 | 连接池化 | **partial（improved）** | `PooledBackendProvider` + `gateway.pool.enabled`（默认 false）；`gateway.pool.reset-mode=none\|protocol`（默认 none）；`protocol` 时经 registry SPI：MySQL `MySqlBackendSessionReset`（`COM_RESET_CONNECTION`）、PG `PostgreSQLBackendSessionReset`（`DISCARD ALL`）；失败/拒绝关闭 socket；单测覆盖成功/失败 | 按身份/库名分池未做；reset 仍仅在已确认可复用 socket 上执行 |
 
@@ -122,7 +124,7 @@ Spring 实际读取的键（`@Value`）与默认 `application.yml`、模板一�
 |---|---|---|
 | MySQL/PG framing、session、masking interceptor | 有 | 有（大量单元） |
 | DuplexRelay / RewriteLimits / Inspector 并发 | 有 | 有 |
-| Failover（含冷却跳过）/ CIDR / GatewayConfig | 有 | 有 |
+| Failover（含冷却跳过）/ Routing（库/用户/权重）/ CIDR / GatewayConfig | 有 | 有 |
 | Audit spool / shipper / JDBC destination | **有** | **有**（P0-3 专用单测；`GatewayConfigTest` 亦覆盖开关） |
 | 内置 RiskPolicy 实现 | `DenyListDatabaseRiskPolicy` | `DenyListDatabaseRiskPolicyTest` + `GatewayConfigTest` 装配 |
 | 虚拟线程回退路径 | `VirtualThreadExecutors` + 固定池回退 | `VirtualThreadExecutorsTest` 在 JDK 17 验证不抛并执行任务 |
@@ -131,6 +133,7 @@ Spring 实际读取的键（`@Value`）与默认 `application.yml`、模板一�
 | `ConfirmedReuseBackendPool` / `PooledBackendProvider` / `ClientTlsTerminator` | 已接线（默认关） | 有单测；`GatewayConfigTest` 装配 |
 | `MySqlBackendSessionReset` / `PostgreSQLBackendSessionReset` | `reset-mode=protocol` | 有单测（OK/ERR、池关闭） |
 | `ProtocolAdapterRegistry` | 内置 + stub | `ProtocolAdapterRegistryTest` |
+| `RoutingBackendProvider` / `WeightedEndpointSelector` | `gateway.routing.*`（默认关） | `RoutingBackendProviderTest` + `GatewayConfigTest` 装配 |
 | 真库集成 + 脱敏 | 有 | 需 `-Pintegration-test` + 本地库；无 props 则 assumeTrue 跳过（P2-6） |
 | `/gateway/*` + `/actuator/gateway` | 有 | `GatewayOpsSurfaceTest` + `CommandLineInterfaceTest`（非交互） |
 

@@ -7,6 +7,7 @@ import com.whosly.gateway.adapter.postgresql.PostgreSQLFrameCodec;
 import com.whosly.gateway.adapter.postgresql.PostgreSQLProtocolErrorMapper;
 import com.whosly.gateway.adapter.postgresql.PostgreSQLSession;
 import com.whosly.gateway.adapter.protocol.BackendProvider;
+import com.whosly.gateway.adapter.protocol.RoutingContext;
 import com.whosly.gateway.adapter.protocol.DatabaseTrafficInspector;
 import com.whosly.gateway.adapter.protocol.DuplexRelay;
 import com.whosly.gateway.adapter.protocol.GatewayErrorMapping;
@@ -69,7 +70,7 @@ public class PostgreSQLProtocolAdapter extends AbstractProtocolAdapter {
         BackendProvider backendProvider = backendProvider();
         Socket targetSocket;
         try {
-            targetSocket = backendProvider.acquire();
+            targetSocket = backendProvider.acquire(RoutingContext.empty());
         } catch (IOException e) {
             log.warn("PostgreSQL proxy session {} could not reach target {}:{}: {}",
                     sessionId, targetHost, targetPort, e.getMessage());

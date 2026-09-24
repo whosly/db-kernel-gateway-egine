@@ -21,6 +21,17 @@ gateway:
   # Comma-separated failover list: host:port,host:port
   # When set, appended after gateway.target for BackendProvider (deduped).
   backend-endpoints: ${GATEWAY_BACKEND_ENDPOINTS:}
+
+  # Multi-backend routing by database name and/or username (protocol-agnostic).
+  # Default off — existing target + backend-endpoints failover unchanged.
+  # Adapters supply RoutingContext; Oracle / SQL Server reuse the same rules once wired.
+  routing:
+    enabled: ${GATEWAY_ROUTING_ENABLED:false}
+    # rules:
+    #   - match-database: app_a
+    #     endpoints: hostA:3306,hostA2:3306:2
+    #   - match-username: readonly
+    #     endpoints: hostR:3306
   virtual-threads: ${GATEWAY_VIRTUAL_THREADS:true}
 
   # Backend connection pool (protocol-agnostic; default off). Safe reuse only when

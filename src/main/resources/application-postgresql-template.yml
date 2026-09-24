@@ -35,3 +35,12 @@ gateway:
   #   keystore-path: /path/to/gateway.p12
   #   keystore-password: change-me-in-env-not-in-git
   #   keystore-type: PKCS12
+
+  # Optional protocol-agnostic routing (default off):
+  # routing:
+  #   enabled: true
+  #   rules:
+  #     - match-database: app_a
+  #       endpoints: hostA:5432
+  #     - match-username: readonly
+  #       endpoints: hostR:5432

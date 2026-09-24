@@ -12,6 +12,10 @@ import com.whosly.gateway.adapter.protocol.GatewayRuntimeMetrics;
 import com.whosly.gateway.adapter.protocol.ClientTlsTerminator;
 import com.whosly.gateway.adapter.protocol.DatabaseTrafficObserver;
 import com.whosly.gateway.adapter.protocol.RewriteLimits;
+import com.whosly.gateway.adapter.protocol.BackendEndpointParser;
+import com.whosly.gateway.adapter.protocol.RoutingRule;
+import com.whosly.gateway.adapter.protocol.WeightedEndpoint;
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import com.whosly.gateway.audit.AuditDestination;
 import com.whosly.gateway.audit.AuditDurability;
 import com.whosly.gateway.audit.AuditShipper;
@@ -48,6 +52,7 @@ import java.util.Locale;
  * @since 2026-07-02
  */
 @Configuration
+@EnableConfigurationProperties(GatewayRoutingProperties.class)
 public class GatewayConfig implements DisposableBean {
 
     @Value("${gateway.proxy-db-type:mysql}")
@@ -143,6 +148,8 @@ public class GatewayConfig implements DisposableBean {
     @Value("${gateway.tls.key-alias:}")
     private String tlsKeyAlias;
 
+    @Autowired(required = false)
+    private GatewayRoutingProperties routingProperties;
 
     @Value("${gateway.rewrite.max-message-bytes:1048576}")
     private int rewriteMaxMessageBytes;
@@ -346,6 +353,7 @@ public class GatewayConfig implements DisposableBean {
         adapter.setBackendSessionReset(resolveBackendSessionReset(protocolAdapterRegistry));
         adapter.setClientTlsTerminator(buildClientTlsTerminator());
         adapter.setRuntimeMetrics(gatewayRuntimeMetrics());
+        applyRouting(adapter);
         try {
             adapter.setDatabaseTrafficObserver(databaseTrafficObserver());
         } catch (IOException e) {
@@ -400,6 +408,29 @@ public class GatewayConfig implements DisposableBean {
             return requireCleartextInspection;
         }
         return auditEnabled;
+    }
+
+    private void applyRouting(AbstractProtocolAdapter adapter) {
+        GatewayRoutingProperties props = routingProperties != null
+                ? routingProperties : new GatewayRoutingProperties();
+        adapter.setRoutingEnabled(props.isEnabled());
+        if (!props.isEnabled()) {
+            adapter.setRoutingRules(List.of());
+            return;
+        }
+        List<RoutingRule> rules = new ArrayList<>();
+        for (GatewayRoutingProperties.Rule rule : props.getRules()) {
+            if (rule == null) {
+                continue;
+            }
+            List<WeightedEndpoint> endpoints = BackendEndpointParser.parseWeightedEndpoints(rule.getEndpoints());
+            if (endpoints.isEmpty()) {
+                throw new IllegalArgumentException(
+                        "gateway.routing rule requires endpoints (host:port[,host:port:weight…])");
+            }
+            rules.add(new RoutingRule(rule.getMatchDatabase(), rule.getMatchUsername(), endpoints));
+        }
+        adapter.setRoutingRules(rules);
     }
 
     private List<com.whosly.gateway.adapter.protocol.BackendEndpoint> parseBackendEndpoints() {

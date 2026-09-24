@@ -10,46 +10,43 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ThreadLocalRandom;
+import java.util.function.IntUnaryOperator;
 import java.util.function.LongSupplier;
 
 /**
- * Tries backend endpoints in order until one accepts the TCP connection.
- *
- * <p>Endpoints that recently failed a connect are skipped while a healthier
- * candidate remains, then retried after a short cooldown so a recovered host is
- * not permanently black-holed. Per-request routing by database name / username lives in
- * {@link RoutingBackendProvider}; this class is ordered failover with health-aware skip.</p>
+ * Like {@link FailoverBackendProvider}, but chooses the first endpoint to try by
+ * weight on each {@link #acquire()}. Remaining endpoints follow in config order
+ * for failover. Unhealthy cooldown behaviour matches failover.
  */
-public final class FailoverBackendProvider implements BackendProvider {
+public final class WeightedFailoverBackendProvider implements BackendProvider {
 
-    private static final Logger log = LoggerFactory.getLogger(FailoverBackendProvider.class);
+    private static final Logger log = LoggerFactory.getLogger(WeightedFailoverBackendProvider.class);
 
-    /** Default time a failed endpoint stays skipped when another candidate exists. */
-    public static final long DEFAULT_UNHEALTHY_COOLDOWN_MILLIS = 30_000L;
-
-    private final List<BackendEndpoint> endpoints;
+    private final List<WeightedEndpoint> endpoints;
     private final int connectTimeoutMillis;
     private final GatewayRuntimeMetrics metrics;
     private final long unhealthyCooldownMillis;
     private final ConcurrentHashMap<BackendEndpoint, Long> unhealthyUntilMillis = new ConcurrentHashMap<>();
     private final LongSupplier clock;
+    private final IntUnaryOperator nextIntBound;
 
-    public FailoverBackendProvider(List<BackendEndpoint> endpoints, int connectTimeoutMillis) {
-        this(endpoints, connectTimeoutMillis, GatewayRuntimeMetrics.noop(), DEFAULT_UNHEALTHY_COOLDOWN_MILLIS,
-                System::currentTimeMillis);
+    public WeightedFailoverBackendProvider(List<WeightedEndpoint> endpoints, int connectTimeoutMillis) {
+        this(endpoints, connectTimeoutMillis, GatewayRuntimeMetrics.noop(),
+                FailoverBackendProvider.DEFAULT_UNHEALTHY_COOLDOWN_MILLIS,
+                System::currentTimeMillis, ThreadLocalRandom.current()::nextInt);
     }
 
-    public FailoverBackendProvider(List<BackendEndpoint> endpoints, int connectTimeoutMillis,
-                                   GatewayRuntimeMetrics metrics) {
-        this(endpoints, connectTimeoutMillis, metrics, DEFAULT_UNHEALTHY_COOLDOWN_MILLIS, System::currentTimeMillis);
+    public WeightedFailoverBackendProvider(List<WeightedEndpoint> endpoints, int connectTimeoutMillis,
+                                           GatewayRuntimeMetrics metrics) {
+        this(endpoints, connectTimeoutMillis, metrics,
+                FailoverBackendProvider.DEFAULT_UNHEALTHY_COOLDOWN_MILLIS,
+                System::currentTimeMillis, ThreadLocalRandom.current()::nextInt);
     }
 
-    /**
-     * Package-visible constructor for tests that control the clock and cooldown.
-     */
-    FailoverBackendProvider(List<BackendEndpoint> endpoints, int connectTimeoutMillis,
-                            GatewayRuntimeMetrics metrics, long unhealthyCooldownMillis,
-                            LongSupplier clock) {
+    WeightedFailoverBackendProvider(List<WeightedEndpoint> endpoints, int connectTimeoutMillis,
+                                    GatewayRuntimeMetrics metrics, long unhealthyCooldownMillis,
+                                    LongSupplier clock, IntUnaryOperator nextIntBound) {
         Objects.requireNonNull(endpoints, "endpoints must not be null");
         if (endpoints.isEmpty()) {
             throw new IllegalArgumentException("endpoints must not be empty");
@@ -62,27 +59,29 @@ public final class FailoverBackendProvider implements BackendProvider {
         this.metrics = metrics != null ? metrics : GatewayRuntimeMetrics.noop();
         this.unhealthyCooldownMillis = unhealthyCooldownMillis;
         this.clock = Objects.requireNonNull(clock, "clock must not be null");
+        this.nextIntBound = Objects.requireNonNull(nextIntBound, "nextIntBound must not be null");
     }
 
     @Override
     public Socket acquire() throws IOException {
         long now = clock.getAsLong();
-        List<BackendEndpoint> preferred = new ArrayList<>(endpoints.size());
+        List<BackendEndpoint> weightedOrder = WeightedEndpointSelector.orderForAttempt(endpoints, nextIntBound);
+        List<BackendEndpoint> preferred = new ArrayList<>(weightedOrder.size());
         List<BackendEndpoint> deferred = new ArrayList<>();
-        for (BackendEndpoint endpoint : endpoints) {
+        for (BackendEndpoint endpoint : weightedOrder) {
             if (isUnhealthy(endpoint, now)) {
                 deferred.add(endpoint);
             } else {
                 preferred.add(endpoint);
             }
         }
-        // Prefer healthy endpoints; if every endpoint is cooling down, try them anyway.
-        List<BackendEndpoint> order = preferred.isEmpty() ? List.copyOf(endpoints) : preferred;
+        List<BackendEndpoint> order = preferred.isEmpty() ? weightedOrder : preferred;
         if (!preferred.isEmpty() && !deferred.isEmpty()) {
             log.debug("Skipping {} unhealthy backend(s) while {} healthy candidate(s) remain",
                     deferred.size(), preferred.size());
         }
 
+        BackendEndpoint firstConfigured = endpoints.get(0).endpoint();
         List<IOException> failures = new ArrayList<>();
         for (BackendEndpoint endpoint : order) {
             try {
@@ -90,9 +89,9 @@ public final class FailoverBackendProvider implements BackendProvider {
                 socket.setTcpNoDelay(true);
                 socket.connect(new InetSocketAddress(endpoint.host(), endpoint.port()), connectTimeoutMillis);
                 unhealthyUntilMillis.remove(endpoint);
-                if (!endpoint.equals(endpoints.get(0))) {
+                if (!endpoint.equals(firstConfigured)) {
                     metrics.recordBackendFailover();
-                    log.info("Connected to failover backend {} after skipping/failing earlier endpoint(s)",
+                    log.info("Connected to weighted/failover backend {} after skipping/failing earlier endpoint(s)",
                             endpoint);
                 }
                 return socket;
@@ -128,11 +127,6 @@ public final class FailoverBackendProvider implements BackendProvider {
         unhealthyUntilMillis.put(endpoint, now + unhealthyCooldownMillis);
     }
 
-    /** Test helper: whether an endpoint is currently marked unhealthy. */
-    boolean isMarkedUnhealthy(BackendEndpoint endpoint) {
-        return isUnhealthy(endpoint, clock.getAsLong());
-    }
-
     @Override
     public void release(Socket connection) {
         if (connection == null) {
@@ -144,7 +138,7 @@ public final class FailoverBackendProvider implements BackendProvider {
         }
     }
 
-    public List<BackendEndpoint> endpoints() {
+    public List<WeightedEndpoint> endpoints() {
         return endpoints;
     }
 }

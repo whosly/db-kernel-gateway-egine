@@ -14,7 +14,11 @@ import com.whosly.gateway.adapter.protocol.FailoverBackendProvider;
 import com.whosly.gateway.adapter.protocol.GatewayRuntimeMetrics;
 import com.whosly.gateway.adapter.protocol.ProtocolSession;
 import com.whosly.gateway.adapter.protocol.RewriteLimits;
+import com.whosly.gateway.adapter.protocol.RoutingBackendProvider;
+import com.whosly.gateway.adapter.protocol.RoutingRule;
 import com.whosly.gateway.adapter.protocol.VirtualThreadExecutors;
+import com.whosly.gateway.adapter.protocol.WeightedEndpoint;
+import com.whosly.gateway.adapter.protocol.WeightedFailoverBackendProvider;
 import com.whosly.gateway.masking.MaskingEngine;
 import com.whosly.gateway.parser.SqlParser;
 import com.whosly.gateway.service.DatabaseConnectionService;
@@ -40,7 +44,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Abstract protocol adapter base with connection governance, virtual threads,
- * backend failover, and runtime metrics (P0).
+ * backend failover / optional routing, and runtime metrics (P0).
  */
 public abstract class AbstractProtocolAdapter implements ProtocolAdapter {
 
@@ -84,6 +88,9 @@ public abstract class AbstractProtocolAdapter implements ProtocolAdapter {
     private int poolMaxIdle = 8;
     private BackendSessionReset backendSessionReset = BackendSessionReset.none();
     private ClientTlsTerminator clientTlsTerminator = ClientTlsTerminator.disabled();
+    /** When true, wrap providers in {@link RoutingBackendProvider} (Routing → Pool → Failover). */
+    private boolean routingEnabled = false;
+    private List<RoutingRule> routingRules = List.of();
     /** Shared across client sessions so pooling actually reuses sockets. */
     private volatile BackendProvider sharedBackendProvider;
 
@@ -182,6 +189,14 @@ public abstract class AbstractProtocolAdapter implements ProtocolAdapter {
     public ClientTlsTerminator getClientTlsTerminator() { return clientTlsTerminator; }
     public boolean isClientTlsTerminateEnabled() { return clientTlsTerminator.isEnabled(); }
 
+    public void setRoutingEnabled(boolean routingEnabled) { this.routingEnabled = routingEnabled; }
+    public boolean isRoutingEnabled() { return routingEnabled; }
+    public void setRoutingRules(List<RoutingRule> routingRules) {
+        this.routingRules = routingRules == null || routingRules.isEmpty()
+                ? List.of() : List.copyOf(routingRules);
+    }
+    public List<RoutingRule> getRoutingRules() { return routingRules; }
+
 
     @Override public String getProtocolName() { return protocolName; }
     @Override public int getDefaultPort() { return port; }
@@ -202,8 +217,9 @@ public abstract class AbstractProtocolAdapter implements ProtocolAdapter {
             acceptorExecutor = Executors.newSingleThreadExecutor(
                     namedThreadFactory("db-gateway-" + protocolName + "-accept-"));
             running = true;
-            log.info("Starting {} protocol adapter on port {} (max connections {}, virtualThreads={}, pool={}, tlsTerminate={}, backends={})",
+            log.info("Starting {} protocol adapter on port {} (max connections {}, virtualThreads={}, pool={}, routing={}, tlsTerminate={}, backends={})",
                     protocolName, port, maxConnections, virtualThreadsEnabled, poolEnabled,
+                    routingEnabled && !routingRules.isEmpty(),
                     clientTlsTerminator.isEnabled(),
                     backendEndpoints.isEmpty() ? targetHost + ":" + targetPort : backendEndpoints);
             acceptorExecutor.submit(this::acceptConnections);
@@ -379,20 +395,58 @@ public abstract class AbstractProtocolAdapter implements ProtocolAdapter {
         return backendProvider();
     }
 
+    /**
+     * Builds {@code Routing → Pool → Failover/Fixed} when routing is enabled;
+     * otherwise {@code Pool → Failover/Fixed} (unchanged default).
+     */
     private BackendProvider buildBackendProvider() {
-        BackendProvider factory = createUnpooledBackendProvider();
+        if (poolEnabled) {
+            log.info("{} backend pool enabled (maxIdle={}, reset={})",
+                    protocolName, poolMaxIdle,
+                    backendSessionReset == BackendSessionReset.NONE ? "none/close-if-unsafe" : "protocol/custom");
+        }
+        BackendProvider fallback = maybePool(createUnpooledBackendProvider(resolveBackendEndpoints()));
+        if (!routingEnabled || routingRules.isEmpty()) {
+            return fallback;
+        }
+        RoutingBackendProvider.Builder builder = new RoutingBackendProvider.Builder().fallback(fallback);
+        for (RoutingRule rule : routingRules) {
+            List<BackendEndpoint> plain = new ArrayList<>(rule.endpoints().size());
+            for (WeightedEndpoint weighted : rule.endpoints()) {
+                plain.add(weighted.endpoint());
+            }
+            BackendProvider routeFactory = createUnpooledBackendProvider(plain, rule.endpoints());
+            builder.rule(rule, maybePool(routeFactory));
+        }
+        log.info("{} backend routing enabled ({} rule(s))", protocolName, routingRules.size());
+        return builder.build();
+    }
+
+    private BackendProvider maybePool(BackendProvider factory) {
         if (!poolEnabled) {
             return factory;
         }
-        log.info("{} backend pool enabled (maxIdle={}, reset={})",
-                protocolName, poolMaxIdle,
-                backendSessionReset == BackendSessionReset.NONE ? "none/close-if-unsafe" : "protocol/custom");
         return new PooledBackendProvider(factory, poolMaxIdle, backendSessionReset);
     }
 
     /** Direct or failover factory without pooling — used as the pool's opener. */
     protected BackendProvider createUnpooledBackendProvider() {
-        List<BackendEndpoint> endpoints = resolveBackendEndpoints();
+        return createUnpooledBackendProvider(resolveBackendEndpoints());
+    }
+
+    private BackendProvider createUnpooledBackendProvider(List<BackendEndpoint> endpoints) {
+        return createUnpooledBackendProvider(endpoints, null);
+    }
+
+    /**
+     * When {@code weighted} is non-null and any weight differs from 1, use
+     * {@link WeightedFailoverBackendProvider}; otherwise Direct or ordered Failover.
+     */
+    private BackendProvider createUnpooledBackendProvider(List<BackendEndpoint> endpoints,
+                                                          List<WeightedEndpoint> weighted) {
+        if (weighted != null && hasNonDefaultWeight(weighted)) {
+            return new WeightedFailoverBackendProvider(weighted, TARGET_CONNECT_TIMEOUT_MILLIS, runtimeMetrics);
+        }
         if (endpoints.size() == 1) {
             BackendEndpoint only = endpoints.get(0);
             return new DirectBackendProvider(only.host(), only.port(), TARGET_CONNECT_TIMEOUT_MILLIS);
@@ -400,11 +454,23 @@ public abstract class AbstractProtocolAdapter implements ProtocolAdapter {
         return new FailoverBackendProvider(endpoints, TARGET_CONNECT_TIMEOUT_MILLIS, runtimeMetrics);
     }
 
+    private static boolean hasNonDefaultWeight(List<WeightedEndpoint> weighted) {
+        for (WeightedEndpoint endpoint : weighted) {
+            if (endpoint.weight() != 1) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     private void closeSharedBackendProvider() {
         BackendProvider provider = sharedBackendProvider;
         sharedBackendProvider = null;
-        if (provider instanceof PooledBackendProvider pooled) {
-            pooled.close();
+        if (provider instanceof AutoCloseable closeable) {
+            try {
+                closeable.close();
+            } catch (Exception ignored) {
+            }
         }
     }
 

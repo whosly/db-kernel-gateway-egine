@@ -15,6 +15,7 @@
 | 6 | （可选）明文强制 | 需审计时设 `gateway.require-cleartext-inspection=true`（或随审计默认） |
 | 6b | （可选）TLS 终止 | `gateway.tls.enabled=true` + `keystore-path`（PKCS12/JKS）；客户端从首字节 TLS；密码用环境变量 |
 | 6c | （可选）后端连接池 | `gateway.pool.enabled=true`；可选 `gateway.pool.reset-mode=protocol`（MySQL COM_RESET_CONNECTION / PG DISCARD ALL）；默认 `none` |
+| 6d | （可选）按库/用户路由 | `gateway.routing.enabled=true` + `rules`（`match-database` / `match-username` + `endpoints`）；未命中回退 `target`/`backend-endpoints`；默认关 |
 | 7 | （可选）风控拒绝清单 | `gateway.risk.denied-operations` / `denied-statement-keywords` |
 | 8 | （可选）交互 CLI | 仅调试：`gateway.cli.interactive=true`（会读 `System.in`） |
 
@@ -38,7 +39,7 @@
 | `connectionsRejectedPolicy` 上升 | 同上 | 核对 `allowed-client-cidrs` |
 | `opaqueTunnelsDenied` 上升 | 同上 | 客户端在走 TLS/压缩而 `require-cleartext-inspection` 开启 |
 | `opaqueTunnelsEntered` 高且未 deny | 同上 | 明文观测/审计失效窗口——是否应强制明文 |
-| `backendFailovers` 突发 | 同上 | 主后端不可达或冷却中；查目标与 `backend-endpoints` |
+| `backendFailovers` 突发 | 同上 | 主后端不可达或冷却中；查目标与 `backend-endpoints` / `gateway.routing.rules` |
 | `policyDenials` 上升 | 同上 | 风控命中；核对 deny 清单是否过宽 |
 | 审计 spool 写失败 / 熔断 | 应用日志 | fail-closed 会拒流量；查磁盘配额与权限 |
 | 代理端口起不来 | 启动日志 | 端口占用或配置错误 |
