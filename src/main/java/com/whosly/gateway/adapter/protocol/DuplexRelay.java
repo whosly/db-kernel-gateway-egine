@@ -14,7 +14,6 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
-import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -317,18 +316,13 @@ public class DuplexRelay {
 
 
     private static ExecutorService newRelayExecutor(String sessionId) {
-        try {
-            ThreadFactory virtualFactory = Thread.ofVirtual()
-                    .name("duplex-relay-" + sessionId + "-", 0)
-                    .factory();
-            return Executors.newThreadPerTaskExecutor(virtualFactory);
-        } catch (Throwable unsupported) {
-            return Executors.newFixedThreadPool(2, runnable -> {
-                Thread thread = new Thread(runnable, "duplex-relay-" + sessionId);
-                thread.setDaemon(true);
-                return thread;
-            });
-        }
+        return VirtualThreadExecutors.newVirtualThreadPerTaskExecutor(
+                        "duplex-relay-" + sessionId + "-", 0)
+                .orElseGet(() -> Executors.newFixedThreadPool(2, runnable -> {
+                    Thread thread = new Thread(runnable, "duplex-relay-" + sessionId);
+                    thread.setDaemon(true);
+                    return thread;
+                }));
     }
 
     private static void closeQuietly(Socket socket) {

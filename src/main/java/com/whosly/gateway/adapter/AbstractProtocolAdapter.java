@@ -10,6 +10,7 @@ import com.whosly.gateway.adapter.protocol.FailoverBackendProvider;
 import com.whosly.gateway.adapter.protocol.GatewayRuntimeMetrics;
 import com.whosly.gateway.adapter.protocol.ProtocolSession;
 import com.whosly.gateway.adapter.protocol.RewriteLimits;
+import com.whosly.gateway.adapter.protocol.VirtualThreadExecutors;
 import com.whosly.gateway.masking.MaskingEngine;
 import com.whosly.gateway.parser.SqlParser;
 import com.whosly.gateway.service.DatabaseConnectionService;
@@ -271,26 +272,14 @@ public abstract class AbstractProtocolAdapter implements ProtocolAdapter {
     }
 
     private ExecutorService createConnectionExecutor() {
+        String prefix = "db-gateway-" + protocolName + "-conn-";
         if (virtualThreadsEnabled) {
-            try {
-                return Executors.newThreadPerTaskExecutor(
-                        namedVirtualThreadFactory("db-gateway-" + protocolName + "-conn-"));
-            } catch (Throwable unsupported) {
-                log.warn("Virtual threads unavailable, falling back to fixed pool: {}", unsupported.toString());
-            }
+            return VirtualThreadExecutors.virtualOrFallback(true, prefix, () -> {
+                log.warn("Virtual threads unavailable, falling back to fixed pool");
+                return Executors.newFixedThreadPool(maxConnections, namedThreadFactory(prefix));
+            });
         }
-        return Executors.newFixedThreadPool(maxConnections,
-                namedThreadFactory("db-gateway-" + protocolName + "-conn-"));
-    }
-
-    private static ThreadFactory namedVirtualThreadFactory(String prefix) {
-        AtomicInteger counter = new AtomicInteger();
-        ThreadFactory virtualFactory = Thread.ofVirtual().factory();
-        return runnable -> {
-            Thread thread = virtualFactory.newThread(runnable);
-            thread.setName(prefix + counter.incrementAndGet());
-            return thread;
-        };
+        return Executors.newFixedThreadPool(maxConnections, namedThreadFactory(prefix));
     }
 
     private static ThreadFactory namedThreadFactory(String prefix) {

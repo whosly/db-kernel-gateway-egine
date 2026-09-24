@@ -3,6 +3,8 @@
 本文档定义数据库网关在实现数据库 wire protocol 时必须遵守的规则。
 它描述的是数据库协议层规则，不是当前代码已经实现了什么。
 
+本分支实际实现进度与缺口见 [`../STATUS_AND_GAPS.md`](../STATUS_AND_GAPS.md)。
+
 当前第一阶段目标是实现 MySQL Client/Server Protocol 和 PostgreSQL
 Frontend/Backend Protocol 的完整透明代理。认证、TLS/SSL/GSS、压缩、
 prepared statement、binary protocol、Parse/Bind/Execute、COPY/LOAD DATA 等真实
