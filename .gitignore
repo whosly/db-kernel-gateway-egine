@@ -59,7 +59,8 @@ replay_pid*
 .data/
 
 # Audit trail runtime data: contains observed statements, never commit it.
-audit/
+# Only the runtime spool directory at repo root (not src/.../audit/ sources).
+/audit/
 *.spool
 
 # NOTE: docs/ is intentionally NOT ignored.
