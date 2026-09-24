@@ -53,10 +53,6 @@ public class MySqlProtocolAdapter extends AbstractProtocolAdapter {
         MySQLSession session = new MySQLSession(sessionId);
         registerSession(session);
 
-        /*
-         * When the target is unreachable the gateway answers with a native MySQL
-         * ERR_Packet (rule 2.8) before closing, instead of a bare TCP reset.
-         */
         BackendProvider backendProvider = createBackendProvider();
         Socket targetSocket;
         try {
@@ -81,14 +77,10 @@ public class MySqlProtocolAdapter extends AbstractProtocolAdapter {
                     databaseTrafficObserver,
                     databaseRiskPolicy,
                     session,
-                    new StatementClassifier(sqlParser));
-            /*
-             * Result-set masking shares the extractor with the observer: the column
-             * metadata and the result-set phase are already tracked there, and a second
-             * state machine would inevitably drift from it (rule 2.10). With no rule
-             * registered the engine is inactive and the pipeline is what it always was,
-             * so the rewriting path costs nothing until a deployment asks for it.
-             */
+                    new StatementClassifier(sqlParser),
+                    extractor::isOpaqueTunnel,
+                    isRequireCleartextInspection(),
+                    getRuntimeMetrics());
             MessagePipeline pipeline = maskingEngine.isActive()
                     ? MessagePipeline.of(trafficInspector,
                             new MySQLResultSetMaskingInterceptor(extractor, maskingEngine))
@@ -99,7 +91,6 @@ public class MySqlProtocolAdapter extends AbstractProtocolAdapter {
             log.warn("MySQL proxy session {} closed: {}", sessionId, e.getMessage());
         } finally {
             session.close();
-            // Let the audit sink release the sequence counter of this session.
             databaseTrafficObserver.onSessionClosed(sessionId);
             unregisterSession(session);
             backendProvider.release(targetSocket);
@@ -126,7 +117,6 @@ public class MySqlProtocolAdapter extends AbstractProtocolAdapter {
         try {
             socket.close();
         } catch (IOException ignored) {
-            // Already closing.
         }
     }
 }
