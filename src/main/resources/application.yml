@@ -1,4 +1,4 @@
-﻿server:
+server:
   port: 0  # 使用随机端口
 
 spring:
@@ -24,55 +24,39 @@ gateway:
   idle-timeout-seconds: ${GATEWAY_IDLE_TIMEOUT_SECONDS:0}
   # 客户端地址白名单，逗号分隔的 CIDR（如 10.0.0.0/8,127.0.0.1）；留空表示不限制
   allowed-client-cidrs: ${GATEWAY_ALLOWED_CLIENT_CIDRS:}
+  backend-endpoints: ${GATEWAY_BACKEND_ENDPOINTS:}
+  virtual-threads: ${GATEWAY_VIRTUAL_THREADS:true}
+  # require-cleartext-inspection: true
 
   # 审计留痕。默认关闭：启用后每条被观测的语句先落本地 spool 再转发，
   # 落盘失败按 fail-closed 拒绝该操作（规则 8.5）。
   audit:
     enabled: ${GATEWAY_AUDIT_ENABLED:false}
-    # spool 目录与文件名。生产环境必须放在独立磁盘，避免与被代理库争 IO。
     spool-dir: ${GATEWAY_AUDIT_SPOOL_DIR:./audit}
     file-name: ${GATEWAY_AUDIT_FILE_NAME:audit.spool}
-    # strict：落盘后才放行；window：入队即放行（崩溃最多丢一个未刷盘批次）
     durability: ${GATEWAY_AUDIT_DURABILITY:strict}
-    # 组提交：一批最多多少条、最多等待多少毫秒再刷盘
     batch-size: ${GATEWAY_AUDIT_BATCH_SIZE:32}
     max-batch-delay-millis: ${GATEWAY_AUDIT_MAX_BATCH_DELAY_MILLIS:1}
-    # 队列与磁盘上界：触顶一律拒绝，绝不静默丢弃
     max-pending-records: ${GATEWAY_AUDIT_MAX_PENDING_RECORDS:4096}
     max-enqueue-wait-millis: ${GATEWAY_AUDIT_MAX_ENQUEUE_WAIT_MILLIS:10}
     max-spool-bytes: ${GATEWAY_AUDIT_MAX_SPOOL_BYTES:1073741824}
-    # 段大小：超过即轮转；已投递的段可整段删除，因此这是"磁盘能回收"的前提
     segment-bytes: ${GATEWAY_AUDIT_SEGMENT_BYTES:67108864}
-    # 审计存储是否先脱敏：true=落盘的是脱敏后语句（默认）；false=保存原始语句
     mask-statements: ${GATEWAY_AUDIT_MASK_STATEMENTS:true}
-    # 按语句分级：写语句强制严格，只有被证明只读的语句才走窗口档
     grade-writes: ${GATEWAY_AUDIT_GRADE_WRITES:true}
-    # 最终 sink：spool（本地文件即最终态）| jdbc（搬运到独立数据库）
     destination: ${GATEWAY_AUDIT_DESTINATION:spool}
-    # 搬运（destination=jdbc 时生效）：多久搬一次、一批最多搬多少条
     ship-interval-millis: ${GATEWAY_AUDIT_SHIP_INTERVAL_MILLIS:1000}
     ship-batch-size: ${GATEWAY_AUDIT_SHIP_BATCH_SIZE:500}
     jdbc:
-      # 必须是独立于被代理库的数据源：规则 8.5 禁止把审计写回被代理的目标库
       url: ${GATEWAY_AUDIT_JDBC_URL:}
       username: ${GATEWAY_AUDIT_JDBC_USERNAME:}
       password: ${GATEWAY_AUDIT_JDBC_PASSWORD:}
-      # 表必须建 PRIMARY KEY (session_id, record_sequence)，见 docs/sql/audit-sink-schema.sql
       table: ${GATEWAY_AUDIT_JDBC_TABLE:gateway_audit_record}
 
-  # SQL 改写 / 结果集脱敏的持有边界。
-  # 默认不启用任何脱敏规则；未命中改写的消息始终立即转发，
-  # 只有需要按整条消息改写时才会持有半条消息，并在超限时拒绝而不是原样放行。
   rewrite:
-    # 单条协议消息的最大字节数，超过即拒绝（默认 1 MiB）
     max-message-bytes: ${GATEWAY_REWRITE_MAX_MESSAGE_BYTES:1048576}
-    # 半条消息的最长持有毫秒数，超过即拒绝（默认 1 秒）
     max-hold-millis: ${GATEWAY_REWRITE_MAX_HOLD_MILLIS:1000}
 
-  # 目标数据库配置
   target:
-    # 真实目标库凭据由环境变量或本地测试配置注入，避免写入可提交配置。
-    # 注意：透明代理使用客户端自身凭据连接目标库，此处仅用于展示/运维信息。
     host: ${GATEWAY_TARGET_HOST:localhost}
     port: ${GATEWAY_TARGET_PORT:5432}
     username: ${GATEWAY_TARGET_USERNAME:}
