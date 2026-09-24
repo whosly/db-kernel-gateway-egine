@@ -4,13 +4,18 @@ import com.whosly.gateway.adapter.ProtocolAdapter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.CommandLineRunner;
 import org.springframework.stereotype.Component;
 
 import java.util.Scanner;
 
 /**
- * Command Line Interface implementation.
+ * Optional interactive CLI. Default is non-interactive: the gateway auto-starts
+ * via {@link Application} lifecycle and does not block on {@code System.in}
+ * (safe for {@code spring-boot:run} / service main).
+ *
+ * <p>Enable the stdin loop with {@code gateway.cli.interactive=true}.</p>
  *
  * @author yueny09@163.com codealy
  * @since 2026-07-02
@@ -22,13 +27,32 @@ public class CommandLineInterface implements CommandLineRunner {
 
     private final ProtocolAdapter mySqlProtocolAdapter;
 
+    /**
+     * When false (default), skip the interactive stdin loop so process start
+     * does not require a TTY. Gateway still starts from {@link Application}.
+     */
+    @Value("${gateway.cli.interactive:false}")
+    private boolean interactiveCli;
+
     @Autowired
     public CommandLineInterface(ProtocolAdapter mySqlProtocolAdapter) {
         this.mySqlProtocolAdapter = mySqlProtocolAdapter;
     }
 
+    /** Package-visible for unit tests without Spring. */
+    void setInteractiveCli(boolean interactiveCli) {
+        this.interactiveCli = interactiveCli;
+    }
+
     @Override
     public void run(String... args) throws Exception {
+        if (!interactiveCli) {
+            log.info("Interactive CLI disabled (gateway.cli.interactive=false). "
+                    + "Gateway auto-starts via Application; ops: GET /gateway/status, "
+                    + "GET /gateway/metrics, GET /actuator/gateway");
+            return;
+        }
+
         Scanner scanner = new Scanner(System.in);
         boolean running = true;
 
@@ -37,6 +61,10 @@ public class CommandLineInterface implements CommandLineRunner {
 
         while (running) {
             System.out.print("> ");
+            if (!scanner.hasNextLine()) {
+                log.info("stdin closed; leaving interactive CLI");
+                break;
+            }
             String command = scanner.nextLine().trim().toLowerCase();
 
             switch (command) {

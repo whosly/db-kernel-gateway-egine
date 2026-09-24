@@ -21,7 +21,11 @@ abstract class DatabaseGatewayIntegrationTestSupport {
 
     protected void requireIntegrationEnabled() {
         Assumptions.assumeTrue(CONFIG.isEnabled(),
-                "Integration tests are disabled. Enable them in integration-test-local.properties.");
+                "Integration tests skipped (not failed). Set integration.enabled=true in "
+                        + "src/test/resources/integration-test-local.properties (gitignored) "
+                        + "with reachable MySQL/PG. Default `mvn test` excludes *IntegrationTest; "
+                        + "`mvn -Pintegration-test test` without local props skips via assumeTrue. "
+                        + "See docs/OPS.md §集成测试.");
     }
 
     protected int freePort() throws Exception {

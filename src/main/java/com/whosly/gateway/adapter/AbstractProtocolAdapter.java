@@ -51,6 +51,13 @@ public abstract class AbstractProtocolAdapter implements ProtocolAdapter {
     protected ExecutorService executorService;
     private ExecutorService acceptorExecutor;
     protected SqlParser sqlParser;
+    /**
+     * Legacy JDBC helper placeholder — <b>unused on the wire path</b>.
+     * Relay uses {@link BackendProvider}; see {@link DatabaseConnectionService}.
+     *
+     * @deprecated Do not use for proxy sessions; retained for binary compatibility.
+     */
+    @Deprecated(since = "1.0.0", forRemoval = false)
     protected DatabaseConnectionService databaseConnectionService;
     protected DatabaseTrafficObserver databaseTrafficObserver = DatabaseTrafficObserver.noop();
     protected DatabaseRiskPolicy databaseRiskPolicy = DatabaseRiskPolicy.allowAll();

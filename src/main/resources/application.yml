@@ -34,8 +34,21 @@ gateway:
   # risk:
   #   denied-operations: ${GATEWAY_RISK_DENIED_OPERATIONS:}          # e.g. COM_QUIT,Drop
   #   denied-statement-keywords: ${GATEWAY_RISK_DENIED_KEYWORDS:}  # e.g. drop table,truncate
+  # Interactive stdin CLI (default false — non-blocking start for spring-boot:run / service)
+  cli:
+    interactive: ${GATEWAY_CLI_INTERACTIVE:false}
 
 logging:
   level:
     root: INFO
     com.whosly.gateway: INFO
+
+# Ops surface (P2-3 / P2-4): REST /gateway/* + Actuator /actuator/gateway
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,gateway
+  endpoint:
+    gateway:
+      enabled: true

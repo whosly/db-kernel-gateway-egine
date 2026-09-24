@@ -8,6 +8,7 @@ import com.whosly.gateway.adapter.protocol.ClientAddressPolicy;
 import com.whosly.gateway.adapter.protocol.CidrClientAddressPolicy;
 import com.whosly.gateway.adapter.protocol.DatabaseRiskPolicy;
 import com.whosly.gateway.adapter.protocol.DenyListDatabaseRiskPolicy;
+import com.whosly.gateway.adapter.protocol.GatewayRuntimeMetrics;
 import com.whosly.gateway.adapter.protocol.DatabaseTrafficObserver;
 import com.whosly.gateway.adapter.protocol.RewriteLimits;
 import com.whosly.gateway.audit.AuditDestination;
@@ -241,6 +242,12 @@ public class GatewayConfig implements DisposableBean {
         }
     }
 
+
+    @Bean
+    public GatewayRuntimeMetrics gatewayRuntimeMetrics() {
+        return new GatewayRuntimeMetrics();
+    }
+
     @Bean
     public ProtocolAdapter protocolAdapter() {
         switch (proxyDbType.toLowerCase()) {
@@ -287,6 +294,7 @@ public class GatewayConfig implements DisposableBean {
         adapter.setVirtualThreadsEnabled(virtualThreads);
         adapter.setBackendEndpoints(parseBackendEndpoints());
         adapter.setRequireCleartextInspection(resolveRequireCleartextInspection());
+        adapter.setRuntimeMetrics(gatewayRuntimeMetrics());
         try {
             adapter.setDatabaseTrafficObserver(databaseTrafficObserver());
         } catch (IOException e) {

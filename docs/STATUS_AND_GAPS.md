@@ -8,12 +8,12 @@
 
 | 项 | 现状 | 证据 |
 |---|---|---|
-| 非集成 `@Test`/`@ParameterizedTest` 注解数 | **351**（339 + P1 新增约 12） | `mvn test` Results；排除 `*IntegrationTest` |
-| 集成测试 | 14 条注解；默认 surefire **排除** `*IntegrationTest`；本机 `-Pintegration-test` **14/14** 绿（2026-09-24，Docker MySQL `:13308` + PG `:5432`） | `pom.xml` surefire excludes；`-Pintegration-test` 才跑 |
-| 本环境 `mvn test`（`JAVA_HOME`=JDK 17） | **BUILD SUCCESS：Tests run 351, Failures 0, Errors 0, Skipped 0** | 日志 `/workspace/gap-fix-p1/mvn-test.log`；VT 经反射，JDK 17 回退固定池 |
+| 非集成 `@Test`/`@ParameterizedTest` 注解数 | **357**（351 + P2 新增约 6） | `mvn test` Results；排除 `*IntegrationTest` |
+| 集成测试 | 14 条注解；默认 surefire **排除** `*IntegrationTest`；无 local props 时 `-Pintegration-test` **assumeTrue 跳过**；本机有库时可 14/14 绿 | `pom.xml` excludes；跳过策略见 `docs/OPS.md` / `integration-test.properties` |
+| 本环境 `mvn test`（`JAVA_HOME`=JDK 17） | **BUILD SUCCESS：Tests run 357, Failures 0, Errors 0, Skipped 0** | 日志 `/workspace/gap-fix-p2/mvn-test.log`；VT 经反射，JDK 17 回退固定池 |
 | `pom.xml` 编译目标 | `maven.compiler.source/target=17` | **保持 17**；不升到 21 |
 
-**结论**：编译目标保持 17；VT 仅在 JDK 21+ 运行期启用。当前 `mvn test` 为 **351** 全绿（P0 基线 339 + P1 增量）。见 P0 / P1。
+**结论**：编译目标保持 17；VT 仅在 JDK 21+ 运行期启用。当前 `mvn test` 为 **357** 全绿（P1 基线 351 + P2 增量）。见 P0 / P1 / P2。
 
 ## 2. 能力总览（按主题）
 
@@ -28,9 +28,9 @@
 | 多后端 | **partial** | 有序 failover + 失败端点冷却跳过；**无按库/用户/权重路由** |
 | Cancel | **done（设计如此）** | PG：识别+键索引关联，**不代发**（透明转发 CancelRequest）；MySQL：`COM_PROCESS_KILL` 透传 |
 | TLS 终止 / 明文强制 | **partial** | opaque tunnel 或 `require-cleartext-inspection` 拒绝；**无 TLS 终止** |
-| NIO / 事件驱动 | **missing** | 仍为阻塞流 + 线程/虚拟线程 per connection |
-| JDBC 旁路路径 | **missing/legacy** | `DatabaseConnectionService` 存在但 wire 路径未使用 |
-| 运维产品化 | **partial** | 内存 `GatewayRuntimeMetrics`；无 Actuator 暴露；CLI 阻塞 `System.in` |
+| NIO / 事件驱动 | **missing（刻意）** | 阻塞流 + 每连接线程/VT；**不以 NIO 重写为当前方向**（见 P2-1） |
+| JDBC 旁路路径 | **legacy（已标注）** | `DatabaseConnectionService` `@Deprecated`；wire 路径未使用 |
+| 运维产品化 | **partial（improved）** | 非交互默认启动；`/gateway/*` + `/actuator/gateway` 暴露内存计数器；交互 CLI 默认关 |
 
 ## 3. 配置键（以 `GatewayConfig` 绑定为准）
 
@@ -51,6 +51,7 @@ Spring 实际读取的键（`@Value`）与默认 `application.yml`、模板一�
 | `gateway.audit.*` | 见 README 审计表 | 默认 `enabled=false` |
 | `gateway.risk.denied-operations` | 空 | 逗号分隔操作名；空则不按操作拒绝 |
 | `gateway.risk.denied-statement-keywords` | 空 | 逗号分隔语句子串；空则不按关键字拒绝 |
+| `gateway.cli.interactive` | `false` | true 时才读 `System.in` CLI；默认非交互 |
 
 风控：`GatewayConfig` 调用 `setDatabaseRiskPolicy(DenyListDatabaseRiskPolicy.of(...))`；两份清单皆空时退回 `DatabaseRiskPolicy.allowAll()`（向后兼容）。
 
@@ -80,13 +81,13 @@ Spring 实际读取的键（`@Value`）与默认 `application.yml`、模板一�
 
 | ID | 项 | 状态 | 证据 | 建议下一步 |
 |---|---|---|---|---|
-| P2-1 | NIO / 少线程模型 | **missing** | `ServerSocket.accept` + `InputStream.read` 循环 | 评估虚拟线程是否足够；真 NIO 需重做 framing 边界 |
-| P2-2 | JDBC vs 协议代理分裂 | **partial** | `DatabaseConnectionService`（DriverManager）字段存在但 wire 路径未调用 | 删除或隔离为管理面工具；避免与透明代理语义混淆 |
-| P2-3 | HTTP 管控面 | **partial** | `GatewayController` / `CommandLineInterface` 启动代理；CLI 读 `System.in` | 非交互启动默认 `start`；Actuator 暴露 sessions/metrics |
-| P2-4 | Metrics 出口 | **partial** | `GatewayRuntimeMetrics` 计数器在内存 | Micrometer/Actuator 绑定；拒绝连接/failover/opaque 告警 |
-| P2-5 | 审计测试与运维手册 | **partial** | 实现在 `audit/*`；P0-3 单测已补；README 运维段落较长 | 运维手册可拆「开启清单 / 告警清单」；JDBC 真库验收仍缺 |
-| P2-6 | 集成测试在 CI 可复现 | **partial** | 依赖本机 `integration-test-local.properties` | Testcontainers 或文档化跳过策略 |
-| P2-7 | Oracle / SQL Server 等 | **missing** | 规则文档允许扩展；无 adapter | 不在本阶段范围 |
+| P2-1 | NIO / 少线程模型 | **missing（deferred）** | 仍 `ServerSocket.accept` + 阻塞读；并发模型选定为 **每连接线程 / 可选 VT**（`VirtualThreadExecutors`） | **不做 NIO 重写**；若 JDK 21+ VT 不足再开专项 |
+| P2-2 | JDBC vs 协议代理分裂 | **partial（improved）** | `DatabaseConnectionService` / adapter 字段 `@Deprecated` + javadoc；STATUS §6；wire 仍走 `BackendProvider` | 无调用方后可删类；勿接入 DuplexRelay |
+| P2-3 | HTTP 管控面 | **partial（improved）** | `Application` 默认 `start`；`gateway.cli.interactive=false` 时 CLI 不读 `System.in`；`GatewayController` REST `/gateway/status|metrics|start|stop` | 鉴权/HTTPS 终止仍未做 |
+| P2-4 | Metrics 出口 | **partial（improved）** | 共享 `GatewayRuntimeMetrics` bean；`GET /gateway/metrics` + Actuator `@Endpoint(id=gateway)`；单测覆盖 snapshot | 未接 Micrometer 远程；告警阈值见 `docs/OPS.md` |
+| P2-5 | 审计测试与运维手册 | **partial（improved）** | P0-3 单测已有；**`docs/OPS.md`** 开启清单 / 告警清单；README 运维段改为索引 | JDBC 审计真库验收仍缺 |
+| P2-6 | 集成测试在 CI 可复现 | **partial（improved）** | 跳过策略写入 `integration-test.properties` + OPS；`-Pintegration-test` 无 props → `assumeTrue` skip；`-Pintegration-testcontainers` **stub only** | 真 Testcontainers 接线另开；默认 `mvn test` 仍不需 Docker |
+| P2-7 | Oracle / SQL Server 等 | **missing（out of scope）** | 无 adapter | 本阶段不做 |
 
 
 ### 4.1 TLS / 明文强制（产品策略，P1-1）
@@ -123,12 +124,13 @@ Spring 实际读取的键（`@Value`）与默认 `application.yml`、模板一�
 | `require-cleartext-inspection` 拒绝路径 | `DatabaseTrafficInspector` | 有（P1-1） |
 | MySQL `COM_STMT_EXECUTE` 观测 | extractor | 有（P1-2） |
 | `ConfirmedReuseBackendPool` | helper | 有单测；未接线 |
-| 真库集成 + 脱敏 | 有 | 需 `-Pintegration-test` + 本地库 |
+| 真库集成 + 脱敏 | 有 | 需 `-Pintegration-test` + 本地库；无 props 则 assumeTrue 跳过（P2-6） |
+| `/gateway/*` + `/actuator/gateway` | 有 | `GatewayOpsSurfaceTest` + `CommandLineInterfaceTest`（非交互） |
 
 ## 6. JDBC 路径 vs 协议代理（说明）
 
 - **主路径**：客户端 wire → `AbstractProtocolAdapter` → `BackendProvider.acquire()` → `DuplexRelay` → 目标库。认证与结果由目标库完成。
-- **JDBC 服务**：`DatabaseConnectionService` 用 `DriverManager` 建连，**不参与**上述转发；属遗留/旁路，勿当作网关数据平面。
+- **JDBC 服务**：`DatabaseConnectionService` 用 `DriverManager` 建连，**不参与**上述转发；已 `@Deprecated`（P2-2），勿当作网关数据平面。
 - **审计 JDBC**：`gateway.audit.destination=jdbc` 只把审计记录搬到**独立**库（`JdbcAuditDestination`），与被代理库分离。
 
 ## 7. 维护

@@ -23,7 +23,7 @@
 
 | 项 | 本分支（`future/database-wire-protocol-foundation` / `a725050`） |
 |---|---|
-| 默认单元测试 | **326** 条全绿（JDK 17；`pom` 排除 `*IntegrationTest`） |
+| 默认单元测试 | **357** 条全绿（JDK 17；`pom` 排除 `*IntegrationTest`；以 STATUS §1 为准） |
 | 真库集成 `-Pintegration-test` | **14 / 14** 全绿（2026-09-24，本地 Docker MySQL `:13308` + PostgreSQL `:5432`） |
 | JDK / 编译 | `pom` 目标 **17**；虚拟线程经 `VirtualThreadExecutors` **反射**在 JDK 21+ 启用，JDK 17 回退平台线程池（STATUS P0-1） |
 | 核心数据路径 | 透明代理、查询/结果、预处理、错误透传、脱敏 happy path、PG `COPY` — **已在集成中 live-proven** |
@@ -56,15 +56,16 @@
 | PG `COPY` 流转发 | **已实现** | 集成 live-proven |
 | 结果集脱敏（happy path） | **已接线·默认关** | 无 `MaskingRule` 时逐字节透明；有规则时 fail-closed 改写；文本/常见二进制 happy path 集成 live-proven |
 | 结果集脱敏（类型边界） | **部分** | decimal/时间/`geometry`/未知类型等非空改写常拒绝；MySQL `bit` 与 PG 整数/bool/浮点二进制可改写；见 STATUS §4.2 |
-| 审计 spool / JDBC 搬运 | **已接线·默认关** | fail-closed；**专用单元/验收测试仍缺**（STATUS P0-3）——勿假定存在 `AuditTrailAcceptanceTest` |
+| 审计 spool / JDBC 搬运 | **已接线·默认关** | fail-closed；P0-3 专用单测已补；真库 JDBC 验收仍属集成 |
 | 连接上限 / CIDR / idle | **已实现** | `max-connections`、`allowed-client-cidrs`、`idle-timeout-seconds` |
 | 后端 failover 列表 | **部分** | `backend-endpoints` **仅顺序 failover**；无按库/用户/权重路由 |
 | PG Cancel | **部分** | `CancelRequest` 与 `BackendKeyData` **仅关联索引**；**不代发** cancel；MySQL `COM_PROCESS_KILL` 透传 |
 | 风控策略 | **部分** | `DenyListDatabaseRiskPolicy` 可配置拒绝清单；空配置默认 `allowAll()` |
 | TLS / 压缩 | **部分** | 接受后变 opaque tunnel；可选 `require-cleartext-inspection` 拒绝；**未做 TLS 终止 / 产品化** |
 | NIO 事件驱动 | **未实现** | 阻塞 socket + 每连接线程（可选虚拟线程） |
-| 连接池化 | **未实现** | `SessionSnapshot` / 脏度已预留 |
-| Actuator / Micrometer 出口 | **未实现** | 仅有内存 `GatewayRuntimeMetrics` |
+| 连接池化 | **部分（helper）** | `ConfirmedReuseBackendPool` 有单测，**未**接入 adapter |
+| Actuator / HTTP 指标出口 | **已接线·内存计数** | `/gateway/metrics` + `/actuator/gateway`；无远程 Micrometer |
+| 非交互启动 | **已实现** | `Application` 自动 start；`gateway.cli.interactive` 默认 false |
 
 > 主流代理在数据平面上也不靠「跨线程共享可变协议状态」保证正确——本仓库同样让每条连接的协议状态在任一时刻只属于一个执行体。
 
@@ -179,7 +180,7 @@ psql client -> gateway:35433 -> target postgresql (:5432 等)
 对照 commit：`a725050`（或本仓库当前 HEAD）。
 
 ```bash
-# 默认：非集成单元测试（326）
+# 默认：非集成单元测试（见 STATUS §1 计数）
 mvn test
 
 # 真库集成（需本地 Docker / 库 + 本地属性文件）
@@ -187,6 +188,7 @@ mvn -Pintegration-test test
 ```
 
 集成连接信息放在 **`src/test/resources/integration-test-local.properties`**（已 gitignore，**勿提交密码**）。  
+无 local props 时 `-Pintegration-test` **跳过**（`assumeTrue`），不硬失败——见 [`docs/OPS.md`](docs/OPS.md)。  
 示例端口（无密钥）：MySQL host 端口 `13308`，PostgreSQL `5432`。
 
 集成覆盖（2026-09-24 本机验证 **14/14**）：
@@ -196,7 +198,7 @@ mvn -Pintegration-test test
 - PG：`COPY` 流
 - 结果集脱敏 happy path（文本/二进制/置 NULL/固定值）与无规则透明对照
 
-**审计子系统尚无专用验收测试类**（STATUS P0-3）；以 `src/test` 目录为准，勿依赖已删除或从未合入的类名。
+审计专用单测见 `src/test/.../audit/`（P0-3）；真库 JDBC 验收仍属集成范围。
 
 提交前：`mvn clean test` 必须在本机 JDK 17 上全绿。
 
@@ -219,7 +221,7 @@ mvn -q -DskipTests package
 
 # 2) 单元基线
 mvn -q test
-# 期望：Tests run: 326, Failures: 0, Errors: 0
+# 期望：Failures: 0, Errors: 0（计数见 STATUS）
 
 # 3) 真库集成（需 Docker MySQL:13308 + PG:5432 与 integration-test-local.properties）
 mvn -Pintegration-test test
@@ -258,15 +260,11 @@ mvn -Pintegration-test test
 | `ship-interval-millis` / `ship-batch-size` | `1000` / `500` | JDBC 搬运 |
 | `jdbc.url` / `username` / `password` / `table` | 空 / `gateway_audit_record` | 须独立于被代理库；主键见 `docs/sql/audit-sink-schema.sql` |
 
-### 运维要点（摘要）
+### 运维要点
 
-- 监控 spool 熔断（I/O 失败后拒绝写入）。
-- 严格档延迟≈一次 fsync；spool 与目标库 WAL 分盘。
-- 配额触顶即拒绝；`destination=jdbc` 时按目的端最长停机定容量。
-- 只归档/删除检查点之前的段；活动段勿动。
-- 优雅停机刷完已接收记录；`audit/`、`*.spool` 已在 `.gitignore`。
+完整 **开启清单 / 告警清单 / 集成跳过策略** 见 **[`docs/OPS.md`](docs/OPS.md)**（P2-5）。
 
-`destination=jdbc`：至少一次投递 + 目的端主键去重收敛为恰好一次；检查点仅在整批成功后推进。建表脚本：`docs/sql/audit-sink-schema.sql`。
+摘要：默认非交互启动；`GET /gateway/status`、`GET /gateway/metrics`、`GET /actuator/gateway` 看运行态与内存计数；审计 spool 熔断与配额见 OPS 告警表。`destination=jdbc` 建表：`docs/sql/audit-sink-schema.sql`。
 
 ### 脱敏开关
 

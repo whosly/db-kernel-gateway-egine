@@ -195,6 +195,17 @@
                 </plugins>
             </build>
         </profile>
+
+        <!-- P2-6 stub: reserved for future Testcontainers-backed integration.
+             Not wired — does not pull Docker deps or change default surefire.
+             Use -Pintegration-test + integration-test-local.properties for real DBs.
+             Without local props, IntegrationTest classes assumeTrue-skip (not fail). -->
+        <profile>
+            <id>integration-testcontainers</id>
+            <properties>
+                <integration.testcontainers.stub>true</integration.testcontainers.stub>
+            </properties>
+        </profile>
     </profiles>
 
 </project>

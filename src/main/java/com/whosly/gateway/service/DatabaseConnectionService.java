@@ -9,11 +9,19 @@ import java.sql.DriverManager;
 import java.sql.SQLException;
 
 /**
- * Database Connection Service implementation.
+ * Legacy JDBC helper that opens connections via {@link DriverManager}.
  *
+ * <p><b>Not part of the wire-proxy data plane.</b> Transparent MySQL/PG forwarding
+ * uses {@code BackendProvider} + sockets ({@code AbstractProtocolAdapter}), not
+ * this service. Kept only for possible management-side experiments; do not wire
+ * it into session relay / DuplexRelay paths.</p>
+ *
+ * @deprecated Prefer the protocol adapter + {@code BackendProvider}. Removal
+ *     candidates once no callers remain outside the adapter field placeholder.
  * @author yueny09@163.com codealy
  * @since 2026-07-02
  */
+@Deprecated(since = "1.0.0", forRemoval = false)
 @Service
 public class DatabaseConnectionService {
 
@@ -21,16 +29,18 @@ public class DatabaseConnectionService {
 
     /**
      * Connect to a database using the provided credentials.
-     * 
+     *
      * @param url the database URL
      * @param username the database username
      * @param password the database password
      * @return a database connection
      * @throws SQLException if connection fails
+     * @deprecated Not used by the wire path; see class javadoc.
      */
+    @Deprecated(since = "1.0.0", forRemoval = false)
     public Connection connectToDatabase(String url, String username, String password) throws SQLException {
         log.info("Connecting to database: {}", url);
-        
+
         try {
             Connection connection = DriverManager.getConnection(url, username, password);
             log.info("Successfully connected to database: {}", url);
@@ -40,12 +50,14 @@ public class DatabaseConnectionService {
             throw e;
         }
     }
-    
+
     /**
      * Close a database connection.
-     * 
+     *
      * @param connection the connection to close
+     * @deprecated Not used by the wire path; see class javadoc.
      */
+    @Deprecated(since = "1.0.0", forRemoval = false)
     public void closeConnection(Connection connection) {
         if (connection != null) {
             try {
