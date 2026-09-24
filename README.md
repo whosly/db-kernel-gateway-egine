@@ -373,10 +373,11 @@ mvn -Pintegration-test test
 |---|---|
 | UI | [http://localhost:8080/console](http://localhost:8080/console)（`server.port` 可改） |
 | 类型目录 API | `GET /console/api/supported-databases` |
-| 实例 API | `GET/POST /console/api/instances`、`/instances/{id}/status|metrics|start|stop` |
+| 实例 API | `GET/POST /console/api/instances`（`?status=&dbType=&q=`）；`PUT /instances/{id}`；`/status|metrics|start|stop`；`POST …/clone`；`POST …/import`；`POST …/bulk` |
 | 会话 | `GET …/instances/{id}/sessions`；`DELETE …/sessions/{connectionId}`（关客户端腿） |
 | 健康探测 | `POST|GET …/instances/{id}/health-check`（TCP + 可选 JDBC，~3s） |
-| 导出 | `GET …/instances/export`、`GET …/config/export`（无密码） |
+| 导出 / 导入 | `GET …/instances/export`、`GET …/config/export`（无密码）；`POST …/instances/import` |
+| SQL 工作台 | `POST …/instances/{id}/sql/execute`（JDBC 直连目标库；非经代理口；单语句 + 风控） |
 | 最近语句 | `GET …/instances/{id}/recent-statements`（内存环，重启丢失） |
 | 脱敏规则 API | `GET/POST/PUT/DELETE /console/api/instances/{id}/masking-rules`（协议无关） |
 | 列提示 | `GET /console/api/instances/{id}/schema/columns?table=`（JDBC metadata；失败 502） |
@@ -387,7 +388,7 @@ mvn -Pintegration-test test
 | 连接池 | 实例 `metrics`/`status` 含 `pool.{enabled,idleCount,maxIdle}` |
 | 控制面加密 | `gateway.console.secret-key-base64`（32 字节 AES Base64）→ 密码/密钥 `enc:v1:`；缺省实验室明文 |
 | 可选 API Token | `gateway.console.api-token`（读写）；`gateway.console.read-token`（仅 GET）；`Authorization: Bearer` 或 `X-Console-Token` |
-| 设计 | [`docs/CONSOLE_ARCHITECTURE.md`](docs/CONSOLE_ARCHITECTURE.md) §11–§14 · [`CONSOLE_DESIGN.md`](docs/CONSOLE_DESIGN.md) |
+| 设计 | [`docs/CONSOLE_ARCHITECTURE.md`](docs/CONSOLE_ARCHITECTURE.md) §11–§15 · [`CONSOLE_DESIGN.md`](docs/CONSOLE_DESIGN.md) |
 
 一等实体是 **网关实例**（监听端口 + `dbType` 标签），不是按 MySQL/PG 分拆的控制台。  
 类型目录（`gateway.catalog`）与实例注册表（`gateway.instances`）分离。  

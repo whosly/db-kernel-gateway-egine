@@ -3,6 +3,7 @@ import OverviewView from '../views/OverviewView.vue'
 import InstancesView from '../views/InstancesView.vue'
 import CatalogView from '../views/CatalogView.vue'
 import OpsView from '../views/OpsView.vue'
+import SqlWorkspaceView from '../views/SqlWorkspaceView.vue'
 
 export const router = createRouter({
   history: createWebHistory('/console/'),
@@ -11,5 +12,6 @@ export const router = createRouter({
     { path: '/instances', name: 'instances', component: InstancesView, meta: { title: '网关实例' } },
     { path: '/catalog', name: 'catalog', component: CatalogView, meta: { title: '类型目录' } },
     { path: '/ops', name: 'ops', component: OpsView, meta: { title: '运维 / 安全' } },
+    { path: '/sql', name: 'sql', component: SqlWorkspaceView, meta: { title: 'SQL 工作台' } },
   ],
 })

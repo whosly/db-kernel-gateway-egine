@@ -1,22 +1,33 @@
 import { apiDelete, apiGet, apiPost, apiPut } from './client'
 import type {
   ActionResult,
+  BulkResult,
   CatalogEntry,
+  CloneInstancePayload,
   CreateInstancePayload,
   GatewayInstance,
+  ImportInstancesPayload,
   InstancesResponse,
   MaskingRule,
   MaskingRulePayload,
   MaskingRulesResponse,
   OverviewResponse,
+  SqlExecutePayload,
+  SqlExecuteResult,
+  UpdateInstancePayload,
 } from './types'
 
 export function getOverview() {
   return apiGet<OverviewResponse>('/overview')
 }
 
-export function listInstances() {
-  return apiGet<InstancesResponse>('/instances')
+export function listInstances(params?: { status?: string; dbType?: string; q?: string }) {
+  const q = new URLSearchParams()
+  if (params?.status) q.set('status', params.status)
+  if (params?.dbType) q.set('dbType', params.dbType)
+  if (params?.q) q.set('q', params.q)
+  const qs = q.toString()
+  return apiGet<InstancesResponse>(`/instances${qs ? `?${qs}` : ''}`)
 }
 
 export function getInstance(id: string) {
@@ -47,6 +58,37 @@ export function createInstance(payload: CreateInstancePayload) {
 export function deleteInstance(id: string) {
   return apiDelete<ActionResult>(`/instances/${encodeURIComponent(id)}`)
 }
+
+export function updateInstance(id: string, payload: UpdateInstancePayload) {
+  return apiPut<GatewayInstance>(`/instances/${encodeURIComponent(id)}`, payload)
+}
+
+export function cloneInstance(id: string, payload: CloneInstancePayload = {}) {
+  return apiPost<GatewayInstance>(`/instances/${encodeURIComponent(id)}/clone`, payload)
+}
+
+export function importInstances(payload: ImportInstancesPayload) {
+  return apiPost<{
+    ok: boolean
+    created: number
+    skipped: number
+    failed: number
+    message?: string
+    results?: unknown[]
+  }>('/instances/import', payload)
+}
+
+export function bulkInstances(action: 'start' | 'stop', ids: string[]) {
+  return apiPost<BulkResult>('/instances/bulk', { action, ids })
+}
+
+export function executeSql(instanceId: string, payload: SqlExecutePayload) {
+  return apiPost<SqlExecuteResult>(
+    `/instances/${encodeURIComponent(instanceId)}/sql/execute`,
+    payload,
+  )
+}
+
 
 export function listSupportedDatabases() {
   return apiGet<{ databases: CatalogEntry[] }>('/supported-databases')

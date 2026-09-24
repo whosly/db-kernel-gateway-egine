@@ -322,6 +322,7 @@ build: { outDir: 'dist', emptyOutDir: true }
 | **C** | 完整鉴权 / SSO | 规划；**C partial** 见 §14（审计可见性 + 可选 read-token） |
 | **D** | 可选独立前端部署（CDN + API 网关）；BFF | 规划 |
 | **E** | 可观测图表（时序）；接 Micrometer | **E lite** 见 §14（进程内 timeseries；外部 Prometheus 非必需） |
+| **管控台完备 + SQL 工作台** | 编辑/克隆/导入/筛选/批量 + SQL v1 | ✅ 见 §15（Prometheus 本轮不做） |
 
 每阶段仍遵守 C1–C6；前端可替换，**API 版本**用文档章节号管理（现为 **契约 v1**）。
 
@@ -759,3 +760,115 @@ GET /console/api/audit/status
 - [x] STATUS P2-3/P2-4 + README 同步；`mvn test` + `npm run build` 绿
 
 **结论：设计可通过 → 进入 §14 实现。**
+
+
+## 15. 管控台自身完善 · 实例编辑 / 导入 / 克隆 / 筛选 + SQL 工作台
+
+> 本轮焦点：**管控台控制面完备**（对标 MaxGUI / ProxySQL web 的实例生命周期），**不含**外部 Prometheus / Micrometer scrape / Grafana。
+> 进程内 `metrics/history`（§14 E lite）保留；外部指标出口明确 **out of this round**。
+
+### 15.1 目标总览
+
+| 能力 | 状态约定 | 说明 |
+|---|---|---|
+| 实例编辑 `PUT` | ✅ 本轮 | 仅 `source=console`；YAML 实例 400；不可改 `dbType`/`id` |
+| 克隆 `POST …/clone` | ✅ 本轮 | 复制为新管控台实例；可带脱敏规则；密码密文在 H2 内复制、API 不回显 |
+| 导入 `POST …/import` | ✅ 本轮 | 对齐 export shape；默认不接受/忽略密码字段 |
+| 列表筛选 | ✅ 本轮 | `GET /instances?status=&dbType=&q=` 服务端过滤 |
+| 批量启停 | ✅ 本轮 | `POST /instances/bulk` per-id 结果 |
+| SQL 工作台 | ✅ 本轮 | `POST …/sql/execute`；挂网关实例；**JDBC 直连目标库**（非经代理监听口） |
+| Prometheus 出口 | ❌ 本轮不做 | 见 §14.3 / STATUS P2-4 |
+
+### 15.2 实例更新（PUT）
+
+| 项 | 约定 |
+|---|---|
+| 路径 | `PUT /console/api/instances/{id}` |
+| 可写字段 | `name`、`listenHost`、`listenPort`、`targetHost`、`targetPort`、`targetDatabase`、`targetUsername`、`targetPassword`（可选；省略/空串=保留原密码）、`enabled` |
+| 不可改 | `id`、`dbType`（需重建：删后建或克隆后改目标） |
+| 来源 | 仅 `source=console`；`source=config` → **400**「YAML/配置实例不可编辑；请先克隆为管控台实例」 |
+| 端口冲突 | 与其它 **enabled** 实例 `listenPort` 冲突 → 400（排除自身） |
+| 运行中变更 | **停听 → 按新配置重建 adapter → 同 id 再启动**（listen/target/凭据/enabled 影响绑定的字段）；仅改展示名等元数据也走同一替换路径以保持简单。不采用「运行中 409 拒绝」 |
+| 密码 | 响应仅 `passwordConfigured`；永不回显明文 |
+| 审计 | `instance.update` |
+
+### 15.3 克隆
+
+| 项 | 约定 |
+|---|---|
+| 路径 | `POST /console/api/instances/{id}/clone` |
+| Body | 可选 `{ id?, name?, listenPort?, copyMaskingRules?: true }` |
+| 行为 | 任意来源均可克隆为 **新** `source=console` 实例；配置文件原件保留 |
+| 密码 | 从 H2 解密复制（console 源）或进程目标密码（config 源）写入新行密文；响应不回显 |
+| 端口 | `listenPort` 省略则自动选空闲端口（自源端口+1 起探测） |
+| 脱敏 | 默认复制 masking rules（新 rule id） |
+| 审计 | `instance.clone` |
+
+### 15.4 导入
+
+| 项 | 约定 |
+|---|---|
+| 路径 | `POST /console/api/instances/import` |
+| Body | `{ instances: [...], replace?: false, skipExisting?: true }`；`instances[]` 对齐 `GET …/instances/export` |
+| 密码 | **忽略**导入 JSON 中的任何 password 字段；新建 `passwordConfigured=false`，需用户随后编辑写入 |
+| 冲突 | `replace=true`：覆盖已有 **console** 同 id（不可覆盖 config id）；`skipExisting=true`（默认）：跳过冲突；二者皆 false：遇冲突 400 |
+| 校验 | `dbType` 须 creatable；`listenPort` 冲突拒绝该条 |
+| 审计 | `instance.import`（detail 含 created/skipped/failed 计数） |
+
+### 15.5 列表筛选与批量
+
+| 项 | 约定 |
+|---|---|
+| 筛选 | `GET /console/api/instances?status=&dbType=&q=`；`q` 匹配 id/name/listenHost/targetHost（含）；`byStatus`/`count` 基于过滤后集合 |
+| 批量 | `POST /console/api/instances/bulk` body `{ action: "start"\|"stop", ids: string[] }` → `{ results: [{id, ok, message}], okCount, failCount }`；config 实例允许 stop；start 须已 bound |
+
+### 15.6 SQL 工作台（协议无关）
+
+| 项 | 约定 |
+|---|---|
+| 定位 | 一等能力挂在 **Gateway Instance**；不是按品牌分叉的页面 |
+| 执行路径（v1） | **服务端 JDBC 直连该实例存储的目标凭据**（与 schema/columns 同源）。**不是**经代理 `listenPort` 的协议客户端。文档诚实声明；后续可选「经代理口执行以验证脱敏」 |
+| 路径 | `POST /console/api/instances/{id}/sql/execute` |
+| Body | `{ sql, maxRows?: 200 (cap 1000), timeoutMs?: 15000 (cap 60000) }` |
+| 响应 | `{ ok, columns, rows, rowCount, truncated, durationMs, message?, warnings? }` |
+| 单语句 | 仅允许单条语句；中间 `;` 拒绝（允许末尾分号） |
+| 风控 | 执行前对 SQL 文本走 `MutableDatabaseRiskPolicy`（operation=首关键字大写形态，statement=全文） |
+| 超时 | JDBC `Statement.setQueryTimeout`；超时取消 |
+| 安全 | 不记/不回密码；单元格字符串截断（4KB）；审计 `sql.execute`（语句截断，可走 mask-statements 风格） |
+| 类型 | MySQL / PostgreSQL（及 h2 lab）；SQL Server 无驱动则 **400** 明确说明 |
+| 错误 | 无密码/不支持类型 → 400；连接失败 → 502；未知实例 → 400/404 风格与现网一致 |
+| UI | 顶栏「SQL 工作台」路由 `/sql`；实例选择器 + 编辑区 + 运行 + 结果表；中文文案 |
+
+### 15.7 REST 契约追加
+
+| 方法 | 路径 | 要点 |
+|---|---|---|
+| PUT | `/instances/{id}` | 更新 console 实例 |
+| POST | `/instances/{id}/clone` | 克隆为新 console 实例 |
+| POST | `/instances/import` | 批量导入 |
+| GET | `/instances?status=&dbType=&q=` | 筛选 |
+| POST | `/instances/bulk` | 批量 start/stop |
+| POST | `/instances/{id}/sql/execute` | SQL 工作台 |
+
+### 15.8 演进表更新
+
+| Phase | 内容 | 状态 |
+|---|---|---|
+| A–E lite / 风控 | 见 §11–§14 | ✅ |
+| **管控台完备（本轮）** | 编辑 · 克隆 · 导入 · 筛选 · 批量 | ✅ |
+| **SQL 工作台 v1（本轮）** | JDBC 目标库执行 + 风控 | ✅ |
+| Prometheus / SSO / IDE | 外部指标 · 完整鉴权 · 完整 SQL IDE | 规划（本轮明确不做） |
+
+### 15.9 自检清单（作者）
+
+- [x] 无品牌 API 路径；实例一等；SQL 挂实例
+- [x] PUT 拒绝 config 源；不可改 dbType/id
+- [x] 运行中更新：stop→rebind→start；端口冲突排除自身
+- [x] 密码永不回显；omit 保留；导入忽略密码
+- [x] 克隆复制 H2 密文；API 无明文
+- [x] SQL 单语句 + 风控 + 单元格截断 + 审计截断
+- [x] 文档标明 SQL v1 = JDBC 目标库，非代理口
+- [x] Prometheus / 外部 scrape **本轮不做**（写明）
+- [x] STATUS P2-3 + README API 表同步；`mvn test` + `npm run build` 绿
+
+**结论：设计可通过 → 进入 §15 实现。**

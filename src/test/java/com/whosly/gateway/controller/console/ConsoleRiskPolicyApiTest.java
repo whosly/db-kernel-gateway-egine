@@ -84,7 +84,7 @@ class ConsoleRiskPolicyApiTest {
 
         console = new ConsoleApiController(
                 catalog, registry, adapter, new GatewayRuntimeMetrics(), gatewayConfig,
-                audit, null, null, null, null, runtime, risk, null);
+                audit, null, null, null, null, runtime, risk, null, null);
     }
 
     @Test

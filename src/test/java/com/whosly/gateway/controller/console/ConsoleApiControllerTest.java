@@ -97,7 +97,7 @@ class ConsoleApiControllerTest {
 
     @Test
     void instancesAreFirstClassAndTypeAgnostic() {
-        Map<String, Object> body = console.listInstances();
+        Map<String, Object> body = console.listInstances(null, null, null);
         assertThat(body.get("count")).isEqualTo(2);
         @SuppressWarnings("unchecked")
         List<GatewayInstance> instances = (List<GatewayInstance>) body.get("instances");

@@ -75,6 +75,58 @@ export interface CreateInstancePayload {
   enabled?: boolean
 }
 
+export interface UpdateInstancePayload {
+  name?: string
+  listenHost?: string
+  listenPort?: number
+  targetHost?: string
+  targetPort?: number
+  targetDatabase?: string
+  targetUsername?: string
+  targetPassword?: string
+  enabled?: boolean
+}
+
+export interface CloneInstancePayload {
+  id?: string
+  name?: string
+  listenPort?: number
+  copyMaskingRules?: boolean
+}
+
+export interface ImportInstancesPayload {
+  instances: Record<string, unknown>[]
+  replace?: boolean
+  skipExisting?: boolean
+}
+
+export interface BulkResult {
+  action: string
+  results: { id: string; ok: boolean; message?: string }[]
+  okCount: number
+  failCount: number
+  ok: boolean
+}
+
+export interface SqlExecutePayload {
+  sql: string
+  maxRows?: number
+  timeoutMs?: number
+}
+
+export interface SqlExecuteResult {
+  ok: boolean
+  columns: string[]
+  rows: (string | number | boolean | null)[][]
+  rowCount: number
+  truncated: boolean
+  durationMs: number
+  message?: string
+  warnings?: string[]
+  note?: string
+  updateCount?: number
+}
+
 export type MaskingStrategy = 'null' | 'fixed' | 'partial' | 'hash' | 'encrypt'
 
 export interface MaskingRule {

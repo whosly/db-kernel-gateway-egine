@@ -23,6 +23,9 @@ import com.whosly.gateway.console.security.ConsoleAuditService;
 import com.whosly.gateway.console.security.ConsoleMaskingKeyService;
 import com.whosly.gateway.console.security.RiskPolicyService;
 import com.whosly.gateway.runtime.GatewayListenerRuntime.CreateInstanceRequest;
+import com.whosly.gateway.runtime.GatewayListenerRuntime.UpdateInstanceRequest;
+import com.whosly.gateway.runtime.GatewayListenerRuntime.CloneInstanceRequest;
+import com.whosly.gateway.console.sql.InstanceSqlExecuteService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -66,6 +69,7 @@ public class ConsoleApiController {
     private final GatewayListenerRuntime listenerRuntime;
     private final RiskPolicyService riskPolicyService;
     private final MetricsHistorySampler metricsHistorySampler;
+    private final InstanceSqlExecuteService sqlExecuteService;
 
     /** Test-friendly constructor (security extras optional). */
     public ConsoleApiController(SupportedDatabaseCatalog catalog,
@@ -74,7 +78,7 @@ public class ConsoleApiController {
                                 GatewayRuntimeMetrics runtimeMetrics,
                                 GatewayConfig gatewayConfig) {
         this(catalog, instanceRegistry, protocolAdapter, runtimeMetrics, gatewayConfig,
-                null, null, null, null, null, null, null, null);
+                null, null, null, null, null, null, null, null, null);
     }
 
     @Autowired
@@ -90,7 +94,8 @@ public class ConsoleApiController {
                                 @Autowired(required = false) RecentTrafficRing recentTrafficRing,
                                 @Autowired(required = false) GatewayListenerRuntime listenerRuntime,
                                 @Autowired(required = false) RiskPolicyService riskPolicyService,
-                                @Autowired(required = false) MetricsHistorySampler metricsHistorySampler) {
+                                @Autowired(required = false) MetricsHistorySampler metricsHistorySampler,
+                                @Autowired(required = false) InstanceSqlExecuteService sqlExecuteService) {
         this.catalog = catalog;
         this.instanceRegistry = instanceRegistry;
         this.protocolAdapter = protocolAdapter;
@@ -104,6 +109,7 @@ public class ConsoleApiController {
         this.listenerRuntime = listenerRuntime;
         this.riskPolicyService = riskPolicyService;
         this.metricsHistorySampler = metricsHistorySampler;
+        this.sqlExecuteService = sqlExecuteService;
     }
 
     @GetMapping("/supported-databases")
@@ -115,14 +121,45 @@ public class ConsoleApiController {
     }
 
     @GetMapping("/instances")
-    public Map<String, Object> listInstances() {
+    public Map<String, Object> listInstances(
+            @RequestParam(value = "status", required = false) String status,
+            @RequestParam(value = "dbType", required = false) String dbType,
+            @RequestParam(value = "q", required = false) String q) {
         List<GatewayInstance> instances = instanceRegistry.listInstances();
+        if (status != null && !status.isBlank()) {
+            String s = status.trim().toUpperCase();
+            instances = instances.stream()
+                    .filter(i -> i.status().name().equalsIgnoreCase(s))
+                    .collect(Collectors.toList());
+        }
+        if (dbType != null && !dbType.isBlank()) {
+            String t = dbType.trim().toLowerCase();
+            instances = instances.stream()
+                    .filter(i -> i.dbType() != null && i.dbType().equalsIgnoreCase(t))
+                    .collect(Collectors.toList());
+        }
+        if (q != null && !q.isBlank()) {
+            String needle = q.trim().toLowerCase();
+            instances = instances.stream().filter(i ->
+                    containsIgnore(i.id(), needle)
+                            || containsIgnore(i.name(), needle)
+                            || containsIgnore(i.listenHost(), needle)
+                            || containsIgnore(i.targetHost(), needle)
+            ).collect(Collectors.toList());
+        }
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("instances", instances);
         body.put("count", instances.size());
         body.put("byStatus", instances.stream()
                 .collect(Collectors.groupingBy(i -> i.status().name(), Collectors.counting())));
+        if (status != null && !status.isBlank()) body.put("statusFilter", status.trim());
+        if (dbType != null && !dbType.isBlank()) body.put("dbTypeFilter", dbType.trim());
+        if (q != null && !q.isBlank()) body.put("q", q.trim());
         return body;
+    }
+
+    private static boolean containsIgnore(String value, String needle) {
+        return value != null && value.toLowerCase().contains(needle);
     }
 
     @GetMapping("/instances/{id}")
@@ -197,6 +234,99 @@ public class ConsoleApiController {
             throw new IllegalArgumentException(String.valueOf(result.get("message")));
         }
         audit("instance.delete", id, ConsoleAuditService.detail("ok", true));
+        return result;
+    }
+
+    @PutMapping("/instances/{id}")
+    public GatewayInstance updateInstance(@PathVariable("id") String id,
+                                          @RequestBody UpdateInstanceBody body) {
+        if (body == null) {
+            throw new IllegalArgumentException("request body is required");
+        }
+        UpdateInstanceRequest request = new UpdateInstanceRequest(
+                body.name(),
+                body.listenHost(),
+                body.listenPort(),
+                body.targetHost(),
+                body.targetPort(),
+                body.targetDatabase(),
+                body.targetUsername(),
+                body.targetPassword(),
+                body.enabled());
+        GatewayInstance updated = instanceRegistry.update(id, request);
+        audit("instance.update", updated.id(), ConsoleAuditService.detail(
+                "listenPort", updated.listenPort(),
+                "passwordConfigured", updated.passwordConfigured(),
+                "enabled", updated.enabled()));
+        return updated;
+    }
+
+    @PostMapping("/instances/{id}/clone")
+    @ResponseStatus(HttpStatus.CREATED)
+    public GatewayInstance cloneInstance(@PathVariable("id") String id,
+                                         @RequestBody(required = false) CloneInstanceBody body) {
+        CloneInstanceRequest request = body == null
+                ? new CloneInstanceRequest(null, null, null, true)
+                : new CloneInstanceRequest(body.id(), body.name(), body.listenPort(),
+                body.copyMaskingRules() == null || body.copyMaskingRules());
+        GatewayInstance cloned = instanceRegistry.cloneInstance(id, request);
+        audit("instance.clone", cloned.id(), ConsoleAuditService.detail(
+                "from", id,
+                "listenPort", cloned.listenPort(),
+                "passwordConfigured", cloned.passwordConfigured()));
+        return cloned;
+    }
+
+    @PostMapping("/instances/import")
+    public Map<String, Object> importInstances(@RequestBody ImportInstancesBody body) {
+        if (body == null || body.instances() == null) {
+            throw new IllegalArgumentException("instances array is required");
+        }
+        boolean replace = Boolean.TRUE.equals(body.replace());
+        boolean skipExisting = body.skipExisting() == null || body.skipExisting();
+        if (replace) {
+            skipExisting = false;
+        }
+        Map<String, Object> result = instanceRegistry.importInstances(body.instances(), replace, skipExisting);
+        audit("instance.import", null, ConsoleAuditService.detail(
+                "created", result.get("created"),
+                "skipped", result.get("skipped"),
+                "failed", result.get("failed")));
+        return result;
+    }
+
+    @PostMapping("/instances/bulk")
+    public Map<String, Object> bulkInstances(@RequestBody BulkInstancesBody body) {
+        if (body == null) {
+            throw new IllegalArgumentException("request body is required");
+        }
+        Map<String, Object> result = instanceRegistry.bulk(body.action(), body.ids());
+        audit("instance.bulk", null, ConsoleAuditService.detail(
+                "action", body.action(),
+                "okCount", result.get("okCount"),
+                "failCount", result.get("failCount")));
+        return result;
+    }
+
+    @PostMapping("/instances/{id}/sql/execute")
+    public Map<String, Object> executeSql(@PathVariable("id") String id,
+                                          @RequestBody SqlExecuteBody body) {
+        if (sqlExecuteService == null) {
+            throw new IllegalStateException("SQL execute service is not available");
+        }
+        if (body == null) {
+            throw new IllegalArgumentException("request body is required");
+        }
+        Map<String, Object> result = sqlExecuteService.execute(id, body.sql(), body.maxRows(), body.timeoutMs());
+        String truncatedSql = InstanceSqlExecuteService.truncateForAudit(body.sql(), 200);
+        if (gatewayConfig.isAuditMaskStatements() && truncatedSql.length() > 80) {
+            truncatedSql = truncatedSql.substring(0, 80) + "…";
+        }
+        audit("sql.execute", id, ConsoleAuditService.detail(
+                "ok", result.get("ok"),
+                "rowCount", result.get("rowCount"),
+                "durationMs", result.get("durationMs"),
+                "sql", truncatedSql));
         return result;
     }
 
@@ -779,6 +909,47 @@ public class ConsoleApiController {
             Boolean enabled,
             List<String> deniedOperations,
             List<String> deniedStatementKeywords
+    ) {
+    }
+
+    public record UpdateInstanceBody(
+            String name,
+            String listenHost,
+            Integer listenPort,
+            String targetHost,
+            Integer targetPort,
+            String targetDatabase,
+            String targetUsername,
+            String targetPassword,
+            Boolean enabled
+    ) {
+    }
+
+    public record CloneInstanceBody(
+            String id,
+            String name,
+            Integer listenPort,
+            Boolean copyMaskingRules
+    ) {
+    }
+
+    public record ImportInstancesBody(
+            List<Map<String, Object>> instances,
+            Boolean replace,
+            Boolean skipExisting
+    ) {
+    }
+
+    public record BulkInstancesBody(
+            String action,
+            List<String> ids
+    ) {
+    }
+
+    public record SqlExecuteBody(
+            String sql,
+            Integer maxRows,
+            Integer timeoutMs
     ) {
     }
 }

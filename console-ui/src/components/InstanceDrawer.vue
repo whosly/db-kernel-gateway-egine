@@ -10,6 +10,7 @@ import type {
   SchemaColumn,
   PoolStats,
   SessionRow,
+  UpdateInstancePayload,
 } from '../api/types'
 import {
   createMaskingRule,
@@ -25,7 +26,7 @@ import {
 } from '../api/consoleApi'
 
 const props = defineProps<{ instance: GatewayInstance | null }>()
-defineEmits<{ close: []; delete: [] }>()
+const emit = defineEmits<{ close: []; delete: []; save: [UpdateInstancePayload]; clone: [] }>()
 
 const toast = inject<(m: string) => void>('toast', () => {})
 const tab = ref<'info' | 'masking' | 'sessions' | 'recent'>('info')
@@ -49,6 +50,56 @@ const recentError = ref<string | null>(null)
 const recentNote = ref<string | null>(null)
 const health = ref<HealthCheckResult | null>(null)
 const healthBusy = ref(false)
+const editSaving = ref(false)
+const editForm = reactive({
+  name: '',
+  listenHost: '',
+  listenPort: 0,
+  targetHost: '',
+  targetPort: 0,
+  targetDatabase: '',
+  targetUsername: '',
+  targetPassword: '',
+  enabled: true,
+})
+
+function syncEditForm() {
+  const i = props.instance
+  if (!i) return
+  editForm.name = i.name || ''
+  editForm.listenHost = i.listenHost || '0.0.0.0'
+  editForm.listenPort = i.listenPort
+  editForm.targetHost = i.targetHost || ''
+  editForm.targetPort = i.targetPort
+  editForm.targetDatabase = i.targetDatabase || ''
+  editForm.targetUsername = i.targetUsername || ''
+  editForm.targetPassword = ''
+  editForm.enabled = i.enabled
+}
+
+async function submitEdit() {
+  if (!props.instance || props.instance.source !== 'console') return
+  editSaving.value = true
+  try {
+    const payload: UpdateInstancePayload = {
+      name: editForm.name,
+      listenHost: editForm.listenHost,
+      listenPort: Number(editForm.listenPort),
+      targetHost: editForm.targetHost,
+      targetPort: Number(editForm.targetPort),
+      targetDatabase: editForm.targetDatabase,
+      targetUsername: editForm.targetUsername,
+      enabled: editForm.enabled,
+    }
+    if (editForm.targetPassword && editForm.targetPassword.trim()) {
+      payload.targetPassword = editForm.targetPassword
+    }
+    emit('save', payload)
+    editForm.targetPassword = ''
+  } finally {
+    editSaving.value = false
+  }
+}
 
 const strategyOptions: { value: MaskingStrategy; label: string }[] = [
   { value: 'null', label: '置空' },
@@ -269,6 +320,7 @@ async function onHealthCheck() {
 }
 
 onMounted(() => {
+  syncEditForm()
   loadMetrics()
   loadRules()
 })
@@ -278,6 +330,7 @@ watch(
     tab.value = 'info'
     resetForm()
     health.value = null
+    syncEditForm()
     loadMetrics()
     loadRules()
   },
@@ -334,8 +387,32 @@ watch(tab, (v) => {
         </section>
 
         <section>
-          <h4>监听 / 目标</h4>
-          <dl>
+          <h4>编辑实例</h4>
+          <p v-if="instance.source !== 'console'" class="muted tiny">
+            此实例来自配置文件（YAML），只读。如需修改请先「克隆」为管控台实例；配置实例仅可停止。
+          </p>
+          <form v-else class="edit-form" @submit.prevent="submitEdit">
+            <div class="grid2">
+              <div class="field"><label>名称</label><input v-model="editForm.name" required /></div>
+              <div class="field"><label>类型（不可改）</label><input :value="instance.dbType" disabled /></div>
+              <div class="field"><label>监听 Host</label><input v-model="editForm.listenHost" /></div>
+              <div class="field"><label>监听 Port</label><input v-model.number="editForm.listenPort" type="number" required min="1" max="65535" /></div>
+              <div class="field"><label>目标 Host</label><input v-model="editForm.targetHost" required /></div>
+              <div class="field"><label>目标 Port</label><input v-model.number="editForm.targetPort" type="number" required /></div>
+              <div class="field"><label>目标库名</label><input v-model="editForm.targetDatabase" /></div>
+              <div class="field"><label>目标用户</label><input v-model="editForm.targetUsername" /></div>
+              <div class="field"><label>目标密码</label>
+                <input v-model="editForm.targetPassword" type="password" autocomplete="new-password"
+                       :placeholder="instance.passwordConfigured ? '留空则保留原密码' : '未配置，可在此设置'" />
+              </div>
+            </div>
+            <label class="check"><input v-model="editForm.enabled" type="checkbox" /> 启用</label>
+            <p class="muted tiny">运行中保存将：停止 → 按新配置重建 → 同 id 再启动。密码留空保留原值。</p>
+            <div class="edit-actions">
+              <button class="primary" type="submit" :disabled="editSaving">{{ editSaving ? '保存中…' : '保存修改' }}</button>
+            </div>
+          </form>
+          <dl v-if="instance.source !== 'console'">
             <div><dt>监听</dt><dd>{{ instance.listenHost }}:{{ instance.listenPort }}</dd></div>
             <div><dt>目标</dt><dd>{{ instance.targetHost }}:{{ instance.targetPort }}</dd></div>
             <div><dt>库名</dt><dd>{{ instance.targetDatabase || '—' }}</dd></div>
@@ -354,9 +431,10 @@ watch(tab, (v) => {
           </dl>
         </section>
 
-        <footer v-if="instance.source === 'console'">
-          <button class="danger" @click="$emit('delete')">删除实例</button>
-          <p class="muted tiny">仅管控台创建的实例可删；将停止 listener、级联删除脱敏规则并移除 H2 行。</p>
+        <footer class="drawer-foot">
+          <button type="button" @click="emit('clone')">克隆</button>
+          <button v-if="instance.source === 'console'" class="danger" @click="emit('delete')">删除实例</button>
+          <p class="muted tiny">克隆会生成新的管控台实例（可改端口）；删除仅管控台来源可用。</p>
         </footer>
       </template>
 
@@ -623,4 +701,12 @@ table.mini th, table.mini td { border-bottom: 1px solid var(--border); padding: 
   word-break: break-word;
   margin: 0.35rem 0;
 }
+
+.edit-form .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0.45rem 0.75rem; }
+.edit-form .field label { display: block; font-size: 0.75rem; color: var(--text-muted); margin-bottom: 0.15rem; }
+.edit-form .check { display: flex; align-items: center; gap: 0.4rem; margin: 0.6rem 0; }
+.edit-form .check input { width: auto; }
+.edit-actions { display: flex; gap: 0.5rem; }
+.drawer-foot { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin-top: 1rem; }
+@media (max-width: 640px) { .edit-form .grid2 { grid-template-columns: 1fr; } }
 </style>

@@ -108,7 +108,7 @@ class ConsoleControlPlaneApiTest {
 
         console = new ConsoleApiController(
                 catalog, registry, runningAdapter, new GatewayRuntimeMetrics(), gatewayConfig,
-                null, null, null, health, ring, runtime, null, sampler);
+                null, null, null, health, ring, runtime, null, sampler, null);
     }
 
     @Test

@@ -424,6 +424,339 @@ public class GatewayListenerRuntime implements DisposableBean {
         }
     }
 
+    /**
+     * Update a console-sourced instance. Config-file instances are rejected.
+     * If the listener was running, stop → rebuild adapter → start (same id).
+     * Omitting/blank {@code targetPassword} keeps the existing stored password.
+     */
+    public ManagedListener updateInstance(String id, UpdateInstanceRequest request) {
+        Objects.requireNonNull(request, "request");
+        if (gatewayConfig == null || adapterRegistry == null || catalog == null) {
+            throw new IllegalStateException("Runtime update requires full GatewayListenerRuntime wiring");
+        }
+        synchronized (mute) {
+            ManagedListener existing = require(id);
+            if (!SOURCE_CONSOLE.equals(existing.source())) {
+                throw new IllegalArgumentException(
+                        "YAML/配置实例不可编辑（source=config）；请先克隆为管控台实例，或仅使用停止");
+            }
+            String name = hasText(request.name()) ? request.name().trim() : existing.name();
+            String listenHost = hasText(request.listenHost()) ? request.listenHost().trim() : existing.listenHost();
+            int listenPort = request.listenPort() != null ? request.listenPort() : existing.listenPort();
+            if (listenPort <= 0 || listenPort > 65535) {
+                throw new IllegalArgumentException("Invalid listenPort: " + listenPort);
+            }
+            ensurePortFree(listenPort, existing.id());
+
+            String targetHost = request.targetHost() != null
+                    ? request.targetHost().trim() : existing.targetHost();
+            if (!hasText(targetHost)) {
+                throw new IllegalArgumentException("targetHost is required");
+            }
+            int targetPort = request.targetPort() != null ? request.targetPort() : existing.targetPort();
+            String targetDatabase = request.targetDatabase() != null
+                    ? request.targetDatabase() : existing.targetDatabase();
+            String targetUsername = request.targetUsername() != null
+                    ? request.targetUsername() : existing.targetUsername();
+            boolean enabled = request.enabled() != null ? request.enabled() : existing.enabled();
+
+            String password = resolveExistingPassword(existing);
+            if (hasText(request.targetPassword())) {
+                password = request.targetPassword();
+            }
+
+            boolean wasRunning = existing.isRunning();
+            try {
+                if (existing.adapter() != null && existing.adapter().isRunning()) {
+                    existing.adapter().stop();
+                }
+            } catch (RuntimeException e) {
+                log.warn("Error stopping instance '{}' before update: {}", id, e.getMessage());
+            }
+
+            GatewayInstanceProperties.InstanceEntry entry = new GatewayInstanceProperties.InstanceEntry();
+            entry.setId(existing.id());
+            entry.setName(name);
+            entry.setDbType(existing.dbType()); // immutable
+            entry.setListenHost(listenHost);
+            entry.setListenPort(listenPort);
+            entry.setEnabled(enabled);
+            entry.setTargetHost(targetHost);
+            entry.setTargetPort(targetPort);
+            entry.setTargetDatabase(targetDatabase);
+            entry.setTargetUsername(targetUsername);
+            entry.setTargetPassword(password);
+
+            ManagedListener managed = createManaged(entry, SOURCE_CONSOLE);
+            if (consoleStore != null) {
+                Instant created = consoleStore.findById(existing.id())
+                        .map(ConsoleInstanceRecord::createdAt)
+                        .orElse(Instant.now());
+                consoleStore.upsert(new ConsoleInstanceRecord(
+                        existing.id(),
+                        managed.name(),
+                        managed.dbType(),
+                        managed.listenHost(),
+                        managed.listenPort(),
+                        managed.enabled(),
+                        managed.targetHost(),
+                        managed.targetPort(),
+                        managed.targetDatabase(),
+                        managed.targetUsername(),
+                        password,
+                        created,
+                        Instant.now()));
+            }
+            listeners.put(existing.id(), managed);
+            log.info("Updated console instance '{}' (listen={}:{}, rebound={}, wasRunning={})",
+                    existing.id(), listenHost, listenPort, managed.bound(), wasRunning);
+
+            if (wasRunning && managed.enabled() && managed.bound()) {
+                try {
+                    startAdapter(managed);
+                } catch (RuntimeException e) {
+                    log.warn("Instance '{}' updated but restart failed: {}", existing.id(), e.getMessage());
+                }
+            }
+            return managed;
+        }
+    }
+
+    /**
+     * Clone any instance into a new console-sourced instance (import into H2).
+     * Prefers copying the password from store for lab continuity; API never echoes it.
+     */
+    public ManagedListener cloneInstance(String sourceId, CloneInstanceRequest request) {
+        if (request == null) {
+            request = new CloneInstanceRequest(null, null, null, true);
+        }
+        // Resolve source outside nested addInstance sync by calling require first;
+        // addInstance takes mute again — Java intrinsic locks are reentrant on same thread.
+        ManagedListener source = require(sourceId);
+        String newId;
+        int listenPort;
+        String name;
+        String password;
+        synchronized (mute) {
+            newId = resolveNewId(request.id());
+            if (listeners.containsKey(newId)) {
+                throw new IllegalArgumentException("Instance id already exists: " + newId);
+            }
+            listenPort = allocateListenPort(request.listenPort(), source.listenPort(), newId);
+            name = hasText(request.name())
+                    ? request.name().trim()
+                    : source.name() + " (克隆)";
+            password = resolveExistingPassword(source);
+        }
+
+        CreateInstanceRequest create = new CreateInstanceRequest(
+                newId,
+                name,
+                source.dbType(),
+                source.listenHost(),
+                listenPort,
+                source.targetHost(),
+                source.targetPort(),
+                source.targetDatabase(),
+                source.targetUsername(),
+                password,
+                true); // enable to bind adapter; stop immediately after create
+        ManagedListener managed = addInstance(create);
+        try {
+            stop(managed.id());
+        } catch (RuntimeException e) {
+            log.warn("Clone '{}' bound but stop failed: {}", managed.id(), e.getMessage());
+        }
+        managed = find(managed.id()).orElse(managed);
+
+        boolean copyRules = request.copyMaskingRules() == null || request.copyMaskingRules();
+        if (copyRules && maskingEngineFactory != null) {
+            List<com.whosly.gateway.console.persist.MaskingRuleRecord> rules =
+                    maskingEngineFactory.store().findByInstanceId(source.id());
+            if (!rules.isEmpty()) {
+                List<com.whosly.gateway.console.persist.MaskingRuleRecord> copies = new java.util.ArrayList<>();
+                for (var r : rules) {
+                    copies.add(new com.whosly.gateway.console.persist.MaskingRuleRecord(
+                            null,
+                            managed.id(),
+                            r.name(),
+                            r.strategy(),
+                            r.priority(),
+                            r.columnName(),
+                            r.tableName(),
+                            r.namePattern(),
+                            r.fixedValue(),
+                            r.keepPrefix(),
+                            r.keepSuffix(),
+                            r.hashHexLength(),
+                            r.enabled(),
+                            null,
+                            null));
+                }
+                maskingEngineFactory.store().replaceAll(managed.id(), copies);
+                reloadMasking(managed.id());
+            }
+        }
+        log.info("Cloned instance '{}' -> '{}' (source={}, maskingCopied={})",
+                sourceId, managed.id(), source.source(), copyRules);
+        return managed;
+    }
+
+    /**
+     * Import instances from export-shaped maps into console H2.
+     * Passwords in JSON are ignored; new rows have no password until edited.
+     */
+    public Map<String, Object> importInstances(List<Map<String, Object>> instances,
+                                               boolean replace,
+                                               boolean skipExisting) {
+        if (instances == null) {
+            throw new IllegalArgumentException("instances array is required");
+        }
+        int created = 0;
+        int skipped = 0;
+        int failed = 0;
+        List<Map<String, Object>> details = new java.util.ArrayList<>();
+        for (Map<String, Object> raw : instances) {
+            Map<String, Object> one = new LinkedHashMap<>();
+            try {
+                if (raw == null) {
+                    throw new IllegalArgumentException("null instance entry");
+                }
+                String id = stringVal(raw.get("id"));
+                String dbType = stringVal(raw.get("dbType"));
+                if (!hasText(dbType)) {
+                    throw new IllegalArgumentException("dbType is required");
+                }
+                Integer listenPort = intVal(raw.get("listenPort"));
+                if (listenPort == null) {
+                    throw new IllegalArgumentException("listenPort is required");
+                }
+                String targetHost = stringVal(raw.get("targetHost"));
+                if (!hasText(targetHost)) {
+                    throw new IllegalArgumentException("targetHost is required");
+                }
+                Integer targetPort = intVal(raw.get("targetPort"));
+                if (targetPort == null) {
+                    throw new IllegalArgumentException("targetPort is required");
+                }
+
+                if (hasText(id) && listeners.containsKey(id.trim())) {
+                    ManagedListener existing = listeners.get(id.trim());
+                    if (replace) {
+                        if (!SOURCE_CONSOLE.equals(existing.source())) {
+                            throw new IllegalArgumentException(
+                                    "不能覆盖配置文件实例 id=" + id + "（请换 id 或 skipExisting）");
+                        }
+                        removeInstance(id.trim());
+                    } else if (skipExisting) {
+                        one.put("id", id);
+                        one.put("ok", true);
+                        one.put("action", "skipped");
+                        one.put("message", "id 已存在，已跳过");
+                        details.add(one);
+                        skipped++;
+                        continue;
+                    } else {
+                        throw new IllegalArgumentException("Instance id already exists: " + id);
+                    }
+                }
+
+                CreateInstanceRequest req = new CreateInstanceRequest(
+                        hasText(id) ? id.trim() : null,
+                        hasText(stringVal(raw.get("name"))) ? stringVal(raw.get("name"))
+                                : (hasText(id) ? id : "imported"),
+                        dbType,
+                        hasText(stringVal(raw.get("listenHost"))) ? stringVal(raw.get("listenHost")) : "0.0.0.0",
+                        listenPort,
+                        targetHost,
+                        targetPort,
+                        stringVal(raw.get("targetDatabase")),
+                        stringVal(raw.get("targetUsername")),
+                        null, // never import passwords
+                        raw.get("enabled") instanceof Boolean b ? b : true);
+                ManagedListener managed = addInstance(req);
+                one.put("id", managed.id());
+                one.put("ok", true);
+                one.put("action", "created");
+                one.put("passwordConfigured", managed.passwordConfigured());
+                details.add(one);
+                created++;
+            } catch (RuntimeException e) {
+                one.put("ok", false);
+                one.put("action", "failed");
+                one.put("message", e.getMessage());
+                if (raw != null && raw.get("id") != null) {
+                    one.put("id", String.valueOf(raw.get("id")));
+                }
+                details.add(one);
+                failed++;
+            }
+        }
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("ok", failed == 0);
+        body.put("created", created);
+        body.put("skipped", skipped);
+        body.put("failed", failed);
+        body.put("results", details);
+        body.put("message", "导入完成：创建 " + created + "，跳过 " + skipped + "，失败 " + failed);
+        return body;
+    }
+
+    private String resolveExistingPassword(ManagedListener listener) {
+        if (consoleStore != null && SOURCE_CONSOLE.equals(listener.source())) {
+            Optional<ConsoleInstanceRecord> row = consoleStore.findById(listener.id());
+            if (row.isPresent() && hasText(row.get().targetPassword())) {
+                return row.get().targetPassword();
+            }
+        }
+        if (gatewayConfig != null && hasText(gatewayConfig.getTargetPassword())) {
+            return gatewayConfig.getTargetPassword();
+        }
+        return null;
+    }
+
+    private int allocateListenPort(Integer requested, int preferNear, String forId) {
+        if (requested != null) {
+            if (requested <= 0 || requested > 65535) {
+                throw new IllegalArgumentException("Invalid listenPort: " + requested);
+            }
+            ensurePortFree(requested, forId);
+            return requested;
+        }
+        int start = preferNear > 0 && preferNear < 65535 ? preferNear + 1 : 33000;
+        for (int i = 0; i < 2000; i++) {
+            int p = start + i;
+            if (p > 65535) {
+                p = 10000 + ((start + i) % 50000);
+            }
+            try {
+                ensurePortFree(p, forId);
+                return p;
+            } catch (IllegalArgumentException ignored) {
+                // try next
+            }
+        }
+        throw new IllegalStateException("无法分配空闲 listenPort");
+    }
+
+    private static String stringVal(Object v) {
+        return v == null ? null : String.valueOf(v).trim();
+    }
+
+    private static Integer intVal(Object v) {
+        if (v == null) {
+            return null;
+        }
+        if (v instanceof Number n) {
+            return n.intValue();
+        }
+        String s = String.valueOf(v).trim();
+        if (s.isEmpty()) {
+            return null;
+        }
+        return Integer.parseInt(s);
+    }
+
     private String resolveNewId(String requested) {
         if (hasText(requested)) {
             return requested.trim();
@@ -439,6 +772,9 @@ public class GatewayListenerRuntime implements DisposableBean {
 
     private void ensurePortFree(int listenPort, String forId) {
         for (ManagedListener existing : listeners.values()) {
+            if (forId != null && existing.id().equals(forId)) {
+                continue;
+            }
             if (existing.enabled() && existing.listenPort() == listenPort) {
                 throw new IllegalArgumentException(
                         "listenPort " + listenPort + " already used by instance '" + existing.id()
@@ -514,7 +850,10 @@ public class GatewayListenerRuntime implements DisposableBean {
         int targetPort = entry.getTargetPort() != null ? entry.getTargetPort() : gatewayConfig.getTargetPort();
         String targetDatabase = firstNonBlank(entry.getTargetDatabase(), gatewayConfig.getTargetDatabase());
         String targetUsername = firstNonBlank(entry.getTargetUsername(), gatewayConfig.getTargetUsername());
-        String targetPassword = firstNonBlank(entry.getTargetPassword(), gatewayConfig.getTargetPassword());
+        // Console instances do not silently inherit process YAML password (import/edit clarity).
+        String targetPassword = SOURCE_CONSOLE.equals(source)
+                ? (entry.getTargetPassword() != null ? entry.getTargetPassword() : "")
+                : firstNonBlank(entry.getTargetPassword(), gatewayConfig.getTargetPassword());
         boolean passwordConfigured = hasText(targetPassword);
 
         Optional<SupportedDatabaseInfo> typeInfo = catalog.findById(dbType);
@@ -769,6 +1108,29 @@ public class GatewayListenerRuntime implements DisposableBean {
             String targetUsername,
             String targetPassword,
             Boolean enabled
+    ) {
+    }
+
+    /** Console update payload; {@code dbType}/{@code id} are not updatable. */
+    public record UpdateInstanceRequest(
+            String name,
+            String listenHost,
+            Integer listenPort,
+            String targetHost,
+            Integer targetPort,
+            String targetDatabase,
+            String targetUsername,
+            String targetPassword,
+            Boolean enabled
+    ) {
+    }
+
+    /** Clone options; omitted listenPort → auto-allocate. */
+    public record CloneInstanceRequest(
+            String id,
+            String name,
+            Integer listenPort,
+            Boolean copyMaskingRules
     ) {
     }
 

@@ -10,6 +10,8 @@ import com.whosly.gateway.console.persist.MaskingRuleRecord;
 import com.whosly.gateway.console.persist.MaskingRuleStore;
 import com.whosly.gateway.runtime.GatewayListenerRuntime;
 import com.whosly.gateway.runtime.GatewayListenerRuntime.CreateInstanceRequest;
+import com.whosly.gateway.runtime.GatewayListenerRuntime.UpdateInstanceRequest;
+import com.whosly.gateway.runtime.GatewayListenerRuntime.CloneInstanceRequest;
 import com.whosly.gateway.runtime.GatewayListenerRuntime.ManagedListener;
 import org.springframework.stereotype.Service;
 
@@ -65,6 +67,65 @@ public class GatewayInstanceRegistry {
 
     public Map<String, Object> remove(String id) {
         return listenerRuntime.removeInstance(id);
+    }
+
+    public GatewayInstance update(String id, UpdateInstanceRequest request) {
+        return toInstance(listenerRuntime.updateInstance(id, request));
+    }
+
+    public GatewayInstance cloneInstance(String id, CloneInstanceRequest request) {
+        return toInstance(listenerRuntime.cloneInstance(id, request));
+    }
+
+    public Map<String, Object> importInstances(java.util.List<java.util.Map<String, Object>> instances,
+                                               boolean replace,
+                                               boolean skipExisting) {
+        return listenerRuntime.importInstances(instances, replace, skipExisting);
+    }
+
+    public Map<String, Object> bulk(String action, java.util.List<String> ids) {
+        if (action == null || action.isBlank()) {
+            throw new IllegalArgumentException("action is required (start|stop)");
+        }
+        String act = action.trim().toLowerCase();
+        if (!act.equals("start") && !act.equals("stop")) {
+            throw new IllegalArgumentException("action must be start or stop");
+        }
+        if (ids == null || ids.isEmpty()) {
+            throw new IllegalArgumentException("ids must be a non-empty array");
+        }
+        java.util.List<Map<String, Object>> results = new ArrayList<>();
+        int okCount = 0;
+        int failCount = 0;
+        for (String id : ids) {
+            Map<String, Object> one = new LinkedHashMap<>();
+            one.put("id", id);
+            try {
+                if (id == null || id.isBlank()) {
+                    throw new IllegalArgumentException("blank id");
+                }
+                Map<String, Object> r = act.equals("start") ? start(id.trim()) : stop(id.trim());
+                one.put("ok", Boolean.TRUE.equals(r.get("ok")));
+                one.put("message", r.get("message"));
+                if (Boolean.TRUE.equals(r.get("ok"))) {
+                    okCount++;
+                } else {
+                    failCount++;
+                }
+            } catch (RuntimeException e) {
+                one.put("ok", false);
+                one.put("message", e.getMessage());
+                failCount++;
+            }
+            results.add(one);
+        }
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("action", act);
+        body.put("results", results);
+        body.put("okCount", okCount);
+        body.put("failCount", failCount);
+        body.put("ok", failCount == 0);
+        return body;
     }
 
     public Map<String, Object> statusOf(String id) {
