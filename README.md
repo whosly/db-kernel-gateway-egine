@@ -18,6 +18,7 @@
 - [构建与测试](#构建与测试)
 - [演示](#演示)
 - [审计与脱敏](#审计与脱敏)
+- [数据库管控台](#数据库管控台)
 - [文档索引](#文档索引)
 - [开发约定](#开发约定)
 
@@ -25,7 +26,7 @@
 
 | 项 | 本分支（`future/database-wire-protocol-foundation`） |
 |---|---|
-| 默认单元测试 | **418** 条全绿（JDK 17；`pom` 排除 `*IntegrationTest`；以 STATUS §1 为准） |
+| 默认单元测试 | **428** 条全绿（JDK 17；`pom` 排除 `*IntegrationTest`；以 STATUS §1 为准） |
 | 真库集成 `-Pintegration-test` | **14 / 14** 全绿（2026-09-24，本地 Docker MySQL `:13308` + PostgreSQL `:5432`） |
 | JDK / 编译 | `pom` 目标 **17**；虚拟线程经 `VirtualThreadExecutors` **反射**在 JDK 21+ 启用，JDK 17 回退平台线程池（STATUS P0-1） |
 | 核心数据路径 | 透明代理、查询/结果、预处理、错误透传、脱敏 happy path、PG `COPY` — **已在集成中 live-proven** |
@@ -163,6 +164,8 @@ gateway:
 | `gateway.audit.*` | 见 [审计与脱敏](#审计与脱敏) |
 | `gateway.risk.denied-operations` | 逗号分隔协议操作名拒绝清单（空=allow-all） |
 | `gateway.risk.denied-statement-keywords` | 逗号分隔语句关键字子串拒绝清单（空=allow-all） |
+| `gateway.catalog.databases[]` | 支持库**类型**目录（id/maturity/enabled/ports/notes）；`GET /console/api/supported-databases` |
+| `gateway.instances[]` | 协议无关**实例**注册表（可多类型混部）；空则管控台合成 `id=default` |
 
 ## 快速开始 · MySQL
 
@@ -347,7 +350,7 @@ mvn -Pintegration-test test
 
 完整 **开启清单 / 告警清单 / 集成跳过策略** 见 **[`docs/OPS.md`](docs/OPS.md)**（P2-5）。
 
-摘要：默认非交互启动；`GET /gateway/status`、`GET /gateway/metrics`、`GET /actuator/gateway` 看运行态与内存计数；审计 spool 熔断与配额见 OPS 告警表。`destination=jdbc` 建表：`docs/sql/audit-sink-schema.sql`。
+摘要：默认非交互启动；`GET /gateway/status`、`GET /gateway/metrics`、`GET /actuator/gateway` 看运行态与内存计数；**管控台**见 `/console` 与上文「数据库管控台」。审计 spool 熔断与配额见 OPS 告警表。`destination=jdbc` 建表：`docs/sql/audit-sink-schema.sql`。
 
 ### 脱敏开关
 
@@ -358,6 +361,54 @@ mvn -Pintegration-test test
 | 转发字节 | 从不因观测改写 | — |
 
 结果集脱敏与 `mask-statements` 应使用同一套策略，避免审计留下规则想隐藏的原文（规则 §8.2）。
+
+
+## 数据库管控台
+
+内置 **协议无关 · 实例中心** 管控台（无 Node 构建）：
+
+| 入口 | 说明 |
+|---|---|
+| UI | [http://localhost:8080/console](http://localhost:8080/console)（`server.port` 可改） |
+| 类型目录 API | `GET /console/api/supported-databases` |
+| 实例 API | `GET/POST /console/api/instances`、`/instances/{id}/status|metrics|start|stop` |
+| 设计 | [`docs/CONSOLE_DESIGN.md`](docs/CONSOLE_DESIGN.md) |
+
+一等实体是 **网关实例**（监听端口 + `dbType` 标签），不是按 MySQL/PG 分拆的控制台。  
+类型目录（`gateway.catalog`）与实例注册表（`gateway.instances`）分离。今日运行时仍绑定单个 `ProtocolAdapter`；多 listener 模型已在注册表预留。
+
+目录配置示例：
+
+```yaml
+gateway:
+  catalog:
+    databases:
+      - id: mysql
+        displayName: MySQL
+        enabled: true
+        maturity: ga
+        defaultProxyPort: 33307
+        defaultTargetPort: 3306
+      - id: postgresql
+        displayName: PostgreSQL
+        enabled: true
+        maturity: ga
+        defaultProxyPort: 35433
+        defaultTargetPort: 5432
+      - id: sqlserver
+        displayName: SQL Server
+        enabled: true
+        maturity: partial
+        defaultProxyPort: 31433
+        defaultTargetPort: 1433
+  # instances:   # 可选；省略则合成 default
+  #   - id: gw-1
+  #     name: 业务库代理
+  #     db-type: mysql
+  #     listen-port: 33307
+```
+
+既有 `/gateway/*` 与 `/actuator/gateway` **保留**。
 
 ## 文档索引
 

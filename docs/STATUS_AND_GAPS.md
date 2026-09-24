@@ -8,12 +8,12 @@
 
 | 项 | 现状 | 证据 |
 |---|---|---|
-| 非集成 `@Test`/`@ParameterizedTest` 注解数 | **418** | `mvn test` Results；排除 `*IntegrationTest` |
+| 非集成 `@Test`/`@ParameterizedTest` 注解数 | **428** | `mvn test` Results；排除 `*IntegrationTest` |
 | 集成测试 | 14 条注解；默认 surefire **排除** `*IntegrationTest`；无 local props 时 `-Pintegration-test` **assumeTrue 跳过**；本机有库时可 14/14 绿 | `pom.xml` excludes；跳过策略见 `docs/OPS.md` / `integration-test.properties` |
-| 本环境 `mvn test`（`JAVA_HOME`=JDK 17） | **BUILD SUCCESS：Tests run 418, Failures 0, Errors 0, Skipped 0** | surefire；含 SQL Server P0 framing/registry/adapter |
+| 本环境 `mvn test`（`JAVA_HOME`=JDK 17） | **BUILD SUCCESS：Tests run 428, Failures 0, Errors 0, Skipped 0** | surefire；含 SQL Server P0 + 管控台 console/instance 单测 |
 | `pom.xml` 编译目标 | `maven.compiler.source/target=17` | **保持 17**；不升到 21 |
 
-**结论**：编译目标保持 17；VT 仅在 JDK 21+ 运行期启用。当前 `mvn test` 为 **418** 全绿（含 SQL Server P0）。见 P0 / P1 / P2。
+**结论**：编译目标保持 17；VT 仅在 JDK 21+ 运行期启用。当前 `mvn test` 为 **428** 全绿（含 SQL Server P0 + 管控台实例/目录）。见 P0 / P1 / P2。
 
 ## 2. 能力总览（按主题）
 
@@ -31,7 +31,7 @@
 | TLS 终止 / 明文强制 | **partial（improved）** | 可选 `gateway.tls.*` 客户端 TLS 终止（共享基础设施）；未启用时仍 opaque / `require-cleartext-inspection` |
 | NIO / 事件驱动 | **missing（刻意）** | 阻塞流 + 每连接线程/VT；**不以 NIO 重写为当前方向**（见 P2-1） |
 | JDBC 旁路路径 | **legacy（已标注）** | `DatabaseConnectionService` `@Deprecated`；wire 路径未使用 |
-| 运维产品化 | **partial（improved）** | 非交互默认启动；`/gateway/*` + `/actuator/gateway` 暴露内存计数器；交互 CLI 默认关 |
+| 运维产品化 | **partial（improved）** | 非交互默认启动；`/gateway/*` + `/actuator/gateway`；**管控台 MVP** `/console`（实例中心，类型目录可配置）；交互 CLI 默认关 |
 
 ## 3. 配置键（以 `GatewayConfig` 绑定为准）
 
@@ -59,6 +59,9 @@ Spring 实际读取的键（`@Value`）与默认 `application.yml`、模板一�
 | `gateway.risk.denied-operations` | 空 | 逗号分隔操作名；空则不按操作拒绝 |
 | `gateway.risk.denied-statement-keywords` | 空 | 逗号分隔语句子串；空则不按关键字拒绝 |
 | `gateway.cli.interactive` | `false` | true 时才读 `System.in` CLI；默认非交互 |
+| `gateway.catalog.databases[]` | 见 application.yml | 支持库**类型**目录（管控台）；与实例注册表分离 |
+| `gateway.instances[]` | 空→合成 default | 协议无关**实例**注册表（多类型可混）；MVP 运行时仅绑定匹配 proxy-* 的一条 |
+
 
 风控：`GatewayConfig` 调用 `setDatabaseRiskPolicy(DenyListDatabaseRiskPolicy.of(...))`；两份清单皆空时退回 `DatabaseRiskPolicy.allowAll()`（向后兼容）。
 
@@ -90,7 +93,7 @@ Spring 实际读取的键（`@Value`）与默认 `application.yml`、模板一�
 |---|---|---|---|---|
 | P2-1 | NIO / 少线程模型 | **missing（deferred）** | 仍 `ServerSocket.accept` + 阻塞读；并发模型选定为 **每连接线程 / 可选 VT**（`VirtualThreadExecutors`） | **不做 NIO 重写**；若 JDK 21+ VT 不足再开专项 |
 | P2-2 | JDBC vs 协议代理分裂 | **partial（improved）** | `DatabaseConnectionService` / adapter 字段 `@Deprecated` + javadoc；STATUS §6；wire 仍走 `BackendProvider` | 无调用方后可删类；勿接入 DuplexRelay |
-| P2-3 | HTTP 管控面 | **partial（improved）** | `Application` 默认 `start`；`gateway.cli.interactive=false` 时 CLI 不读 `System.in`；`GatewayController` REST `/gateway/status|metrics|start|stop` | 鉴权/HTTPS 终止仍未做 |
+| P2-3 | HTTP 管控面 / 管控台 | **partial（in progress）** | 既有 `/gateway/*`；新增 **管控台 MVP**：`gateway.catalog` + `gateway.instances`、`/console` UI、`/console/api/instances|supported-databases`（实例中心·协议无关）；设计见 [`CONSOLE_DESIGN.md`](CONSOLE_DESIGN.md)。运行时仍单 ProtocolAdapter，多 listener 模型已预留 | 多 listener 真实绑定；鉴权/HTTPS 仍未做 |
 | P2-4 | Metrics 出口 | **partial（improved）** | 共享 `GatewayRuntimeMetrics` bean；`GET /gateway/metrics` + Actuator `@Endpoint(id=gateway)`；单测覆盖 snapshot | 未接 Micrometer 远程；告警阈值见 `docs/OPS.md` |
 | P2-5 | 审计测试与运维手册 | **partial（improved）** | P0-3 单测已有；**`docs/OPS.md`** 开启清单 / 告警清单；README 运维段改为索引 | JDBC 审计真库验收仍缺 |
 | P2-6 | 集成测试在 CI 可复现 | **partial（improved）** | 跳过策略写入 `integration-test.properties` + OPS；`-Pintegration-test` 无 props → `assumeTrue` skip；`-Pintegration-testcontainers` **stub only** | 真 Testcontainers 接线另开；默认 `mvn test` 仍不需 Docker |

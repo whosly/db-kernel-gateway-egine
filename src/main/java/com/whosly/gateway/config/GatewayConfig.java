@@ -52,7 +52,7 @@ import java.util.Locale;
  * @since 2026-07-02
  */
 @Configuration
-@EnableConfigurationProperties(GatewayRoutingProperties.class)
+@EnableConfigurationProperties({GatewayRoutingProperties.class, GatewayCatalogProperties.class, GatewayInstanceProperties.class})
 public class GatewayConfig implements DisposableBean {
 
     @Value("${gateway.proxy-db-type:mysql}")

@@ -66,6 +66,54 @@ gateway:
   cli:
     interactive: ${GATEWAY_CLI_INTERACTIVE:false}
 
+  # Type catalog (pluggable adapters). Queryable via GET /console/api/supported-databases.
+  # Separate from instance registry (gateway.instances). Maturity: ga | partial | planned | stub.
+  catalog:
+    databases:
+      - id: mysql
+        displayName: MySQL
+        enabled: true
+        maturity: ga
+        defaultProxyPort: 33307
+        defaultTargetPort: 3306
+        notes: "Wire proxy GA — 可作为实例 dbType"
+      - id: postgresql
+        displayName: PostgreSQL
+        enabled: true
+        maturity: ga
+        defaultProxyPort: 35433
+        defaultTargetPort: 5432
+        notes: "Wire proxy GA — 可作为实例 dbType"
+      - id: sqlserver
+        displayName: SQL Server
+        enabled: true
+        maturity: partial
+        defaultProxyPort: 31433
+        defaultTargetPort: 1433
+        notes: "TDS P0 透明中继；深度能力 ON HOLD — 目录可见"
+      - id: oracle
+        displayName: Oracle
+        enabled: false
+        maturity: stub
+        defaultProxyPort: 31521
+        defaultTargetPort: 1521
+        notes: "预留 stub；consoleCreateAllowed=false"
+
+  # Instance registry (protocol-agnostic). Empty → console synthesizes id=default from proxy-* / target.*.
+  # Multiple mixed-type entries are supported in the model; runtime binds one ProtocolAdapter today.
+  # instances:
+  #   - id: gw-mysql-1
+  #     name: 业务库代理
+  #     db-type: mysql
+  #     listen-host: 0.0.0.0
+  #     listen-port: 33307
+  #     enabled: true
+  #   - id: gw-pg-1
+  #     name: 分析库代理
+  #     db-type: postgresql
+  #     listen-port: 35433
+  #     enabled: true
+
 logging:
   level:
     root: INFO

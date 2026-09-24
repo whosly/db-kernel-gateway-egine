@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>数据库管控台 · Gateway Console</title>
+  <link rel="stylesheet" href="/console/console.css" />
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark">DB</div>
+        <div class="brand-text">
+          <strong>数据库管控台</strong>
+          <span>Gateway Console</span>
+        </div>
+      </div>
+      <nav class="nav" id="nav">
+        <button type="button" class="nav-item active" data-section="overview">
+          <span class="nav-icon">▣</span> 总览
+        </button>
+        <button type="button" class="nav-item" data-section="instances">
+          <span class="nav-icon">⬡</span> 网关实例
+        </button>
+        <button type="button" class="nav-item" data-section="catalog">
+          <span class="nav-icon">◉</span> 类型目录
+        </button>
+        <button type="button" class="nav-item" data-section="ops">
+          <span class="nav-icon">⚙</span> 运维
+        </button>
+      </nav>
+      <div class="sidebar-foot">
+        <div class="hint">实例中心 · 协议无关</div>
+        <div class="hint muted">类型仅为实例属性 / 目录标签</div>
+      </div>
+    </aside>
+
+    <div class="main">
+      <header class="topbar">
+        <div class="topbar-left">
+          <h1 id="page-title">总览</h1>
+          <p class="subtitle" id="page-subtitle">多实例运行态势</p>
+        </div>
+        <div class="topbar-right">
+          <div class="status-pill" id="status-pill">
+            <span class="dot"></span>
+            <span class="label">检测中…</span>
+          </div>
+          <button type="button" class="btn ghost" id="btn-refresh">刷新</button>
+        </div>
+      </header>
+
+      <main class="content">
+        <section id="section-overview" class="section active">
+          <div class="kpi-grid" id="kpi-grid">
+            <div class="kpi-card"><div class="kpi-label">实例总数</div><div class="kpi-value" id="kpi-instances">—</div></div>
+            <div class="kpi-card"><div class="kpi-label">运行中</div><div class="kpi-value" id="kpi-running">—</div></div>
+            <div class="kpi-card"><div class="kpi-label">已接受连接</div><div class="kpi-value" id="kpi-accepted">—</div></div>
+            <div class="kpi-card"><div class="kpi-label">策略拒绝</div><div class="kpi-value" id="kpi-denials">—</div></div>
+          </div>
+          <div class="panel">
+            <div class="panel-head">
+              <h2>实例一览</h2>
+              <span class="muted">同一控制台管理多种类型</span>
+            </div>
+            <div class="card-grid" id="overview-cards"></div>
+          </div>
+        </section>
+
+        <section id="section-instances" class="section">
+          <div class="panel">
+            <div class="panel-head">
+              <h2>网关实例</h2>
+              <span class="badge soft">一等实体 · dbType 仅作标签</span>
+            </div>
+            <div class="card-grid" id="instance-cards"></div>
+            <p class="note">未绑定（UNBOUND）实例为多监听预留槽位；当前进程绑定与 <code>gateway.proxy-db-type</code> + <code>proxy-port</code> 匹配的一条。</p>
+          </div>
+        </section>
+
+        <section id="section-catalog" class="section">
+          <div class="panel">
+            <div class="panel-head">
+              <h2>支持的数据库类型</h2>
+              <span class="muted">gateway.catalog · 与实例注册表分离</span>
+            </div>
+            <div class="table-wrap">
+              <table class="data-table" id="catalog-table">
+                <thead>
+                  <tr>
+                    <th>类型 ID</th>
+                    <th>显示名</th>
+                    <th>成熟度</th>
+                    <th>启用</th>
+                    <th>默认知口</th>
+                    <th>注册</th>
+                    <th>可创建</th>
+                    <th>说明</th>
+                  </tr>
+                </thead>
+                <tbody></tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <section id="section-ops" class="section">
+          <div class="panel">
+            <div class="panel-head">
+              <h2>配置摘要</h2>
+              <span class="badge warn">密码已脱敏</span>
+            </div>
+            <pre class="code-block" id="config-json">加载中…</pre>
+          </div>
+          <div class="panel">
+            <div class="panel-head"><h2>进程指标</h2></div>
+            <div class="metrics-grid" id="metrics-grid"></div>
+          </div>
+          <div class="panel">
+            <div class="panel-head"><h2>与既有运维面关系</h2></div>
+            <ul class="ops-list">
+              <li><code>/gateway/*</code> — 既有 REST，保留</li>
+              <li><code>/actuator/gateway</code> — Actuator 只读，保留</li>
+              <li><code>/console/api/instances/*</code> — 实例中心管控 API</li>
+            </ul>
+          </div>
+        </section>
+      </main>
+    </div>
+  </div>
+  <div class="toast" id="toast" hidden></div>
+  <script src="/console/console.js"></script>
+</body>
+</html>
