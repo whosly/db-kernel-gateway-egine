@@ -25,7 +25,8 @@ import com.whosly.gateway.audit.AuditSpoolConfig;
 import com.whosly.gateway.audit.JdbcAuditDestination;
 import com.whosly.gateway.audit.SpoolingTrafficObserver;
 import com.whosly.gateway.masking.MaskingEngine;
-import com.whosly.gateway.masking.MaskingRule;
+import com.whosly.gateway.masking.MaskingCipher;
+import com.whosly.gateway.masking.MaskingKeyProvider;
 import com.whosly.gateway.masking.MaskingRuleRegistry;
 import com.whosly.gateway.parser.DruidSqlParser;
 import com.whosly.gateway.parser.SqlParser;
@@ -36,6 +37,8 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import com.whosly.gateway.console.SupportedDatabaseCatalog;
 import com.whosly.gateway.console.persist.ConsoleInstanceStore;
+import com.whosly.gateway.console.masking.InstanceMaskingEngineFactory;
+import com.whosly.gateway.console.masking.InstanceMaskingRuleCompiler;
 import com.whosly.gateway.runtime.GatewayListenerRuntime;
 import org.springframework.context.annotation.Primary;
 import org.springframework.context.annotation.Configuration;
@@ -200,6 +203,13 @@ public class GatewayConfig implements DisposableBean {
     @Autowired(required = false)
     private MaskingRuleRegistry maskingRuleRegistry;
 
+    /** Base64 AES key for EncryptingRule (console encrypt strategy). Empty = encrypt rejected. */
+    @Value("${gateway.masking.key-base64:}")
+    private String maskingKeyBase64;
+
+    @Value("${gateway.masking.key-id:default}")
+    private String maskingKeyId;
+
     @Value("${gateway.audit.destination:spool}")
     private String auditDestination;
 
@@ -239,6 +249,20 @@ public class GatewayConfig implements DisposableBean {
         return new MaskingEngine(maskingRuleRegistry != null
                 ? maskingRuleRegistry
                 : new MaskingRuleRegistry(List.of()));
+    }
+
+    /**
+     * Compiles H2 console masking rules. Encrypt strategy is available only when
+     * {@code gateway.masking.key-base64} is set (no console key UI).
+     */
+    @Bean
+    public InstanceMaskingRuleCompiler instanceMaskingRuleCompiler() {
+        String id = maskingKeyId != null && !maskingKeyId.isBlank() ? maskingKeyId : "default";
+        MaskingCipher cipher = null;
+        if (maskingKeyBase64 != null && !maskingKeyBase64.isBlank()) {
+            cipher = new MaskingCipher(MaskingKeyProvider.ofBase64(id, maskingKeyBase64.trim()));
+        }
+        return new InstanceMaskingRuleCompiler(cipher, id);
     }
 
     @Bean
@@ -329,9 +353,11 @@ public class GatewayConfig implements DisposableBean {
             ProtocolAdapterRegistry protocolAdapterRegistry,
             GatewayInstanceProperties instanceProperties,
             SupportedDatabaseCatalog catalog,
-            ConsoleInstanceStore consoleInstanceStore) {
+            ConsoleInstanceStore consoleInstanceStore,
+            @Autowired(required = false) InstanceMaskingEngineFactory maskingEngineFactory) {
         return new GatewayListenerRuntime(
-                this, protocolAdapterRegistry, instanceProperties, catalog, consoleInstanceStore);
+                this, protocolAdapterRegistry, instanceProperties, catalog,
+                consoleInstanceStore, maskingEngineFactory);
     }
 
     /**

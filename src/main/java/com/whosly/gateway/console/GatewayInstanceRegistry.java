@@ -1,6 +1,9 @@
 package com.whosly.gateway.console;
 
 import com.whosly.gateway.console.GatewayInstance.InstanceStatus;
+import com.whosly.gateway.console.masking.InstanceMaskingEngineFactory;
+import com.whosly.gateway.console.persist.MaskingRuleRecord;
+import com.whosly.gateway.console.persist.MaskingRuleStore;
 import com.whosly.gateway.runtime.GatewayListenerRuntime;
 import com.whosly.gateway.runtime.GatewayListenerRuntime.CreateInstanceRequest;
 import com.whosly.gateway.runtime.GatewayListenerRuntime.ManagedListener;
@@ -87,6 +90,116 @@ public class GatewayInstanceRegistry {
         body.put("status", instance.status().name());
         body.put("metrics", instance.metrics());
         return body;
+    }
+
+
+    public List<MaskingRuleRecord> listMaskingRules(String instanceId) {
+        require(instanceId);
+        return maskingStore().findByInstanceId(instanceId.trim());
+    }
+
+    public MaskingRuleRecord createMaskingRule(String instanceId, MaskingRuleRecord draft) {
+        require(instanceId);
+        InstanceMaskingEngineFactory factory = maskingFactory();
+        MaskingRuleRecord row = withInstance(instanceId.trim(), draft);
+        factory.compiler().validateForPersist(row);
+        MaskingRuleRecord saved = factory.store().insert(row);
+        listenerRuntime.reloadMasking(instanceId.trim());
+        return saved;
+    }
+
+    public MaskingRuleRecord updateMaskingRule(String instanceId, String ruleId, MaskingRuleRecord draft) {
+        require(instanceId);
+        InstanceMaskingEngineFactory factory = maskingFactory();
+        MaskingRuleRecord existing = factory.store()
+                .findByIdAndInstance(ruleId, instanceId.trim())
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "Unknown masking rule id: " + ruleId));
+        MaskingRuleRecord row = new MaskingRuleRecord(
+                existing.id(),
+                existing.instanceId(),
+                draft.name() != null ? draft.name() : existing.name(),
+                draft.strategy() != null ? draft.strategy() : existing.strategy(),
+                draft.priority(),
+                draft.columnName(),
+                draft.tableName(),
+                draft.namePattern(),
+                draft.fixedValue(),
+                draft.keepPrefix(),
+                draft.keepSuffix(),
+                draft.hashHexLength(),
+                draft.enabled(),
+                existing.createdAt(),
+                null);
+        factory.compiler().validateForPersist(row);
+        MaskingRuleRecord saved = factory.store().update(row);
+        listenerRuntime.reloadMasking(instanceId.trim());
+        return saved;
+    }
+
+    public List<MaskingRuleRecord> replaceMaskingRules(String instanceId, List<MaskingRuleRecord> rules) {
+        require(instanceId);
+        InstanceMaskingEngineFactory factory = maskingFactory();
+        List<MaskingRuleRecord> prepared = new ArrayList<>();
+        for (MaskingRuleRecord draft : rules) {
+            MaskingRuleRecord row = withInstance(instanceId.trim(), draft);
+            factory.compiler().validateForPersist(row);
+            prepared.add(row);
+        }
+        List<MaskingRuleRecord> saved = factory.store().replaceAll(instanceId.trim(), prepared);
+        listenerRuntime.reloadMasking(instanceId.trim());
+        return saved;
+    }
+
+    public Map<String, Object> deleteMaskingRule(String instanceId, String ruleId) {
+        require(instanceId);
+        InstanceMaskingEngineFactory factory = maskingFactory();
+        boolean deleted = factory.store().deleteById(ruleId, instanceId.trim());
+        if (!deleted) {
+            throw new IllegalArgumentException("Unknown masking rule id: " + ruleId);
+        }
+        Map<String, Object> reload = listenerRuntime.reloadMasking(instanceId.trim());
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("ok", true);
+        body.put("deleted", true);
+        body.put("id", ruleId);
+        body.put("instanceId", instanceId.trim());
+        body.put("reload", reload);
+        return body;
+    }
+
+    public Map<String, Object> reloadMasking(String instanceId) {
+        require(instanceId);
+        return listenerRuntime.reloadMasking(instanceId.trim());
+    }
+
+    private InstanceMaskingEngineFactory maskingFactory() {
+        return listenerRuntime.maskingEngineFactory().orElseThrow(() ->
+                new IllegalStateException("Masking rule store is not configured"));
+    }
+
+    private MaskingRuleStore maskingStore() {
+        return maskingFactory().store();
+    }
+
+    private static MaskingRuleRecord withInstance(String instanceId, MaskingRuleRecord draft) {
+        Objects.requireNonNull(draft, "draft");
+        return new MaskingRuleRecord(
+                draft.id(),
+                instanceId,
+                draft.name(),
+                draft.strategy(),
+                draft.priority(),
+                draft.columnName(),
+                draft.tableName(),
+                draft.namePattern(),
+                draft.fixedValue(),
+                draft.keepPrefix(),
+                draft.keepSuffix(),
+                draft.hashHexLength(),
+                draft.enabled(),
+                draft.createdAt(),
+                draft.updatedAt());
     }
 
     private GatewayInstance require(String id) {

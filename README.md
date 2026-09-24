@@ -357,7 +357,8 @@ mvn -Pintegration-test test
 | 层 | 默认 | 如何关闭 |
 |---|---|---|
 | 审计语句脱敏 | 开（若启用审计） | `gateway.audit.mask-statements=false` |
-| 结果集脱敏 | 关（无规则即不启用） | 不注册 `MaskingRule` bean |
+| 结果集脱敏 | 关（无规则即不启用） | 不注册 `MaskingRule` bean；或在管控台实例抽屉配置 H2 规则 |
+| 列加密（EncryptingRule） | 关 | 设置 `gateway.masking.key-base64` 后可在管控台选「加密」策略 |
 | 转发字节 | 从不因观测改写 | — |
 
 结果集脱敏与 `mask-statements` 应使用同一套策略，避免审计留下规则想隐藏的原文（规则 §8.2）。
@@ -372,6 +373,7 @@ mvn -Pintegration-test test
 | UI | [http://localhost:8080/console](http://localhost:8080/console)（`server.port` 可改） |
 | 类型目录 API | `GET /console/api/supported-databases` |
 | 实例 API | `GET/POST /console/api/instances`、`/instances/{id}/status|metrics|start|stop` |
+| 脱敏规则 API | `GET/POST/PUT/DELETE /console/api/instances/{id}/masking-rules`（协议无关；encrypt 需 `gateway.masking.key-base64`） |
 | 设计 | [`docs/CONSOLE_DESIGN.md`](docs/CONSOLE_DESIGN.md) |
 
 一等实体是 **网关实例**（监听端口 + `dbType` 标签），不是按 MySQL/PG 分拆的控制台。  

@@ -1,10 +1,13 @@
-import { apiDelete, apiGet, apiPost } from './client'
+import { apiDelete, apiGet, apiPost, apiPut } from './client'
 import type {
   ActionResult,
   CatalogEntry,
   CreateInstancePayload,
   GatewayInstance,
   InstancesResponse,
+  MaskingRule,
+  MaskingRulePayload,
+  MaskingRulesResponse,
   OverviewResponse,
 } from './types'
 
@@ -52,4 +55,34 @@ export function getConfigSummary() {
 
 export function getHealth() {
   return apiGet<Record<string, unknown>>('/health')
+}
+
+export function listMaskingRules(instanceId: string) {
+  return apiGet<MaskingRulesResponse>(
+    `/instances/${encodeURIComponent(instanceId)}/masking-rules`,
+  )
+}
+
+export function createMaskingRule(instanceId: string, payload: MaskingRulePayload) {
+  return apiPost<MaskingRule>(
+    `/instances/${encodeURIComponent(instanceId)}/masking-rules`,
+    payload,
+  )
+}
+
+export function updateMaskingRule(
+  instanceId: string,
+  ruleId: string,
+  payload: MaskingRulePayload,
+) {
+  return apiPut<MaskingRule>(
+    `/instances/${encodeURIComponent(instanceId)}/masking-rules/${encodeURIComponent(ruleId)}`,
+    payload,
+  )
+}
+
+export function deleteMaskingRule(instanceId: string, ruleId: string) {
+  return apiDelete<ActionResult>(
+    `/instances/${encodeURIComponent(instanceId)}/masking-rules/${encodeURIComponent(ruleId)}`,
+  )
 }

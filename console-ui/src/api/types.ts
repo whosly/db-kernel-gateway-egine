@@ -74,3 +74,44 @@ export interface CreateInstancePayload {
   targetPassword?: string
   enabled?: boolean
 }
+
+export type MaskingStrategy = 'null' | 'fixed' | 'partial' | 'hash' | 'encrypt'
+
+export interface MaskingRule {
+  id: string
+  instanceId: string
+  name: string
+  strategy: MaskingStrategy | string
+  priority: number
+  columnName?: string | null
+  tableName?: string | null
+  namePattern?: string | null
+  fixedValue?: string | null
+  keepPrefix?: number | null
+  keepSuffix?: number | null
+  hashHexLength?: number | null
+  enabled: boolean
+  createdAt?: string | null
+  updatedAt?: string | null
+}
+
+export interface MaskingRulePayload {
+  id?: string
+  name: string
+  strategy: MaskingStrategy | string
+  priority?: number
+  columnName?: string
+  tableName?: string
+  namePattern?: string
+  fixedValue?: string
+  keepPrefix?: number
+  keepSuffix?: number
+  hashHexLength?: number
+  enabled?: boolean
+}
+
+export interface MaskingRulesResponse {
+  instanceId: string
+  rules: MaskingRule[]
+  count: number
+}

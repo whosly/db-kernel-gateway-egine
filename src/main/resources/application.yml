@@ -23,6 +23,12 @@ gateway:
   # Control-plane H2 file path (console-managed instances). Relative to process cwd.
   console:
     db-path: ${GATEWAY_CONSOLE_DB_PATH:./data/gateway-console}
+  # Result-set encrypt strategy key (console masking-rules strategy=encrypt).
+  # Uncomment / set GATEWAY_MASKING_KEY_BASE64 to enable encrypt; otherwise encrypt → HTTP 400.
+  # Never commit real keys.
+  # masking:
+  #   key-id: ${GATEWAY_MASKING_KEY_ID:default}
+  #   key-base64: ${GATEWAY_MASKING_KEY_BASE64}
   # Proxy listen port (protocol-specific adapter binds here)
   proxy-port: ${GATEWAY_PROXY_PORT:3307}
   proxy-db-type: ${GATEWAY_PROXY_DB_TYPE:mysql}

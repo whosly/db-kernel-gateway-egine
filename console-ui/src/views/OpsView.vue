@@ -27,7 +27,7 @@ usePolling(load, 6000)
         <li>管控台 API：<code>/console/api/*</code>（实例中心，协议无关）</li>
         <li>遗留管理面：<code>/gateway/*</code> · Actuator · CLI（legacy adapter）</li>
         <li>管控台创建的实例持久化在嵌入式 H2（控制面库，非业务库）</li>
-        <li>列脱敏 / 列加密挂接同一实例 pipeline（后端 masking engine）；本阶段不做脱敏 UI</li>
+        <li>列脱敏 / 列加密：实例抽屉「脱敏规则」Tab；H2 持久化 + 热挂 MaskingEngine；encrypt 需 <code>gateway.masking.key-base64</code></li>
         <li>密钥永不回传；H2 中密码为实验室明文存储，生产需加密/密钥托管</li>
       </ul>
     </div>

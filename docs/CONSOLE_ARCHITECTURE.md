@@ -181,10 +181,10 @@ com.whosly.gateway
 - 密码列存于 H2，API **永不回传**；生产级加密 / 外部密钥机属后续，本阶段可明文落控制面库但文档标注风险。
 - **禁止**把管控配置写进被代理的 MySQL/PG 业务库。
 
-**未来列脱敏 / 列加密（不在本轮实现 UI）**
+**列脱敏 / 列加密挂点（Phase A+ 已实现）**
 
-- 挂点：已有 `masking` / traffic observer 管线，按 **实例** 绑定规则，而不是按 DB 品牌页面。
-- 管控台后续增加「实例 → 安全策略」页即可，不改协议无关模型。
+- 挂点：已有 `masking` / traffic observer 管线，按 **实例** 绑定规则（H2 + 热挂 `MaskingEngine`），而不是按 DB 品牌页面。
+- 管控台实例抽屉「脱敏规则」Tab；详见 §11。密钥管理 UI / 表结构 introspect 仍后续。
 
 ## 3. 前端架构（Vue 3 + TypeScript + Vite）
 
@@ -319,6 +319,7 @@ build: { outDir: 'dist', emptyOutDir: true }
 | **B** | 控制面密码加密 / 可外置 DB；操作审计 | 密钥与合规 |
 | **C** | 鉴权；只读令牌；操作审计进 spool | Spring Security |
 | **D** | 可选独立前端部署（CDN + API 网关）；BFF | 运维需求 |
+| **A+（当前）** | 实例级脱敏规则 CRUD（H2）+ 热挂 MaskingEngine；encrypt 用配置密钥 | 现有 masking 包 |
 | **E** | 可观测图表（时序）；接 Micrometer | 指标后端 |
 
 每阶段仍遵守 C1–C6；前端可替换，**API 版本**用文档章节号管理（现为 **契约 v1**）。
@@ -371,4 +372,80 @@ build: { outDir: 'dist', emptyOutDir: true }
 | 2 | 当前代码 `overview.metrics` 仍只读 legacy `@Primary` 指标 | Phase A 必须改为全实例求和并返回 `legacyMetrics` |
 | 3 | vanilla 与 Vue 双实现风险 | Phase A 以 Vite 产物为唯一 UI |
 | 4 | 用户要求配置落库 | 改为嵌入式 H2 文件库；yml 仅引导；与业务库隔离 |
+
+
+---
+
+## 11. Phase A+ · 实例安全策略（列脱敏 / 列加密挂点）
+
+> 作者自检通过后实现。协议无关：策略挂在 **Gateway Instance**，不按 DB 品牌分页面。
+
+### 11.1 目标
+
+| 能力 | 本轮 | 说明 |
+|---|---|---|
+| 按实例配置脱敏规则 | ✅ | H2 持久化；热更新到该实例 `MaskingEngine` |
+| 规则类型 | ✅ | `null` / `fixed` / `partial` / `hash` / `encrypt`（映射现有 `*Rule`） |
+| 列选择 | ✅ | `column` 精确名；可选 `table`；可选 `namePattern`（regex） |
+| 管控台 UI | ✅ | 实例抽屉或「安全策略」子页；类型无关表单 |
+| 进程级 Spring `MaskingRule` bean | 兼容 | 仍作为**全局默认**；实例 H2 规则优先合并（实例规则 priority 覆盖同名列） |
+| 密钥管理 UI | 🔜 | `encrypt` 使用 `gateway.masking.key`（或已有 KeyProvider）；控制台不展示明文密钥 |
+| 动态发现表结构 | 🔜 | 本轮手填列名；不连业务库 introspect |
+
+### 11.2 持久化（控制面 H2）
+
+表 `gateway_instance_masking_rule`：
+
+```text
+id (pk), instance_id, name, strategy, priority,
+column_name, table_name null, name_pattern null,
+fixed_value null, keep_prefix null, keep_suffix null,
+hash_hex_length null, enabled, created_at, updated_at
+```
+
+- `strategy`: `null|fixed|partial|hash|encrypt`
+- API 不回传与密钥相关字段；`fixed_value` 可回传（非密钥）或可选掩码
+- 实例删除时级联删规则
+
+### 11.3 API（契约追加，仍无品牌路径）
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/console/api/instances/{id}/masking-rules` | 列表 |
+| PUT | `/console/api/instances/{id}/masking-rules` | 全量替换（事务）或 |
+| POST | `/console/api/instances/{id}/masking-rules` | 新增一条 |
+| PUT | `/console/api/instances/{id}/masking-rules/{ruleId}` | 更新 |
+| DELETE | `/console/api/instances/{id}/masking-rules/{ruleId}` | 删除 |
+
+写操作后：`GatewayListenerRuntime.reloadMasking(instanceId)` 重建该 listener 的 `MaskingEngine` 并
+`adapter.setMaskingEngine(...)` **不停 TCP 监听端口**。新会话立即生效；已有会话在建立时捕获的
+Engine 保持至重连。可选 `POST .../masking-rules/reload` 手动重挂。
+
+### 11.4 运行时挂接
+
+```text
+buildAdapter(instance)
+  MaskingRuleRegistry = globalBeans ⊕ instanceH2Rules
+  MaskingEngine(engine)
+  adapter.setMaskingEngine(engine)
+```
+
+- 无规则 → 透明（现有行为）
+- 有规则 → fail-closed 改写（现有行为）
+- **每实例独立 Engine**，避免串规则
+- 实例 H2 规则编译时 priority += `1_000_000`，同列上优先于进程级 Spring `MaskingRule` bean
+- `encrypt` 依赖 `gateway.masking.key-base64`（及可选 `key-id`）；未配置则 API 400
+
+### 11.5 前端
+
+- `InstancesView` 抽屉增加「脱敏规则」Tab：表格 + 新增表单（strategy 下拉）
+- `api/types.ts` 增补 DTO；禁止 `if (dbType===…)` 分支
+
+### 11.6 自检
+
+- [x] 策略挂实例而非品牌
+- [x] H2 控制面，非业务库
+- [x] 复用现有 MaskingEngine / *Rule，不重写协议改写
+- [x] encrypt 无控制台密钥 UI，用网关配置密钥
+- [x] 与联调闭环（创建实例→启停→代理）同一路径
 

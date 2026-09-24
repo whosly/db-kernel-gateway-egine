@@ -7,6 +7,7 @@ import com.whosly.gateway.config.GatewayConfig;
 import com.whosly.gateway.console.GatewayInstance;
 import com.whosly.gateway.console.GatewayInstanceRegistry;
 import com.whosly.gateway.console.SupportedDatabaseCatalog;
+import com.whosly.gateway.console.persist.MaskingRuleRecord;
 import com.whosly.gateway.runtime.GatewayListenerRuntime.CreateInstanceRequest;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
@@ -15,11 +16,13 @@ import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -233,9 +236,121 @@ public class ConsoleApiController {
         return Map.copyOf(summed);
     }
 
+
+    // ---- Instance masking rules (Phase A+, protocol-agnostic) ----
+
+    @GetMapping("/instances/{id}/masking-rules")
+    public Map<String, Object> listMaskingRules(@PathVariable("id") String id) {
+        List<MaskingRuleRecord> rules = instanceRegistry.listMaskingRules(id);
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("instanceId", id);
+        body.put("rules", rules.stream().map(ConsoleApiController::toMaskingRuleDto).toList());
+        body.put("count", rules.size());
+        return body;
+    }
+
+    @PostMapping("/instances/{id}/masking-rules")
+    @ResponseStatus(HttpStatus.CREATED)
+    public Map<String, Object> createMaskingRule(@PathVariable("id") String id,
+                                                 @RequestBody MaskingRuleBody body) {
+        MaskingRuleRecord saved = instanceRegistry.createMaskingRule(id, fromBody(id, body, null));
+        return toMaskingRuleDto(saved);
+    }
+
+    @PutMapping("/instances/{id}/masking-rules/{ruleId}")
+    public Map<String, Object> updateMaskingRule(@PathVariable("id") String id,
+                                                 @PathVariable("ruleId") String ruleId,
+                                                 @RequestBody MaskingRuleBody body) {
+        MaskingRuleRecord saved = instanceRegistry.updateMaskingRule(id, ruleId, fromBody(id, body, ruleId));
+        return toMaskingRuleDto(saved);
+    }
+
+    /** Full replace of all rules for the instance (transactional delete+insert). */
+    @PutMapping("/instances/{id}/masking-rules")
+    public Map<String, Object> replaceMaskingRules(@PathVariable("id") String id,
+                                                   @RequestBody List<MaskingRuleBody> bodies) {
+        if (bodies == null) {
+            throw new IllegalArgumentException("request body must be a JSON array of rules");
+        }
+        List<MaskingRuleRecord> drafts = new ArrayList<>();
+        for (MaskingRuleBody body : bodies) {
+            drafts.add(fromBody(id, body, body != null ? body.id() : null));
+        }
+        List<MaskingRuleRecord> saved = instanceRegistry.replaceMaskingRules(id, drafts);
+        Map<String, Object> resp = new LinkedHashMap<>();
+        resp.put("instanceId", id);
+        resp.put("rules", saved.stream().map(ConsoleApiController::toMaskingRuleDto).toList());
+        resp.put("count", saved.size());
+        return resp;
+    }
+
+    @DeleteMapping("/instances/{id}/masking-rules/{ruleId}")
+    public Map<String, Object> deleteMaskingRule(@PathVariable("id") String id,
+                                                 @PathVariable("ruleId") String ruleId) {
+        return instanceRegistry.deleteMaskingRule(id, ruleId);
+    }
+
+    @PostMapping("/instances/{id}/masking-rules/reload")
+    public Map<String, Object> reloadMasking(@PathVariable("id") String id) {
+        return instanceRegistry.reloadMasking(id);
+    }
+
+    static Map<String, Object> toMaskingRuleDto(MaskingRuleRecord row) {
+        Map<String, Object> dto = new LinkedHashMap<>();
+        dto.put("id", row.id());
+        dto.put("instanceId", row.instanceId());
+        dto.put("name", row.name());
+        dto.put("strategy", row.strategy());
+        dto.put("priority", row.priority());
+        dto.put("columnName", row.columnName());
+        dto.put("tableName", row.tableName());
+        dto.put("namePattern", row.namePattern());
+        dto.put("fixedValue", row.fixedValue()); // non-secret; OK to return
+        dto.put("keepPrefix", row.keepPrefix());
+        dto.put("keepSuffix", row.keepSuffix());
+        dto.put("hashHexLength", row.hashHexLength());
+        dto.put("enabled", row.enabled());
+        dto.put("createdAt", row.createdAt() != null ? row.createdAt().toString() : null);
+        dto.put("updatedAt", row.updatedAt() != null ? row.updatedAt().toString() : null);
+        return dto;
+    }
+
+    private static MaskingRuleRecord fromBody(String instanceId, MaskingRuleBody body, String ruleId) {
+        if (body == null) {
+            throw new IllegalArgumentException("request body is required");
+        }
+        boolean enabled = body.enabled() == null || body.enabled();
+        int priority = body.priority() != null ? body.priority() : 0;
+        return new MaskingRuleRecord(
+                ruleId != null ? ruleId : body.id(),
+                instanceId,
+                body.name(),
+                body.strategy(),
+                priority,
+                body.columnName(),
+                body.tableName(),
+                body.namePattern(),
+                body.fixedValue(),
+                body.keepPrefix(),
+                body.keepSuffix(),
+                body.hashHexLength(),
+                enabled,
+                null,
+                null);
+    }
+
     @ExceptionHandler(IllegalArgumentException.class)
     @ResponseStatus(HttpStatus.BAD_REQUEST)
     public Map<String, Object> badRequest(IllegalArgumentException ex) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("ok", false);
+        body.put("message", ex.getMessage());
+        return body;
+    }
+
+    @ExceptionHandler(IllegalStateException.class)
+    @ResponseStatus(HttpStatus.BAD_REQUEST)
+    public Map<String, Object> badState(IllegalStateException ex) {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("ok", false);
         body.put("message", ex.getMessage());
@@ -264,6 +379,25 @@ public class ConsoleApiController {
             String targetDatabase,
             String targetUsername,
             String targetPassword,
+            Boolean enabled
+    ) {
+    }
+
+    /**
+     * JSON body for masking-rule create/update. Never carries target DB passwords.
+     */
+    public record MaskingRuleBody(
+            String id,
+            String name,
+            String strategy,
+            Integer priority,
+            String columnName,
+            String tableName,
+            String namePattern,
+            String fixedValue,
+            Integer keepPrefix,
+            Integer keepSuffix,
+            Integer hashHexLength,
             Boolean enabled
     ) {
     }
