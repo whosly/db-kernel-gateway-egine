@@ -57,6 +57,15 @@ class InstanceSqlExecuteServiceTest {
                 "sql-h2", "SQL lab", "h2", "0.0.0.0", 18080, true, true,
                 false, "127.0.0.1", 0, url, "sa",
                 adapter, new GatewayRuntimeMetrics(), "config"));
+
+        // Wire-type instance stopped — execute must require RUNNING (proxy path).
+        ProtocolAdapter mysqlAdapter = mock(ProtocolAdapter.class);
+        when(mysqlAdapter.isRunning()).thenReturn(false);
+        listeners.put("sql-mysql-stopped", new ManagedListener(
+                "sql-mysql-stopped", "MySQL stopped", "mysql", "0.0.0.0", 33307, true, true,
+                true, "127.0.0.1", 3306, "appdb", "root",
+                mysqlAdapter, new GatewayRuntimeMetrics(), "config"));
+
         GatewayListenerRuntime runtime = new GatewayListenerRuntime(listeners, "sql-h2");
 
         mutable = new MutableDatabaseRiskPolicy();
@@ -77,6 +86,7 @@ class InstanceSqlExecuteServiceTest {
         assertThat(body.get("ok")).isEqualTo(true);
         assertThat(body.get("rowCount")).isEqualTo(2);
         assertThat(body.get("truncated")).isEqualTo(true);
+        assertThat(body.get("viaProxy")).isEqualTo(false);
         @SuppressWarnings("unchecked")
         List<String> cols = (List<String>) body.get("columns");
         assertThat(cols).isNotEmpty();
@@ -107,5 +117,44 @@ class InstanceSqlExecuteServiceTest {
         String t = InstanceSqlExecuteService.truncateForAudit(longSql, 50);
         assertThat(t.length()).isLessThanOrEqualTo(51);
         assertThat(t).endsWith("…");
+    }
+
+    @Test
+    void mysqlStoppedRequiresStart() {
+        // Password comes from gatewayConfig for config-source instances when empty on listener;
+        // set a non-empty password so we reach the RUNNING gate.
+        ReflectionTestUtils.setField(gatewayConfig, "targetPassword", "secret");
+        assertThatThrownBy(() -> service.execute("sql-mysql-stopped", "SELECT 1", 10, 1000))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("未启动");
+    }
+
+    @Test
+    void resolveProxyConnectHostMapsWildcardToLoopback() {
+        assertThat(InstanceSqlExecuteService.resolveProxyConnectHost("0.0.0.0")).isEqualTo("127.0.0.1");
+        assertThat(InstanceSqlExecuteService.resolveProxyConnectHost("::")).isEqualTo("127.0.0.1");
+        assertThat(InstanceSqlExecuteService.resolveProxyConnectHost("*")).isEqualTo("127.0.0.1");
+        assertThat(InstanceSqlExecuteService.resolveProxyConnectHost("")).isEqualTo("127.0.0.1");
+        assertThat(InstanceSqlExecuteService.resolveProxyConnectHost("192.168.1.10")).isEqualTo("192.168.1.10");
+        assertThat(InstanceSqlExecuteService.resolveProxyConnectHost("127.0.0.1")).isEqualTo("127.0.0.1");
+    }
+
+    @Test
+    void buildProxyJdbcUrlUsesListenPortNotTargetPort() {
+        String url = InstanceSqlExecuteService.buildProxyJdbcUrl(
+                "mysql", "0.0.0.0", 33307, "appdb");
+        assertThat(url).startsWith("jdbc:mysql://127.0.0.1:33307/appdb");
+        assertThat(url).doesNotContain(":3306/");
+
+        String pg = InstanceSqlExecuteService.buildProxyJdbcUrl(
+                "postgresql", "10.0.0.5", 35433, "testdb");
+        assertThat(pg).isEqualTo("jdbc:postgresql://10.0.0.5:35433/testdb");
+    }
+
+    @Test
+    void usesWireProxyForMysqlNotH2() {
+        assertThat(InstanceSqlExecuteService.usesWireProxy("mysql")).isTrue();
+        assertThat(InstanceSqlExecuteService.usesWireProxy("postgresql")).isTrue();
+        assertThat(InstanceSqlExecuteService.usesWireProxy("h2")).isFalse();
     }
 }

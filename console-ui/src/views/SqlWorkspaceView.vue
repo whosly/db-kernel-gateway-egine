@@ -64,8 +64,9 @@ onMounted(loadInstances)
 <template>
   <div class="sql-ws">
     <p class="lead">
-      SQL 工作台挂在<strong>网关实例</strong>上：服务端 JDBC <em>直连目标库</em>（与列提示同源凭据），
-      <strong>不是</strong>经代理监听口的协议客户端。受风控策略约束；仅单条语句。
+      SQL 工作台挂在<strong>网关实例</strong>上：服务端 JDBC 经该实例的<strong>代理监听口</strong>
+      （listenPort）执行，与业务客户端同路径——已配置的<strong>脱敏规则</strong>、流量观测与数据面风控会生效。
+      实例须先<strong>启动</strong>；列提示仍直连目标库。受管控台风控约束；仅单条语句。
     </p>
 
     <div class="bar">
@@ -93,7 +94,9 @@ onMounted(loadInstances)
 
     <template v-else>
       <p v-if="selected" class="meta muted">
-        目标 {{ selected.targetHost }}:{{ selected.targetPort }}
+        代理 {{ selected.listenHost }}:{{ selected.listenPort }}
+        · 状态 {{ selected.status }}
+        · 目标 {{ selected.targetHost }}:{{ selected.targetPort }}
         · 库 {{ selected.targetDatabase || '—' }}
         · 密码 {{ selected.passwordConfigured ? '已配置' : '未配置（需先编辑实例）' }}
         · 来源 {{ selected.source === 'console' ? '管控台' : 'YAML' }}
@@ -113,6 +116,7 @@ onMounted(loadInstances)
           <span>{{ result.durationMs }} ms</span>
           <span v-if="result.truncated" class="warn">已截断</span>
           <span v-if="result.updateCount != null">updateCount={{ result.updateCount }}</span>
+          <span v-if="result.viaProxy" class="ok-tag">经代理 {{ result.proxyHost }}:{{ result.proxyPort }}</span>
           <span class="muted tiny">{{ result.note }}</span>
         </div>
         <p v-for="(w, i) in result.warnings || []" :key="i" class="muted tiny">{{ w }}</p>
@@ -164,6 +168,7 @@ onMounted(loadInstances)
 .result { margin-top: 1rem; }
 .result-head { display: flex; flex-wrap: wrap; gap: 0.75rem; margin-bottom: 0.5rem; font-size: 0.85rem; }
 .warn { color: #f59e0b; }
+.ok-tag { color: #10b981; font-size: 0.8rem; }
 .table-wrap { overflow: auto; max-height: 28rem; border: 1px solid var(--border); border-radius: var(--radius); }
 table { border-collapse: collapse; width: 100%; font-size: 0.85rem; }
 th, td { border-bottom: 1px solid var(--border); padding: 0.4rem 0.6rem; text-align: left; white-space: nowrap; }

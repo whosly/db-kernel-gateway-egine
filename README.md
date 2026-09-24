@@ -377,7 +377,7 @@ mvn -Pintegration-test test
 | 会话 | `GET …/instances/{id}/sessions`；`DELETE …/sessions/{connectionId}`（关客户端腿） |
 | 健康探测 | `POST|GET …/instances/{id}/health-check`（TCP + 可选 JDBC，~3s） |
 | 导出 / 导入 | `GET …/instances/export`、`GET …/config/export`（无密码）；`POST …/instances/import` |
-| SQL 工作台 | `POST …/instances/{id}/sql/execute`（JDBC 直连目标库；非经代理口；单语句 + 风控） |
+| SQL 工作台 | `POST …/instances/{id}/sql/execute`（经实例代理 listenPort；须 RUNNING；脱敏可验证；h2 lab 直连；单语句 + 风控） |
 | 最近语句 | `GET …/instances/{id}/recent-statements`（内存环，重启丢失） |
 | 脱敏规则 API | `GET/POST/PUT/DELETE /console/api/instances/{id}/masking-rules`（协议无关） |
 | 列提示 | `GET /console/api/instances/{id}/schema/columns?table=`（JDBC metadata；失败 502） |

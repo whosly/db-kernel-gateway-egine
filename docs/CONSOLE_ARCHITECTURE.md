@@ -322,7 +322,7 @@ build: { outDir: 'dist', emptyOutDir: true }
 | **C** | 完整鉴权 / SSO | 规划；**C partial** 见 §14（审计可见性 + 可选 read-token） |
 | **D** | 可选独立前端部署（CDN + API 网关）；BFF | 规划 |
 | **E** | 可观测图表（时序）；接 Micrometer | **E lite** 见 §14（进程内 timeseries；外部 Prometheus 非必需） |
-| **管控台完备 + SQL 工作台** | 编辑/克隆/导入/筛选/批量 + SQL v1 | ✅ 见 §15（Prometheus 本轮不做） |
+| **管控台完备 + SQL 工作台** | 编辑/克隆/导入/筛选/批量 + SQL 经代理 | ✅ 见 §15（Prometheus 本轮不做） |
 
 每阶段仍遵守 C1–C6；前端可替换，**API 版本**用文档章节号管理（现为 **契约 v1**）。
 
@@ -776,7 +776,7 @@ GET /console/api/audit/status
 | 导入 `POST …/import` | ✅ 本轮 | 对齐 export shape；默认不接受/忽略密码字段 |
 | 列表筛选 | ✅ 本轮 | `GET /instances?status=&dbType=&q=` 服务端过滤 |
 | 批量启停 | ✅ 本轮 | `POST /instances/bulk` per-id 结果 |
-| SQL 工作台 | ✅ 本轮 | `POST …/sql/execute`；挂网关实例；**JDBC 直连目标库**（非经代理监听口） |
+| SQL 工作台 | ✅ 本轮 / 已改经代理 | `POST …/sql/execute`；挂网关实例；**经代理 listenPort**（脱敏/观测/数据面风控生效）；h2 lab 仍直连 |
 | Prometheus 出口 | ❌ 本轮不做 | 见 §14.3 / STATUS P2-4 |
 
 ### 15.2 实例更新（PUT）
@@ -827,17 +827,19 @@ GET /console/api/audit/status
 | 项 | 约定 |
 |---|---|
 | 定位 | 一等能力挂在 **Gateway Instance**；不是按品牌分叉的页面 |
-| 执行路径（v1） | **服务端 JDBC 直连该实例存储的目标凭据**（与 schema/columns 同源）。**不是**经代理 `listenPort` 的协议客户端。文档诚实声明；后续可选「经代理口执行以验证脱敏」 |
+| 执行路径 | **服务端 JDBC 经该实例代理监听口**（与业务客户端同路径）：connect host 在 bind=`0.0.0.0`/`::`/`*` 时用 `127.0.0.1`，否则用具体 `listenHost`；port=`listenPort`；库名/用户/密码仍为**目标凭据**（透明代理）。列提示 `/schema/columns` 仍直连目标库。 |
+| 例外 | `dbType=h2`（lab/单测）无 ProtocolAdapter 线协议 → **直连目标 JDBC**，不要求 RUNNING |
 | 路径 | `POST /console/api/instances/{id}/sql/execute` |
 | Body | `{ sql, maxRows?: 200 (cap 1000), timeoutMs?: 15000 (cap 60000) }` |
-| 响应 | `{ ok, columns, rows, rowCount, truncated, durationMs, message?, warnings? }` |
+| 响应 | `{ ok, columns, rows, rowCount, truncated, durationMs, viaProxy, proxyHost?, proxyPort?, note, message?, warnings? }`；`note` 中文说明经代理口 |
+| 前置 | 线协议类型须实例 **RUNNING**；未启动 → **400**「请先启动…」 |
 | 单语句 | 仅允许单条语句；中间 `;` 拒绝（允许末尾分号） |
-| 风控 | 执行前对 SQL 文本走 `MutableDatabaseRiskPolicy`（operation=首关键字大写形态，statement=全文） |
+| 风控 | 执行前管控台层 `MutableDatabaseRiskPolicy`（defense in depth）；代理数据面亦有风控 |
 | 超时 | JDBC `Statement.setQueryTimeout`；超时取消 |
-| 安全 | 不记/不回密码；单元格字符串截断（4KB）；审计 `sql.execute`（语句截断，可走 mask-statements 风格） |
-| 类型 | MySQL / PostgreSQL（及 h2 lab）；SQL Server 无驱动则 **400** 明确说明 |
-| 错误 | 无密码/不支持类型 → 400；连接失败 → 502；未知实例 → 400/404 风格与现网一致 |
-| UI | 顶栏「SQL 工作台」路由 `/sql`；实例选择器 + 编辑区 + 运行 + 结果表；中文文案 |
+| 安全 | 不记/不回密码；单元格字符串截断（4KB）；审计 `sql.execute`（语句截断） |
+| 类型 | MySQL / MariaDB / PostgreSQL / SQL Server（有驱动）；h2 lab 直连；SQL Server 无驱动则 **400** |
+| 错误 | 无密码/未启动/不支持类型 → 400；连接失败 → 502；未知实例 → 400 |
+| UI | 顶栏「SQL 工作台」路由 `/sql`；标明经代理口 + 须启动；中文文案 |
 
 ### 15.7 REST 契约追加
 
@@ -856,7 +858,7 @@ GET /console/api/audit/status
 |---|---|---|
 | A–E lite / 风控 | 见 §11–§14 | ✅ |
 | **管控台完备（本轮）** | 编辑 · 克隆 · 导入 · 筛选 · 批量 | ✅ |
-| **SQL 工作台 v1（本轮）** | JDBC 目标库执行 + 风控 | ✅ |
+| **SQL 工作台（经代理）** | JDBC → listenPort；脱敏可验证；h2 例外直连 | ✅ |
 | Prometheus / SSO / IDE | 外部指标 · 完整鉴权 · 完整 SQL IDE | 规划（本轮明确不做） |
 
 ### 15.9 自检清单（作者）
@@ -867,7 +869,7 @@ GET /console/api/audit/status
 - [x] 密码永不回显；omit 保留；导入忽略密码
 - [x] 克隆复制 H2 密文；API 无明文
 - [x] SQL 单语句 + 风控 + 单元格截断 + 审计截断
-- [x] 文档标明 SQL v1 = JDBC 目标库，非代理口
+- [x] SQL 经代理 listenPort（RUNNING 门禁）；h2 lab 直连例外已文档化
 - [x] Prometheus / 外部 scrape **本轮不做**（写明）
 - [x] STATUS P2-3 + README API 表同步；`mvn test` + `npm run build` 绿
 

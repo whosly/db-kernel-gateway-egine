@@ -125,6 +125,11 @@ export interface SqlExecuteResult {
   warnings?: string[]
   note?: string
   updateCount?: number
+  viaProxy?: boolean
+  proxyHost?: string
+  proxyPort?: number
+  instanceId?: string
+  dbType?: string
 }
 
 export type MaskingStrategy = 'null' | 'fixed' | 'partial' | 'hash' | 'encrypt'

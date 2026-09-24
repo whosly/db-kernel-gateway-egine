@@ -34,9 +34,13 @@ import java.util.Properties;
 import java.util.regex.Pattern;
 
 /**
- * Console SQL workspace: JDBC against the instance's <em>target</em> database
- * (same credential path as schema columns). Not a wire-protocol client via the
- * proxy listen port (v1).
+ * Console SQL workspace: for wire-protocol types (MySQL / PostgreSQL / MariaDB /
+ * SQL Server), JDBC connects to the instance <em>proxy listen port</em> so masking,
+ * traffic observation, and data-plane risk apply. Schema-columns discovery remains
+ * direct target JDBC.
+ *
+ * <p>Exception: {@code h2} lab/unit tests keep direct JDBC (no ProtocolAdapter wire
+ * path in product).</p>
  */
 @Service
 public class InstanceSqlExecuteService {
@@ -89,18 +93,35 @@ public class InstanceSqlExecuteService {
         String dbType = listener.dbType();
         assertJdbcSupported(dbType);
 
-        String jdbcUrl;
-        try {
-            jdbcUrl = InstanceSchemaColumnsService.buildJdbcUrl(
-                    dbType, creds.host(), creds.port(), creds.database());
-        } catch (SchemaConnectException e) {
-            throw new IllegalArgumentException(e.getMessage());
-        }
-
         // SQL Server: only if driver present
         if (isSqlServer(dbType) && !isDriverPresent("com.microsoft.sqlserver.jdbc.SQLServerDriver")) {
             throw new IllegalArgumentException(
                     "当前 classpath 无 SQL Server JDBC 驱动，无法在管控台执行 SQL（可用：mysql / postgresql）");
+        }
+
+        boolean viaProxy = usesWireProxy(dbType);
+        String jdbcUrl;
+        String proxyHost = null;
+        int proxyPort = -1;
+        if (viaProxy) {
+            if (!listener.isRunning()) {
+                throw new IllegalArgumentException(
+                        "实例未启动，请先在「网关实例」页启动后再执行 SQL（经代理监听口；可验证脱敏/观测）");
+            }
+            proxyHost = resolveProxyConnectHost(listener.listenHost());
+            proxyPort = listener.listenPort();
+            try {
+                jdbcUrl = buildProxyJdbcUrl(dbType, listener.listenHost(), proxyPort, creds.database());
+            } catch (SchemaConnectException e) {
+                throw new IllegalArgumentException(e.getMessage());
+            }
+        } else {
+            try {
+                jdbcUrl = InstanceSchemaColumnsService.buildJdbcUrl(
+                        dbType, creds.host(), creds.port(), creds.database());
+            } catch (SchemaConnectException e) {
+                throw new IllegalArgumentException(e.getMessage());
+            }
         }
 
         Properties props = new Properties();
@@ -167,6 +188,14 @@ public class InstanceSqlExecuteService {
         body.put("durationMs", durationMs);
         body.put("instanceId", listener.id());
         body.put("dbType", listener.dbType());
+        body.put("viaProxy", viaProxy);
+        if (viaProxy) {
+            body.put("proxyHost", proxyHost);
+            body.put("proxyPort", proxyPort);
+            body.put("note", "经实例代理监听口执行，可验证脱敏/观测/风控数据面");
+        } else {
+            body.put("note", "h2 lab：直连目标 JDBC（无协议代理适配器）；生产库类型经 listenPort 代理");
+        }
         if (updateCount >= 0) {
             body.put("updateCount", updateCount);
         }
@@ -176,8 +205,49 @@ public class InstanceSqlExecuteService {
         body.put("message", truncated
                 ? "结果已截断至 maxRows=" + rowsCap
                 : "执行成功");
-        body.put("note", "v1：JDBC 直连目标库，非经代理 listenPort");
         return body;
+    }
+
+    /**
+     * JDBC URL through the proxy listen socket. Host prefers loopback when the
+     * listener binds {@code 0.0.0.0} / {@code ::} / {@code *}; otherwise uses the
+     * concrete bind host. Port is {@link ManagedListener#listenPort()}; database
+     * name is the <em>target</em> database (transparent proxy).
+     *
+     * <p>Package-visible for tests.</p>
+     */
+    public static String buildProxyJdbcUrl(String dbType, String listenHost, int listenPort, String database) {
+        return InstanceSchemaColumnsService.buildJdbcUrl(
+                dbType, resolveProxyConnectHost(listenHost), listenPort, database);
+    }
+
+    /**
+     * Map listener bind address to a JDBC connect host. Wildcard / all-interfaces
+     * binds resolve to {@code 127.0.0.1} so the console process can dial the local
+     * proxy socket.
+     *
+     * <p>Package-visible for tests.</p>
+     */
+    static String resolveProxyConnectHost(String listenHost) {
+        String h = listenHost == null ? "" : listenHost.trim();
+        if (h.isEmpty()
+                || "0.0.0.0".equals(h)
+                || "*".equals(h)
+                || "::".equals(h)
+                || "[::]".equals(h)
+                || "0:0:0:0:0:0:0:0".equals(h)) {
+            return "127.0.0.1";
+        }
+        return h;
+    }
+
+    /** Wire types that have a ProtocolAdapter listen path (not h2 lab). */
+    static boolean usesWireProxy(String dbType) {
+        String type = dbType != null ? dbType.toLowerCase(Locale.ROOT).trim() : "";
+        return switch (type) {
+            case "mysql", "mariadb", "postgresql", "postgres", "sqlserver", "mssql" -> true;
+            default -> false;
+        };
     }
 
     /** Package-visible for tests. */

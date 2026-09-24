@@ -12,10 +12,10 @@
 |---|---|---|
 | 非集成 `@Test`/`@ParameterizedTest` 注解数 | **458** | `mvn test` Results；排除 `*IntegrationTest` |
 | 集成测试 | 14 条注解；默认 surefire **排除** `*IntegrationTest`；无 local props 时 `-Pintegration-test` **assumeTrue 跳过**；本机有库时可 14/14 绿 | `pom.xml` excludes；跳过策略见 `docs/OPS.md` / `integration-test.properties` |
-| 本环境 `mvn test`（`JAVA_HOME`=JDK 17） | **BUILD SUCCESS：Tests run 501, Failures 0, Errors 0, Skipped 0** | surefire；含 SQL Server P0 + 管控台 Phase A–E lite |
+| 本环境 `mvn test`（`JAVA_HOME`=JDK 17） | **BUILD SUCCESS：Tests run 505, Failures 0, Errors 0, Skipped 0** | surefire；含 SQL Server P0 + 管控台 Phase A–E lite + SQL-via-proxy |
 | `pom.xml` 编译目标 | `maven.compiler.source/target=17` | **保持 17**；不升到 21 |
 
-**结论**：编译目标保持 17；VT 仅在 JDK 21+ 运行期启用。管控台已完成 Phase B/B+/C partial/E lite，并完成本轮**实例编辑/克隆/导入/筛选/批量**与 **SQL 工作台 v1**；完整 SSO / 外部 Prometheus·Grafana / 完整 SQL IDE 仍规划。见 P0 / P1 / P2。
+**结论**：编译目标保持 17；VT 仅在 JDK 21+ 运行期启用。管控台已完成 Phase B/B+/C partial/E lite，并完成本轮**实例编辑/克隆/导入/筛选/批量**与 **SQL 工作台经代理 listenPort**；完整 SSO / 外部 Prometheus·Grafana / 完整 SQL IDE 仍规划。见 P0 / P1 / P2。
 
 ## 2. 能力总览（按主题）
 
@@ -95,7 +95,7 @@ Spring 实际读取的键（`@Value`）与默认 `application.yml`、模板一�
 |---|---|---|---|---|
 | P2-1 | NIO / 少线程模型 | **missing（deferred）** | 仍 `ServerSocket.accept` + 阻塞读；并发模型选定为 **每连接线程 / 可选 VT**（`VirtualThreadExecutors`） | **不做 NIO 重写**；若 JDK 21+ VT 不足再开专项 |
 | P2-2 | JDBC vs 协议代理分裂 | **partial（improved）** | `DatabaseConnectionService` / adapter 字段 `@Deprecated` + javadoc；STATUS §6；wire 仍走 `BackendProvider` | 无调用方后可删类；勿接入 DuplexRelay |
-| P2-3 | HTTP 管控面 / 管控台 | **partial（improved）** | Vue3+TS+Vite；H2 CRUD；脱敏热挂；B/B+/C partial/E lite/风控；**本轮完备**：`PUT` 编辑、`clone`、`import`、列表筛选、`bulk` 启停、**SQL 工作台** `…/sql/execute`（JDBC 目标库）。设计 [`CONSOLE_ARCHITECTURE.md`](CONSOLE_ARCHITECTURE.md) §11–§15。**本轮不做** Prometheus 出口 | 完整 SSO/HTTPS/审计 spool 内容 UI / SQL IDE / 经代理口执行 未做 | 完整鉴权/HTTPS 仍规划；Compose 仅 lab；外部 Micrometer 见 P2-4 |
+| P2-3 | HTTP 管控面 / 管控台 | **partial（improved）** | Vue3+TS+Vite；H2 CRUD；脱敏热挂；B/B+/C partial/E lite/风控；**本轮完备**：`PUT` 编辑、`clone`、`import`、列表筛选、`bulk` 启停、**SQL 工作台经代理** `…/sql/execute`（JDBC→listenPort；脱敏/观测可验证；h2 lab 直连例外）。设计 [`CONSOLE_ARCHITECTURE.md`](CONSOLE_ARCHITECTURE.md) §11–§15。**本轮不做** Prometheus 出口 | 完整 SSO/HTTPS/审计 spool 内容 UI / 完整 SQL IDE 仍缺 | 完整鉴权/HTTPS 仍规划；Compose 仅 lab；外部 Micrometer 见 P2-4 |
 | P2-4 | Metrics 出口 | **partial（improved）** | 每 listener 独立 metrics；overview 求和 + `legacyMetrics`；**E lite**：`MetricsHistorySampler` + `GET …/metrics/history` + Overview SVG 火花图（内存环） | 外部 Prometheus/Grafana 非必需 | 可选后续接 Micrometer；告警阈值见 `docs/OPS.md` |
 | P2-5 | 审计测试与运维手册 | **partial（improved）** | P0-3 单测已有；**`docs/OPS.md`** 开启清单 / 告警清单；README 运维段改为索引 | JDBC 审计真库验收仍缺 |
 | P2-6 | 集成测试在 CI 可复现 | **partial（improved）** | 跳过策略写入 `integration-test.properties` + OPS；`-Pintegration-test` 无 props → `assumeTrue` skip；`-Pintegration-testcontainers` **stub only** | 真 Testcontainers 接线另开；默认 `mvn test` 仍不需 Docker |
