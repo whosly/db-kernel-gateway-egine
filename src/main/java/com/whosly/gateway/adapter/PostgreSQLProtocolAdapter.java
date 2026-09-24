@@ -91,7 +91,10 @@ public class PostgreSQLProtocolAdapter extends AbstractProtocolAdapter {
                     databaseTrafficObserver,
                     databaseRiskPolicy,
                     session,
-                    new StatementClassifier(sqlParser));
+                    new StatementClassifier(sqlParser),
+                    extractor::isOpaqueTunnel,
+                    isRequireCleartextInspection(),
+                    getRuntimeMetrics());
             /*
              * Result-set masking shares the extractor with the observer, exactly as on the
              * MySQL side: the RowDescription is already tracked there, and a second state
