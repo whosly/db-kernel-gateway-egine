@@ -25,10 +25,12 @@ gateway:
 
   # Backend connection pool (protocol-agnostic; default off). Safe reuse only when
   # SessionSnapshot is CONFIRMED + clean + not in a transaction; otherwise close.
-  # Optional BackendSessionReset SPI may be registered by adapters later.
+  # reset-mode: none (default, close-if-unsafe) | protocol (MySQL COM_RESET_CONNECTION /
+  # PostgreSQL DISCARD ALL via BackendSessionReset SPI; other DBs register their own).
   pool:
     enabled: ${GATEWAY_POOL_ENABLED:false}
     max-idle: ${GATEWAY_POOL_MAX_IDLE:8}
+    reset-mode: ${GATEWAY_POOL_RESET_MODE:none}
   # Client-leg TLS terminate (stunnel-style; shared by every proxy-db-type).
   # Off unless enabled AND keystore-path is set. Never commit real keystore passwords.
   # tls:

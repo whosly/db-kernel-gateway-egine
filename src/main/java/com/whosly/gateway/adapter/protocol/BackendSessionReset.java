@@ -17,9 +17,15 @@ import java.net.Socket;
  * ({@code CONFIRMED} + clean + not in a transaction). Unsafe sockets are closed.
  * A registered reset is an extra step for sockets already proven clean; if reset
  * returns {@code false} or throws, the socket is closed.</p>
+ *
+ * <p>Enable via {@code gateway.pool.reset-mode=protocol} when the pool is on;
+ * default {@code none} keeps close-if-unsafe only (backward safe).</p>
  */
 @FunctionalInterface
 public interface BackendSessionReset {
+
+    /** Shared no-op instance so identity checks and logging stay stable. */
+    BackendSessionReset NONE = (connection, snapshot) -> true;
 
     /**
      * Attempts to clear residual session state on {@code connection}.
@@ -38,6 +44,6 @@ public interface BackendSessionReset {
      * protocol, including ones that have not implemented a reset command yet.
      */
     static BackendSessionReset none() {
-        return (connection, snapshot) -> true;
+        return NONE;
     }
 }

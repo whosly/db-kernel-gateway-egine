@@ -84,6 +84,41 @@ class PooledBackendProviderTest {
         }
     }
 
+    @Test
+    void throwingResetClosesSocket() throws Exception {
+        try (ServerSocket server = new ServerSocket(0)) {
+            BackendProvider factory = countingFactory(server, new AtomicInteger());
+            BackendSessionReset throwing = (connection, snapshot) -> {
+                throw new IOException("reset boom");
+            };
+            try (PooledBackendProvider pooled = new PooledBackendProvider(factory, 2, throwing)) {
+                Socket socket = pooled.acquire();
+                pooled.release(socket, reusableSnapshot());
+                assertThat(pooled.idleCount()).isZero();
+                assertThat(socket.isClosed()).isTrue();
+            }
+        }
+    }
+
+    @Test
+    void successfulResetAllowsPooling() throws Exception {
+        try (ServerSocket server = new ServerSocket(0)) {
+            AtomicInteger resets = new AtomicInteger();
+            BackendProvider factory = countingFactory(server, new AtomicInteger());
+            BackendSessionReset ok = (connection, snapshot) -> {
+                resets.incrementAndGet();
+                return true;
+            };
+            try (PooledBackendProvider pooled = new PooledBackendProvider(factory, 2, ok)) {
+                Socket socket = pooled.acquire();
+                pooled.release(socket, reusableSnapshot());
+                assertThat(pooled.idleCount()).isEqualTo(1);
+                assertThat(resets.get()).isEqualTo(1);
+                assertThat(socket.isClosed()).isFalse();
+            }
+        }
+    }
+
     private static BackendProvider countingFactory(ServerSocket server, AtomicInteger opens) {
         return new BackendProvider() {
             @Override

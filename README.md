@@ -63,7 +63,7 @@
 | 风控策略 | **部分** | `DenyListDatabaseRiskPolicy` 可配置拒绝清单；空配置默认 `allowAll()` |
 | TLS / 压缩 | **部分** | 默认 opaque / 可选拒绝；**可选 TLS 终止**（`gateway.tls.*`，协议无关）；压缩后仍 opaque |
 | NIO 事件驱动 | **未实现** | 阻塞 socket + 每连接线程（可选虚拟线程） |
-| 连接池化 | **已接线·默认关** | `gateway.pool.enabled`；仅 CONFIRMED+clean+非事务复用，否则关闭；可选 reset SPI |
+| 连接池化 | **已接线·默认关** | `gateway.pool.enabled`；`reset-mode=none\|protocol`；protocol=MySQL `COM_RESET_CONNECTION` / PG `DISCARD ALL` |
 | Actuator / HTTP 指标出口 | **已接线·内存计数** | `/gateway/metrics` + `/actuator/gateway`；无远程 Micrometer |
 | 非交互启动 | **已实现** | `Application` 自动 start；`gateway.cli.interactive` 默认 false |
 
@@ -77,6 +77,25 @@
 - `NullingRule` **只匹配可空列**：MySQL 字面量列常为 `NOT NULL`，置 NULL 规则不会生效——需固定值/哈希/加密等。
 
 细节以代码为准；排期缺口见 STATUS（P1-5）。
+
+
+## 扩展新数据库（P2-7）
+
+1. 实现 `ProtocolAdapter`（通常继承 `AbstractProtocolAdapter`）与 framing/session。
+2. （可选）实现 `BackendSessionReset` 做池化 wire reset。
+3. `ProtocolAdapterRegistry.register("mydb", MyDbAdapter::new, MyDbReset::new)`（或仅 adapter）。
+4. 设置 `gateway.proxy-db-type=mydb`。池/TLS 等治理由基类继承，无需改 `PooledBackendProvider`。
+
+内置：`mysql`、`postgresql`（别名 `postgres`）。预留 stub：`oracle`、`sqlserver`（别名 `mssql`）— 选择后启动失败并提示未实现。
+
+### 启用协议 reset
+
+```yaml
+gateway:
+  pool:
+    enabled: true
+    reset-mode: protocol   # 默认 none（仅 close-if-unsafe）
+```
 
 ## 环境要求
 
@@ -99,7 +118,7 @@
 |---|---|
 | `server.port` | Spring HTTP（Web / 预留管控） |
 | `gateway.proxy-port` | 数据库协议代理端口（客户端连这里） |
-| `gateway.proxy-db-type` | `mysql` \| `postgresql`（`oracle`/`sqlserver` 预留，未实现） |
+| `gateway.proxy-db-type` | `mysql` \| `postgresql`（经 `ProtocolAdapterRegistry`；`oracle`/`sqlserver`/`mssql` stub） |
 | `gateway.target.host` / `port` / `username` / `password` / `database` | 主后端（**嵌套**） |
 | `gateway.backend-endpoints` | 可选 `host:port,host:port` failover |
 | `gateway.max-connections` | 并发连接上限（代码默认 200） |

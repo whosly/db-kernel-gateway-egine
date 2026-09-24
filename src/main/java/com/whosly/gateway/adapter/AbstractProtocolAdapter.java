@@ -386,7 +386,7 @@ public abstract class AbstractProtocolAdapter implements ProtocolAdapter {
         }
         log.info("{} backend pool enabled (maxIdle={}, reset={})",
                 protocolName, poolMaxIdle,
-                backendSessionReset == BackendSessionReset.none() ? "none/close-if-unsafe" : "custom");
+                backendSessionReset == BackendSessionReset.NONE ? "none/close-if-unsafe" : "protocol/custom");
         return new PooledBackendProvider(factory, poolMaxIdle, backendSessionReset);
     }
 

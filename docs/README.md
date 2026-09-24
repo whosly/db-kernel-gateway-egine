@@ -19,6 +19,7 @@
 1. 使用者：`README.md` → 对应数据库模板 → 运维见 `OPS.md` → 需要时再看审计章节。
 2. 协议开发：`AGENTS.md` → `rules/database-protocol-rules.md` → `PROTOCOL_REFERENCE_TABLES.md` → 代码。
 3. 排期 / 评审：`STATUS_AND_GAPS.md`（先看 P0）。
+4. 新库接入：`ProtocolAdapterRegistry` javadoc + README「扩展新数据库」。
 
 ## 图示
 

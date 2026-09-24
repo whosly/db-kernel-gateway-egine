@@ -1,9 +1,9 @@
 package com.whosly.gateway.config;
 
 import com.whosly.gateway.adapter.AbstractProtocolAdapter;
-import com.whosly.gateway.adapter.MySqlProtocolAdapter;
-import com.whosly.gateway.adapter.PostgreSQLProtocolAdapter;
 import com.whosly.gateway.adapter.ProtocolAdapter;
+import com.whosly.gateway.adapter.ProtocolAdapterRegistry;
+import com.whosly.gateway.adapter.protocol.BackendSessionReset;
 import com.whosly.gateway.adapter.protocol.ClientAddressPolicy;
 import com.whosly.gateway.adapter.protocol.CidrClientAddressPolicy;
 import com.whosly.gateway.adapter.protocol.DatabaseRiskPolicy;
@@ -110,6 +110,17 @@ public class GatewayConfig implements DisposableBean {
 
     @Value("${gateway.pool.max-idle:8}")
     private int poolMaxIdle;
+
+    /**
+     * Pool session reset strategy (protocol-agnostic config; implementations are SPI).
+     * {@code none} (default): close-if-unsafe only — backward safe.
+     * {@code protocol}: use the registered {@link BackendSessionReset} for the
+     * current {@code gateway.proxy-db-type} (MySQL COM_RESET_CONNECTION,
+     * PostgreSQL DISCARD ALL; other DBs may register their own).
+     * Only meaningful when {@code gateway.pool.enabled=true}.
+     */
+    @Value("${gateway.pool.reset-mode:none}")
+    private String poolResetMode;
 
     /**
      * Stunnel-style client TLS terminate. Off unless enabled <em>and</em> a keystore path is set.
@@ -281,50 +292,46 @@ public class GatewayConfig implements DisposableBean {
     }
 
     @Bean
+    public ProtocolAdapterRegistry protocolAdapterRegistry() {
+        // Built-ins: mysql + postgresql; reserved stubs: oracle / sqlserver / mssql.
+        // Callers may obtain this bean and register("mydb", MyDbAdapter::new, MyDbReset::new).
+        return ProtocolAdapterRegistry.withBuiltIns();
+    }
+
+    /**
+     * Non-Spring / unit-test entry: builds against {@link #protocolAdapterRegistry()}.
+     * Spring injects the {@code ProtocolAdapterRegistry} bean into the overloaded {@code @Bean}.
+     */
     public ProtocolAdapter protocolAdapter() {
-        // Extension point: add "oracle" / "sqlserver" cases when those ProtocolAdapters exist.
-        // Pool + TLS terminate live on AbstractProtocolAdapter — new DBs inherit them automatically.
-        switch (proxyDbType.toLowerCase(Locale.ROOT).trim()) {
-            case "mysql":
-                return createMySqlProtocolAdapter();
-            case "postgresql", "postgres":
-                return createPostgreSQLProtocolAdapter();
-            case "oracle", "sqlserver", "mssql":
-                throw new IllegalArgumentException(
-                        "gateway.proxy-db-type='" + proxyDbType + "' is reserved but not implemented yet; "
-                                + "supported today: mysql, postgresql");
-            default:
-                throw new IllegalArgumentException(
-                        "Unsupported gateway.proxy-db-type: " + proxyDbType
-                                + " (supported: mysql, postgresql; reserved: oracle, sqlserver)");
+        return protocolAdapter(protocolAdapterRegistry());
+    }
+
+    @Bean
+    public ProtocolAdapter protocolAdapter(ProtocolAdapterRegistry protocolAdapterRegistry) {
+        ProtocolAdapter created;
+        try {
+            created = protocolAdapterRegistry.create(proxyDbType);
+        } catch (UnsupportedOperationException e) {
+            // Reserved stubs throw UOE — surface as IllegalArgumentException for config errors.
+            throw new IllegalArgumentException(e.getMessage(), e);
         }
-    }
-
-    private ProtocolAdapter createMySqlProtocolAdapter() {
-        MySqlProtocolAdapter adapter = new MySqlProtocolAdapter();
+        if (!(created instanceof AbstractProtocolAdapter adapter)) {
+            throw new IllegalStateException(
+                    "ProtocolAdapter for '" + proxyDbType + "' must extend AbstractProtocolAdapter "
+                            + "so pool/TLS/governance can be applied");
+        }
         adapter.setPort(proxyPort);
         adapter.setTargetHost(targetHost);
         adapter.setTargetPort(targetPort);
         adapter.setTargetUsername(targetUsername);
         adapter.setTargetPassword(targetPassword);
         adapter.setTargetDatabase(targetDatabase);
-        applyConnectionGovernance(adapter);
+        applyConnectionGovernance(adapter, protocolAdapterRegistry);
         return adapter;
     }
 
-    private ProtocolAdapter createPostgreSQLProtocolAdapter() {
-        PostgreSQLProtocolAdapter adapter = new PostgreSQLProtocolAdapter();
-        adapter.setPort(proxyPort);
-        adapter.setTargetHost(targetHost);
-        adapter.setTargetPort(targetPort);
-        adapter.setTargetUsername(targetUsername);
-        adapter.setTargetPassword(targetPassword);
-        adapter.setTargetDatabase(targetDatabase);
-        applyConnectionGovernance(adapter);
-        return adapter;
-    }
-
-    private void applyConnectionGovernance(AbstractProtocolAdapter adapter) {
+    private void applyConnectionGovernance(AbstractProtocolAdapter adapter,
+                                           ProtocolAdapterRegistry protocolAdapterRegistry) {
         adapter.setMaxConnections(maxConnections);
         adapter.setIdleTimeoutSeconds(idleTimeoutSeconds);
         adapter.setClientAddressPolicy(clientAddressPolicy());
@@ -336,6 +343,7 @@ public class GatewayConfig implements DisposableBean {
         adapter.setRequireCleartextInspection(resolveRequireCleartextInspection());
         adapter.setPoolEnabled(poolEnabled);
         adapter.setPoolMaxIdle(poolMaxIdle);
+        adapter.setBackendSessionReset(resolveBackendSessionReset(protocolAdapterRegistry));
         adapter.setClientTlsTerminator(buildClientTlsTerminator());
         adapter.setRuntimeMetrics(gatewayRuntimeMetrics());
         try {
@@ -343,6 +351,22 @@ public class GatewayConfig implements DisposableBean {
         } catch (IOException e) {
             throw new IllegalStateException("Audit spool could not be opened", e);
         }
+    }
+
+    /**
+     * Resolves {@code gateway.pool.reset-mode}.
+     * {@code none} (default): {@link BackendSessionReset#none()}.
+     * {@code protocol}: SPI from the registry for the current proxy-db-type.
+     */
+    private BackendSessionReset resolveBackendSessionReset(ProtocolAdapterRegistry registry) {
+        String mode = poolResetMode == null ? "none" : poolResetMode.toLowerCase(Locale.ROOT).trim();
+        return switch (mode) {
+            case "none" -> BackendSessionReset.none();
+            case "protocol" -> registry.createSessionReset(proxyDbType);
+            default -> throw new IllegalArgumentException(
+                    "Unsupported gateway.pool.reset-mode: " + poolResetMode
+                            + " (supported: none, protocol)");
+        };
     }
 
 

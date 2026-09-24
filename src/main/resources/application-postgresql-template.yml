@@ -29,6 +29,7 @@ gateway:
   # pool:
   #   enabled: false
   #   max-idle: 8
+  #   reset-mode: none   # none | protocol (wire reset via BackendSessionReset SPI)
   # tls:
   #   enabled: false
   #   keystore-path: /path/to/gateway.p12

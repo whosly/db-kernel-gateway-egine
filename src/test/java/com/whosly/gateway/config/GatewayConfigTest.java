@@ -1,6 +1,8 @@
 package com.whosly.gateway.config;
 
 import com.whosly.gateway.adapter.AbstractProtocolAdapter;
+import com.whosly.gateway.adapter.mysql.MySqlBackendSessionReset;
+import com.whosly.gateway.adapter.protocol.BackendSessionReset;
 import com.whosly.gateway.adapter.protocol.DatabaseRiskPolicy;
 import com.whosly.gateway.adapter.protocol.DatabaseTrafficEvent;
 import com.whosly.gateway.adapter.protocol.RiskDecision;
@@ -237,6 +239,41 @@ class GatewayConfigTest {
                 .hasMessageContaining("oracle");
     }
 
+    @Test
+    void defaultResetModeIsNoneEvenWhenPoolEnabled() {
+        GatewayConfig config = new GatewayConfig();
+        applyMinimalAdapterFields(config);
+        ReflectionTestUtils.setField(config, "poolEnabled", true);
+        ReflectionTestUtils.setField(config, "poolResetMode", "none");
+
+        AbstractProtocolAdapter adapter = (AbstractProtocolAdapter) config.protocolAdapter();
+        assertThat(adapter.getBackendSessionReset()).isSameAs(BackendSessionReset.NONE);
+        config.destroy();
+    }
+
+    @Test
+    void protocolResetModeWiresMysqlComResetConnection() {
+        GatewayConfig config = new GatewayConfig();
+        applyMinimalAdapterFields(config);
+        ReflectionTestUtils.setField(config, "poolEnabled", true);
+        ReflectionTestUtils.setField(config, "poolResetMode", "protocol");
+
+        AbstractProtocolAdapter adapter = (AbstractProtocolAdapter) config.protocolAdapter();
+        assertThat(adapter.getBackendSessionReset()).isInstanceOf(MySqlBackendSessionReset.class);
+        config.destroy();
+    }
+
+    @Test
+    void rejectsUnknownPoolResetMode() {
+        GatewayConfig config = new GatewayConfig();
+        applyMinimalAdapterFields(config);
+        ReflectionTestUtils.setField(config, "poolResetMode", "aggressive");
+
+        assertThatThrownBy(config::protocolAdapter)
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("reset-mode");
+    }
+
     private static void applyMinimalAdapterFields(GatewayConfig config) {
         ReflectionTestUtils.setField(config, "proxyDbType", "mysql");
         ReflectionTestUtils.setField(config, "proxyPort", 3307);
@@ -252,6 +289,7 @@ class GatewayConfigTest {
         ReflectionTestUtils.setField(config, "riskDeniedStatementKeywords", "");
         ReflectionTestUtils.setField(config, "poolEnabled", false);
         ReflectionTestUtils.setField(config, "poolMaxIdle", 8);
+        ReflectionTestUtils.setField(config, "poolResetMode", "none");
         ReflectionTestUtils.setField(config, "tlsEnabled", false);
         ReflectionTestUtils.setField(config, "tlsKeystorePath", "");
         ReflectionTestUtils.setField(config, "tlsKeystorePassword", "");

@@ -38,7 +38,7 @@ Spring 实际读取的键（`@Value`）与默认 `application.yml`、模板一�
 
 | 键 | 默认（代码） | 说明 |
 |---|---|---|
-| `gateway.proxy-db-type` | `mysql` | `mysql` \| `postgresql` |
+| `gateway.proxy-db-type` | `mysql` | `mysql` \| `postgresql`（经 `ProtocolAdapterRegistry`）；`oracle`/`sqlserver`/`mssql` 预留 stub |
 | `gateway.proxy-port` | `3307` | 协议代理监听端口 |
 | `gateway.target.host` / `.port` / `.username` / `.password` / `.database` | 见代码默认 | 单后端；模板见 `application-*-template.yml` |
 | `gateway.backend-endpoints` | 空 | `host:port,...` 追加 failover 列表 |
@@ -49,6 +49,10 @@ Spring 实际读取的键（`@Value`）与默认 `application.yml`、模板一�
 | `gateway.require-cleartext-inspection` | 未设时跟随 `audit.enabled` | TLS opaque 会话可拒绝 |
 | `gateway.rewrite.max-message-bytes` / `max-hold-millis` | `1048576` / `1000` | 改写持有上界，超限 fail-closed |
 | `gateway.audit.*` | 见 README 审计表 | 默认 `enabled=false` |
+| `gateway.pool.enabled` | `false` | 协议无关后端池；仅 CONFIRMED+clean+非事务复用 |
+| `gateway.pool.max-idle` | `8` | 空闲上限 |
+| `gateway.pool.reset-mode` | `none` | `none`（默认，close-if-unsafe）\| `protocol`（注册表 SPI：MySQL `COM_RESET_CONNECTION`、PG `DISCARD ALL`） |
+| `gateway.tls.*` | 见代码 | 可选客户端 TLS 终止 |
 | `gateway.risk.denied-operations` | 空 | 逗号分隔操作名；空则不按操作拒绝 |
 | `gateway.risk.denied-statement-keywords` | 空 | 逗号分隔语句子串；空则不按关键字拒绝 |
 | `gateway.cli.interactive` | `false` | true 时才读 `System.in` CLI；默认非交互 |
@@ -75,7 +79,7 @@ Spring 实际读取的键（`@Value`）与默认 `application.yml`、模板一�
 | P1-3 | PG Cancel 只关联不代发 | **done（设计如此）** | `PostgreSQLCancelKeyRegistry` 仅索引；adapter / 单测明确「associate-only」；CancelRequest 仍由客户端短连接透明转发 | 若需网关代发 cancel，需 session→backend socket 映射，另开设计 |
 | P1-4 | 多后端仅 failover | **partial（improved）** | `FailoverBackendProvider` 顺序尝试 + **失败端点冷却跳过**（默认 30s，可测）；单测覆盖 | 仍无按库名/用户/权重路由；半开熔断可再增强 |
 | P1-5 | 结果集脱敏类型边界 | **partial（improved）** | MySQL：`bit` 按长度前缀可读可改写；PG：`int2/4/8`、`bool`、`float4/8` 二进制改写；decimal/时间/uuid/geometry 等仍 fail-closed；边界表见 §4.2 | decimal/时间编码若要做需独立设计 |
-| P1-6 | 连接池化 | **partial（wired, default off）** | `PooledBackendProvider` 装饰器 + `gateway.pool.enabled`（默认 false）；共享 `backendProvider()`；仅 `CONFIRMED`+clean+非事务入池；不安全则关闭；可选 `BackendSessionReset` SPI（默认 none） | 未实现 COM_RESET_CONNECTION / DISCARD ALL 等协议 reset（故意：close-if-unsafe）；按身份/库名分池未做 |
+| P1-6 | 连接池化 | **partial（improved）** | `PooledBackendProvider` + `gateway.pool.enabled`（默认 false）；`gateway.pool.reset-mode=none\|protocol`（默认 none）；`protocol` 时经 registry SPI：MySQL `MySqlBackendSessionReset`（`COM_RESET_CONNECTION`）、PG `PostgreSQLBackendSessionReset`（`DISCARD ALL`）；失败/拒绝关闭 socket；单测覆盖成功/失败 | 按身份/库名分池未做；reset 仍仅在已确认可复用 socket 上执行 |
 
 ### P2（并发模型 / 产品化 / 测试覆盖）
 
@@ -87,7 +91,7 @@ Spring 实际读取的键（`@Value`）与默认 `application.yml`、模板一�
 | P2-4 | Metrics 出口 | **partial（improved）** | 共享 `GatewayRuntimeMetrics` bean；`GET /gateway/metrics` + Actuator `@Endpoint(id=gateway)`；单测覆盖 snapshot | 未接 Micrometer 远程；告警阈值见 `docs/OPS.md` |
 | P2-5 | 审计测试与运维手册 | **partial（improved）** | P0-3 单测已有；**`docs/OPS.md`** 开启清单 / 告警清单；README 运维段改为索引 | JDBC 审计真库验收仍缺 |
 | P2-6 | 集成测试在 CI 可复现 | **partial（improved）** | 跳过策略写入 `integration-test.properties` + OPS；`-Pintegration-test` 无 props → `assumeTrue` skip；`-Pintegration-testcontainers` **stub only** | 真 Testcontainers 接线另开；默认 `mvn test` 仍不需 Docker |
-| P2-7 | Oracle / SQL Server 等 | **missing（out of scope）** | 无 adapter | 本阶段不做 |
+| P2-7 | 多库扩展点 / Oracle·SQL Server | **partial（extension only）** | `ProtocolAdapterRegistry` + `ProtocolAdapterFactory`；内置 mysql/postgresql；`oracle`/`sqlserver`/`mssql` stub 抛清晰 `UnsupportedOperationException`；文档说明如何 register | **不**实现 Oracle/TDS 完整 wire；新库需自研 adapter + 可选 reset 后 register |
 
 
 ### 4.1 TLS / 明文强制（产品策略，P1-1）
@@ -125,6 +129,8 @@ Spring 实际读取的键（`@Value`）与默认 `application.yml`、模板一�
 | `require-cleartext-inspection` 拒绝路径 | `DatabaseTrafficInspector` | 有（P1-1） |
 | MySQL `COM_STMT_EXECUTE` 观测 | extractor | 有（P1-2） |
 | `ConfirmedReuseBackendPool` / `PooledBackendProvider` / `ClientTlsTerminator` | 已接线（默认关） | 有单测；`GatewayConfigTest` 装配 |
+| `MySqlBackendSessionReset` / `PostgreSQLBackendSessionReset` | `reset-mode=protocol` | 有单测（OK/ERR、池关闭） |
+| `ProtocolAdapterRegistry` | 内置 + stub | `ProtocolAdapterRegistryTest` |
 | 真库集成 + 脱敏 | 有 | 需 `-Pintegration-test` + 本地库；无 props 则 assumeTrue 跳过（P2-6） |
 | `/gateway/*` + `/actuator/gateway` | 有 | `GatewayOpsSurfaceTest` + `CommandLineInterfaceTest`（非交互） |
 
