@@ -7,7 +7,12 @@ import com.whosly.gateway.config.GatewayConfig;
 import com.whosly.gateway.console.GatewayInstance;
 import com.whosly.gateway.console.GatewayInstanceRegistry;
 import com.whosly.gateway.console.SupportedDatabaseCatalog;
+import com.whosly.gateway.console.persist.ConsoleAuditStore.ConsoleAuditRecord;
 import com.whosly.gateway.console.persist.MaskingRuleRecord;
+import com.whosly.gateway.console.schema.InstanceSchemaColumnsService;
+import com.whosly.gateway.console.schema.InstanceSchemaColumnsService.SchemaConnectException;
+import com.whosly.gateway.console.security.ConsoleAuditService;
+import com.whosly.gateway.console.security.ConsoleMaskingKeyService;
 import com.whosly.gateway.runtime.GatewayListenerRuntime.CreateInstanceRequest;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
@@ -19,6 +24,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -43,18 +49,37 @@ public class ConsoleApiController {
     private final ProtocolAdapter protocolAdapter;
     private final GatewayRuntimeMetrics runtimeMetrics;
     private final GatewayConfig gatewayConfig;
+    private final ConsoleAuditService auditService;
+    private final ConsoleMaskingKeyService maskingKeyService;
+    private final InstanceSchemaColumnsService schemaColumnsService;
+
+    /** Test-friendly constructor (security extras optional). */
+    public ConsoleApiController(SupportedDatabaseCatalog catalog,
+                                GatewayInstanceRegistry instanceRegistry,
+                                ProtocolAdapter protocolAdapter,
+                                GatewayRuntimeMetrics runtimeMetrics,
+                                GatewayConfig gatewayConfig) {
+        this(catalog, instanceRegistry, protocolAdapter, runtimeMetrics, gatewayConfig,
+                null, null, null);
+    }
 
     @Autowired
     public ConsoleApiController(SupportedDatabaseCatalog catalog,
                                 GatewayInstanceRegistry instanceRegistry,
                                 ProtocolAdapter protocolAdapter,
                                 GatewayRuntimeMetrics runtimeMetrics,
-                                GatewayConfig gatewayConfig) {
+                                GatewayConfig gatewayConfig,
+                                @Autowired(required = false) ConsoleAuditService auditService,
+                                @Autowired(required = false) ConsoleMaskingKeyService maskingKeyService,
+                                @Autowired(required = false) InstanceSchemaColumnsService schemaColumnsService) {
         this.catalog = catalog;
         this.instanceRegistry = instanceRegistry;
         this.protocolAdapter = protocolAdapter;
         this.runtimeMetrics = runtimeMetrics != null ? runtimeMetrics : GatewayRuntimeMetrics.noop();
         this.gatewayConfig = gatewayConfig;
+        this.auditService = auditService;
+        this.maskingKeyService = maskingKeyService;
+        this.schemaColumnsService = schemaColumnsService;
     }
 
     @GetMapping("/supported-databases")
@@ -94,18 +119,18 @@ public class ConsoleApiController {
 
     @PostMapping("/instances/{id}/start")
     public Map<String, Object> startInstance(@PathVariable("id") String id) {
-        return instanceRegistry.start(id);
+        Map<String, Object> result = instanceRegistry.start(id);
+        audit("instance.start", id, ConsoleAuditService.detail("ok", result.get("ok")));
+        return result;
     }
 
     @PostMapping("/instances/{id}/stop")
     public Map<String, Object> stopInstance(@PathVariable("id") String id) {
-        return instanceRegistry.stop(id);
+        Map<String, Object> result = instanceRegistry.stop(id);
+        audit("instance.stop", id, ConsoleAuditService.detail("ok", result.get("ok")));
+        return result;
     }
 
-    /**
-     * Create a console-managed instance: persist to H2, bind ProtocolAdapter, optionally auto-start.
-     * Password is accepted but never echoed.
-     */
     @PostMapping("/instances")
     @ResponseStatus(HttpStatus.CREATED)
     public GatewayInstance createInstance(@RequestBody CreateInstanceBody body) {
@@ -133,7 +158,12 @@ public class ConsoleApiController {
                 body.targetUsername(),
                 body.targetPassword(),
                 body.enabled());
-        return instanceRegistry.create(request);
+        GatewayInstance created = instanceRegistry.create(request);
+        audit("instance.create", created.id(), ConsoleAuditService.detail(
+                "dbType", created.dbType(),
+                "listenPort", created.listenPort(),
+                "passwordConfigured", created.passwordConfigured()));
+        return created;
     }
 
     @DeleteMapping("/instances/{id}")
@@ -142,6 +172,7 @@ public class ConsoleApiController {
         if (Boolean.FALSE.equals(result.get("ok"))) {
             throw new IllegalArgumentException(String.valueOf(result.get("message")));
         }
+        audit("instance.delete", id, ConsoleAuditService.detail("ok", true));
         return result;
     }
 
@@ -221,7 +252,6 @@ public class ConsoleApiController {
         return body;
     }
 
-    /** Sum per-instance metric maps for control-plane KPIs. */
     static Map<String, Long> aggregateInstanceMetrics(List<GatewayInstance> instances) {
         Map<String, Long> summed = new LinkedHashMap<>();
         for (GatewayInstance instance : instances) {
@@ -236,8 +266,7 @@ public class ConsoleApiController {
         return Map.copyOf(summed);
     }
 
-
-    // ---- Instance masking rules (Phase A+, protocol-agnostic) ----
+    // ---- Instance masking rules (Phase A+) ----
 
     @GetMapping("/instances/{id}/masking-rules")
     public Map<String, Object> listMaskingRules(@PathVariable("id") String id) {
@@ -254,6 +283,8 @@ public class ConsoleApiController {
     public Map<String, Object> createMaskingRule(@PathVariable("id") String id,
                                                  @RequestBody MaskingRuleBody body) {
         MaskingRuleRecord saved = instanceRegistry.createMaskingRule(id, fromBody(id, body, null));
+        audit("masking-rule.create", id, ConsoleAuditService.detail(
+                "ruleId", saved.id(), "strategy", saved.strategy(), "name", saved.name()));
         return toMaskingRuleDto(saved);
     }
 
@@ -262,10 +293,11 @@ public class ConsoleApiController {
                                                  @PathVariable("ruleId") String ruleId,
                                                  @RequestBody MaskingRuleBody body) {
         MaskingRuleRecord saved = instanceRegistry.updateMaskingRule(id, ruleId, fromBody(id, body, ruleId));
+        audit("masking-rule.update", id, ConsoleAuditService.detail(
+                "ruleId", saved.id(), "strategy", saved.strategy()));
         return toMaskingRuleDto(saved);
     }
 
-    /** Full replace of all rules for the instance (transactional delete+insert). */
     @PutMapping("/instances/{id}/masking-rules")
     public Map<String, Object> replaceMaskingRules(@PathVariable("id") String id,
                                                    @RequestBody List<MaskingRuleBody> bodies) {
@@ -277,6 +309,7 @@ public class ConsoleApiController {
             drafts.add(fromBody(id, body, body != null ? body.id() : null));
         }
         List<MaskingRuleRecord> saved = instanceRegistry.replaceMaskingRules(id, drafts);
+        audit("masking-rule.replace", id, ConsoleAuditService.detail("count", saved.size()));
         Map<String, Object> resp = new LinkedHashMap<>();
         resp.put("instanceId", id);
         resp.put("rules", saved.stream().map(ConsoleApiController::toMaskingRuleDto).toList());
@@ -287,12 +320,69 @@ public class ConsoleApiController {
     @DeleteMapping("/instances/{id}/masking-rules/{ruleId}")
     public Map<String, Object> deleteMaskingRule(@PathVariable("id") String id,
                                                  @PathVariable("ruleId") String ruleId) {
-        return instanceRegistry.deleteMaskingRule(id, ruleId);
+        Map<String, Object> result = instanceRegistry.deleteMaskingRule(id, ruleId);
+        audit("masking-rule.delete", id, ConsoleAuditService.detail("ruleId", ruleId));
+        return result;
     }
 
     @PostMapping("/instances/{id}/masking-rules/reload")
     public Map<String, Object> reloadMasking(@PathVariable("id") String id) {
         return instanceRegistry.reloadMasking(id);
+    }
+
+    // ---- Schema column hints (Phase A+ leftover) ----
+
+    @GetMapping("/instances/{id}/schema/columns")
+    public Map<String, Object> schemaColumns(@PathVariable("id") String id,
+                                             @RequestParam(value = "table", required = false) String table) {
+        if (schemaColumnsService == null) {
+            throw new IllegalStateException("Schema columns service is not available");
+        }
+        return schemaColumnsService.listColumns(id, table);
+    }
+
+    // ---- Security: masking key + audit ----
+
+    @GetMapping("/security/masking-key")
+    public Map<String, Object> maskingKeyStatus() {
+        return requireMaskingKeyService().status();
+    }
+
+    @PutMapping("/security/masking-key")
+    public Map<String, Object> putMaskingKey(@RequestBody MaskingKeyBody body) {
+        if (body == null) {
+            throw new IllegalArgumentException("request body is required");
+        }
+        return requireMaskingKeyService().putKey(body.keyId(), body.keyBase64());
+    }
+
+    @DeleteMapping("/security/masking-key")
+    public Map<String, Object> deleteMaskingKey() {
+        return requireMaskingKeyService().clearKey();
+    }
+
+    @GetMapping("/audit")
+    public Map<String, Object> listAudit(@RequestParam(value = "limit", defaultValue = "50") int limit) {
+        if (auditService == null) {
+            Map<String, Object> empty = new LinkedHashMap<>();
+            empty.put("entries", List.of());
+            empty.put("count", 0);
+            return empty;
+        }
+        List<ConsoleAuditRecord> rows = auditService.list(limit);
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("entries", rows.stream().map(r -> {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("id", r.id());
+            m.put("at", r.at() != null ? r.at().toString() : null);
+            m.put("action", r.action());
+            m.put("instanceId", r.instanceId());
+            m.put("detailJson", r.detailJson());
+            m.put("actor", r.actor());
+            return m;
+        }).toList());
+        body.put("count", rows.size());
+        return body;
     }
 
     static Map<String, Object> toMaskingRuleDto(MaskingRuleRecord row) {
@@ -305,7 +395,7 @@ public class ConsoleApiController {
         dto.put("columnName", row.columnName());
         dto.put("tableName", row.tableName());
         dto.put("namePattern", row.namePattern());
-        dto.put("fixedValue", row.fixedValue()); // non-secret; OK to return
+        dto.put("fixedValue", row.fixedValue());
         dto.put("keepPrefix", row.keepPrefix());
         dto.put("keepSuffix", row.keepSuffix());
         dto.put("hashHexLength", row.hashHexLength());
@@ -339,21 +429,41 @@ public class ConsoleApiController {
                 null);
     }
 
+    private void audit(String action, String instanceId, Map<String, ?> detail) {
+        if (auditService != null) {
+            auditService.record(action, instanceId, detail);
+        }
+    }
+
+    private ConsoleMaskingKeyService requireMaskingKeyService() {
+        if (maskingKeyService == null) {
+            throw new IllegalStateException("Masking key service is not available");
+        }
+        return maskingKeyService;
+    }
+
     @ExceptionHandler(IllegalArgumentException.class)
     @ResponseStatus(HttpStatus.BAD_REQUEST)
     public Map<String, Object> badRequest(IllegalArgumentException ex) {
-        Map<String, Object> body = new LinkedHashMap<>();
-        body.put("ok", false);
-        body.put("message", ex.getMessage());
-        return body;
+        return errorBody(ex.getMessage());
     }
 
     @ExceptionHandler(IllegalStateException.class)
-    @ResponseStatus(HttpStatus.BAD_REQUEST)
-    public Map<String, Object> badState(IllegalStateException ex) {
+    @ResponseStatus(HttpStatus.SERVICE_UNAVAILABLE)
+    public Map<String, Object> serviceUnavailable(IllegalStateException ex) {
+        return errorBody(ex.getMessage());
+    }
+
+    @ExceptionHandler(SchemaConnectException.class)
+    @ResponseStatus(HttpStatus.BAD_GATEWAY)
+    public Map<String, Object> badGateway(SchemaConnectException ex) {
+        return errorBody(ex.getMessage());
+    }
+
+    private static Map<String, Object> errorBody(String message) {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("ok", false);
-        body.put("message", ex.getMessage());
+        body.put("message", message);
         return body;
     }
 
@@ -365,9 +475,6 @@ public class ConsoleApiController {
         return hasText(value) ? value : null;
     }
 
-    /**
-     * JSON body for POST /instances. Password accepted, never returned on GatewayInstance.
-     */
     public record CreateInstanceBody(
             String id,
             String name,
@@ -383,9 +490,6 @@ public class ConsoleApiController {
     ) {
     }
 
-    /**
-     * JSON body for masking-rule create/update. Never carries target DB passwords.
-     */
     public record MaskingRuleBody(
             String id,
             String name,
@@ -400,5 +504,8 @@ public class ConsoleApiController {
             Integer hashHexLength,
             Boolean enabled
     ) {
+    }
+
+    public record MaskingKeyBody(String keyId, String keyBase64) {
     }
 }

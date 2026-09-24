@@ -1,6 +1,7 @@
 package com.whosly.gateway.console.masking;
 
 import com.whosly.gateway.console.persist.MaskingRuleRecord;
+import com.whosly.gateway.console.security.ConsoleMaskingKeyHolder;
 import com.whosly.gateway.masking.ColumnSelector;
 import com.whosly.gateway.masking.EncryptingRule;
 import com.whosly.gateway.masking.FixedValueRule;
@@ -19,30 +20,61 @@ import java.util.Optional;
  *
  * <p>Instance rules receive a priority boost so they win over process-level
  * Spring {@code MaskingRule} beans targeting the same column (CONSOLE_ARCHITECTURE §11.4).</p>
+ *
+ * <p>Cipher/keyId come from {@link ConsoleMaskingKeyHolder} when provided (hot-reloadable);
+ * otherwise from constructor snapshot (tests).</p>
  */
 public final class InstanceMaskingRuleCompiler {
 
     /** Added to stored priority so instance H2 rules beat global beans. */
     public static final int INSTANCE_PRIORITY_BOOST = 1_000_000;
 
-    private final Optional<MaskingCipher> cipher;
-    private final String keyId;
+    private final ConsoleMaskingKeyHolder holder; // nullable
+    private volatile Optional<MaskingCipher> cipher;
+    private volatile String keyId;
 
     public InstanceMaskingRuleCompiler(MaskingCipher cipher, String keyId) {
+        this.holder = null;
         this.cipher = Optional.ofNullable(cipher);
         this.keyId = keyId != null && !keyId.isBlank() ? keyId : "default";
     }
 
     public InstanceMaskingRuleCompiler(Optional<MaskingCipher> cipher, String keyId) {
+        this.holder = null;
         this.cipher = cipher != null ? cipher : Optional.empty();
         this.keyId = keyId != null && !keyId.isBlank() ? keyId : "default";
     }
 
+    public InstanceMaskingRuleCompiler(ConsoleMaskingKeyHolder holder) {
+        this.holder = Objects.requireNonNull(holder, "holder");
+        this.cipher = holder.cipher();
+        this.keyId = holder.keyId();
+    }
+
     public boolean encryptAvailable() {
-        return cipher.isPresent();
+        return resolveCipher().isPresent();
     }
 
     public String keyId() {
+        return resolveKeyId();
+    }
+
+    public void reconfigure(MaskingCipher newCipher, String newKeyId) {
+        this.cipher = Optional.ofNullable(newCipher);
+        this.keyId = newKeyId != null && !newKeyId.isBlank() ? newKeyId : "default";
+    }
+
+    private Optional<MaskingCipher> resolveCipher() {
+        if (holder != null) {
+            return holder.cipher();
+        }
+        return cipher;
+    }
+
+    private String resolveKeyId() {
+        if (holder != null) {
+            return holder.keyId();
+        }
         return keyId;
     }
 
@@ -85,10 +117,10 @@ public final class InstanceMaskingRuleCompiler {
                 }
             }
             case "encrypt" -> {
-                if (cipher.isEmpty()) {
+                if (resolveCipher().isEmpty()) {
                     throw new IllegalArgumentException(
-                            "encrypt strategy requires gateway.masking.key-base64 "
-                                    + "(GATEWAY_MASKING_KEY_BASE64); 控制台不管理密钥");
+                            "encrypt strategy requires a masking key："
+                                    + "设置 gateway.masking.key-base64 或在管控台「安全」中配置脱敏密钥");
                 }
             }
             case "null" -> {
@@ -104,8 +136,9 @@ public final class InstanceMaskingRuleCompiler {
         String strategy = normalizeStrategy(row.strategy());
         ColumnSelector selector = buildSelector(row);
         int priority = row.priority() + INSTANCE_PRIORITY_BOOST;
-        // Unique within merged registry: avoid colliding with Spring bean rule names.
         String runtimeName = "inst:" + row.instanceId() + ":" + row.id();
+        Optional<MaskingCipher> activeCipher = resolveCipher();
+        String activeKeyId = resolveKeyId();
 
         return switch (strategy) {
             case "null" -> new NullingRule(runtimeName, priority, selector);
@@ -126,16 +159,12 @@ public final class InstanceMaskingRuleCompiler {
                     runtimeName,
                     priority,
                     selector,
-                    cipher.orElseThrow(),
-                    keyId);
+                    activeCipher.orElseThrow(),
+                    activeKeyId);
             default -> throw new IllegalArgumentException("Unsupported strategy: " + strategy);
         };
     }
 
-    /**
-     * Builds a selector from column / table / namePattern.
-     * Returns null when nothing is selectable.
-     */
     static ColumnSelector buildSelector(MaskingRuleRecord row) {
         ColumnSelector byColumn = null;
         if (hasText(row.columnName())) {

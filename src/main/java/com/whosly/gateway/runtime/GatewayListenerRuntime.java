@@ -553,6 +553,31 @@ public class GatewayListenerRuntime implements DisposableBean {
      * <p>New sessions pick up the new engine immediately. In-flight sessions keep
      * the engine captured at session start until they reconnect.</p>
      */
+    /** Hot-reload MaskingEngine for every bound instance (e.g. after masking-key change). */
+    public Map<String, Object> reloadAllMasking() {
+        int ok = 0;
+        int skipped = 0;
+        for (ManagedListener listener : list()) {
+            if (listener.adapter() == null) {
+                skipped++;
+                continue;
+            }
+            Map<String, Object> one = reloadMasking(listener.id());
+            if (Boolean.TRUE.equals(one.get("ok"))) {
+                ok++;
+            } else {
+                skipped++;
+            }
+        }
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("ok", true);
+        body.put("reloaded", ok);
+        body.put("skipped", skipped);
+        body.put("message", "已热重载 " + ok + " 个实例的脱敏引擎");
+        log.info("reloadAllMasking reloaded={} skipped={}", ok, skipped);
+        return body;
+    }
+
     public Map<String, Object> reloadMasking(String id) {
         ManagedListener listener = require(id);
         Map<String, Object> body = baseBody(listener);

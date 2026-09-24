@@ -115,3 +115,36 @@ export interface MaskingRulesResponse {
   rules: MaskingRule[]
   count: number
 }
+
+export interface MaskingKeyStatus {
+  configured: boolean
+  keyId: string | null
+  source: 'config' | 'console' | 'none' | string
+  consoleMasterKeyConfigured?: boolean
+  ok?: boolean
+  message?: string
+}
+
+export interface SchemaColumn {
+  name: string
+  table: string
+  nullable: boolean
+  typeName: string
+}
+
+export interface SchemaColumnsResponse {
+  instanceId: string
+  dbType: string
+  table?: string | null
+  columns: SchemaColumn[]
+  count: number
+}
+
+export interface AuditEntry {
+  id: string
+  at: string | null
+  action: string
+  instanceId?: string | null
+  detailJson?: string | null
+  actor?: string | null
+}

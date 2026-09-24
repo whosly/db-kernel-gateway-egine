@@ -10,15 +10,32 @@ export class ApiError extends Error {
   }
 }
 
+function authHeaders(): Record<string, string> {
+  const token =
+    (typeof localStorage !== 'undefined' && localStorage.getItem('consoleApiToken')) ||
+    (typeof import.meta !== 'undefined' &&
+      (import.meta as ImportMeta & { env?: { VITE_CONSOLE_API_TOKEN?: string } }).env
+        ?.VITE_CONSOLE_API_TOKEN) ||
+    ''
+  if (!token) return {}
+  return { Authorization: `Bearer ${token}` }
+}
+
 export async function apiGet<T>(path: string): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, { headers: { Accept: 'application/json' } })
+  const res = await fetch(`${BASE}${path}`, {
+    headers: { Accept: 'application/json', ...authHeaders() },
+  })
   return parse<T>(res)
 }
 
 export async function apiPost<T>(path: string, body?: unknown): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     method: 'POST',
-    headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+      ...authHeaders(),
+    },
     body: body === undefined ? undefined : JSON.stringify(body),
   })
   return parse<T>(res)
@@ -27,7 +44,11 @@ export async function apiPost<T>(path: string, body?: unknown): Promise<T> {
 export async function apiPut<T>(path: string, body?: unknown): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     method: 'PUT',
-    headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+    headers: {
+      Accept: 'application/json',
+      'Content-Type': 'application/json',
+      ...authHeaders(),
+    },
     body: body === undefined ? undefined : JSON.stringify(body),
   })
   return parse<T>(res)
@@ -36,7 +57,7 @@ export async function apiPut<T>(path: string, body?: unknown): Promise<T> {
 export async function apiDelete<T>(path: string): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     method: 'DELETE',
-    headers: { Accept: 'application/json' },
+    headers: { Accept: 'application/json', ...authHeaders() },
   })
   return parse<T>(res)
 }

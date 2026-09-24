@@ -39,6 +39,8 @@ import com.whosly.gateway.console.SupportedDatabaseCatalog;
 import com.whosly.gateway.console.persist.ConsoleInstanceStore;
 import com.whosly.gateway.console.masking.InstanceMaskingEngineFactory;
 import com.whosly.gateway.console.masking.InstanceMaskingRuleCompiler;
+import com.whosly.gateway.console.security.ConsoleMaskingKeyHolder;
+import com.whosly.gateway.console.security.ConsoleSecretCipher;
 import com.whosly.gateway.runtime.GatewayListenerRuntime;
 import org.springframework.context.annotation.Primary;
 import org.springframework.context.annotation.Configuration;
@@ -210,6 +212,10 @@ public class GatewayConfig implements DisposableBean {
     @Value("${gateway.masking.key-id:default}")
     private String maskingKeyId;
 
+    /** 32-byte AES master key (Base64) for control-plane password / secrets encryption. */
+    @Value("${gateway.console.secret-key-base64:}")
+    private String consoleSecretKeyBase64;
+
     @Value("${gateway.audit.destination:spool}")
     private String auditDestination;
 
@@ -251,18 +257,31 @@ public class GatewayConfig implements DisposableBean {
                 : new MaskingRuleRegistry(List.of()));
     }
 
+    @Bean
+    public ConsoleSecretCipher consoleSecretCipher() {
+        return ConsoleSecretCipher.fromBase64MasterKey(consoleSecretKeyBase64);
+    }
+
     /**
-     * Compiles H2 console masking rules. Encrypt strategy is available only when
-     * {@code gateway.masking.key-base64} is set (no console key UI).
+     * Mutable masking-key holder: yaml config at boot, overridable via console API.
      */
     @Bean
-    public InstanceMaskingRuleCompiler instanceMaskingRuleCompiler() {
+    public ConsoleMaskingKeyHolder consoleMaskingKeyHolder() {
         String id = maskingKeyId != null && !maskingKeyId.isBlank() ? maskingKeyId : "default";
         MaskingCipher cipher = null;
         if (maskingKeyBase64 != null && !maskingKeyBase64.isBlank()) {
             cipher = new MaskingCipher(MaskingKeyProvider.ofBase64(id, maskingKeyBase64.trim()));
         }
-        return new InstanceMaskingRuleCompiler(cipher, id);
+        return new ConsoleMaskingKeyHolder(cipher, id);
+    }
+
+    /**
+     * Compiles H2 console masking rules. Encrypt strategy uses {@link ConsoleMaskingKeyHolder}
+     * (yaml key and/or console-stored override).
+     */
+    @Bean
+    public InstanceMaskingRuleCompiler instanceMaskingRuleCompiler(ConsoleMaskingKeyHolder holder) {
+        return new InstanceMaskingRuleCompiler(holder);
     }
 
     @Bean

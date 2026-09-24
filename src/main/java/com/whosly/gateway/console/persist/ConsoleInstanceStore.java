@@ -1,5 +1,6 @@
 package com.whosly.gateway.console.persist;
 
+import com.whosly.gateway.console.security.ConsoleSecretCipher;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -17,8 +18,8 @@ import java.util.Optional;
 /**
  * Persistence for console-managed gateway instances (control-plane H2).
  *
- * <p><strong>WARNING:</strong> {@code target_password} is stored in the clear for lab MVP.
- * Production must use a secret manager / envelope encryption (see CONSOLE_ARCHITECTURE Phase B).
+ * <p>{@code target_password} is sealed with {@link ConsoleSecretCipher} when a master key
+ * is configured ({@code enc:v1:}…); otherwise lab plaintext with a one-time WARN.
  * This DB is <em>not</em> the proxied business database.</p>
  */
 @Repository
@@ -40,21 +41,29 @@ public class ConsoleInstanceStore {
               target_port       INT          NOT NULL,
               target_database   VARCHAR(256),
               target_username   VARCHAR(256),
-              target_password   VARCHAR(1024),
+              target_password   VARCHAR(2048),
               source            VARCHAR(32)  NOT NULL DEFAULT 'console',
               created_at        TIMESTAMP    NOT NULL,
               updated_at        TIMESTAMP    NOT NULL
             )
             """;
 
-    private static final RowMapper<ConsoleInstanceRecord> ROW_MAPPER = ConsoleInstanceStore::mapRow;
-
     private final JdbcTemplate jdbc;
+    private final ConsoleSecretCipher cipher;
+    private final RowMapper<ConsoleInstanceRecord> rowMapper;
 
-    public ConsoleInstanceStore(JdbcTemplate jdbc) {
+    public ConsoleInstanceStore(JdbcTemplate jdbc, ConsoleSecretCipher cipher) {
         this.jdbc = Objects.requireNonNull(jdbc, "jdbc");
+        this.cipher = Objects.requireNonNull(cipher, "cipher");
+        this.rowMapper = this::mapRow;
         jdbc.execute(DDL);
-        log.info("Console control-plane table gateway_instance ready (H2)");
+        log.info("Console control-plane table gateway_instance ready (encrypt={})",
+                cipher.isMasterKeyConfigured());
+    }
+
+    /** Test helper: lab mode (no master key). */
+    public ConsoleInstanceStore(JdbcTemplate jdbc) {
+        this(jdbc, ConsoleSecretCipher.fromBase64MasterKey(null));
     }
 
     public List<ConsoleInstanceRecord> findAll() {
@@ -62,7 +71,7 @@ public class ConsoleInstanceStore {
                 "SELECT id, name, db_type, listen_host, listen_port, enabled, "
                         + "target_host, target_port, target_database, target_username, target_password, "
                         + "created_at, updated_at FROM gateway_instance ORDER BY created_at ASC",
-                ROW_MAPPER);
+                rowMapper);
     }
 
     public Optional<ConsoleInstanceRecord> findById(String id) {
@@ -70,7 +79,7 @@ public class ConsoleInstanceStore {
                 "SELECT id, name, db_type, listen_host, listen_port, enabled, "
                         + "target_host, target_port, target_database, target_username, target_password, "
                         + "created_at, updated_at FROM gateway_instance WHERE id = ?",
-                ROW_MAPPER, id);
+                rowMapper, id);
         return rows.stream().findFirst();
     }
 
@@ -79,6 +88,7 @@ public class ConsoleInstanceStore {
         Instant now = Instant.now();
         Instant created = row.createdAt() != null ? row.createdAt() : now;
         Instant updated = row.updatedAt() != null ? row.updatedAt() : now;
+        String sealedPassword = cipher.sealForStorage(row.targetPassword());
         int updatedRows = jdbc.update(
                 """
                 MERGE INTO gateway_instance
@@ -98,7 +108,7 @@ public class ConsoleInstanceStore {
                 row.targetPort(),
                 row.targetDatabase(),
                 row.targetUsername(),
-                row.targetPassword(),
+                sealedPassword,
                 Timestamp.from(created),
                 Timestamp.from(updated));
         if (updatedRows <= 0) {
@@ -110,9 +120,22 @@ public class ConsoleInstanceStore {
         return jdbc.update("DELETE FROM gateway_instance WHERE id = ?", id) > 0;
     }
 
-    private static ConsoleInstanceRecord mapRow(ResultSet rs, int rowNum) throws SQLException {
+    /**
+     * Raw sealed password as stored (for tests). Prefer {@link #findById} which decrypts.
+     */
+    public Optional<String> findSealedPassword(String id) {
+        List<String> rows = jdbc.query(
+                "SELECT target_password FROM gateway_instance WHERE id = ?",
+                (rs, n) -> rs.getString(1),
+                id);
+        return rows.stream().findFirst();
+    }
+
+    private ConsoleInstanceRecord mapRow(ResultSet rs, int rowNum) throws SQLException {
         Timestamp created = rs.getTimestamp("created_at");
         Timestamp updated = rs.getTimestamp("updated_at");
+        String storedPassword = rs.getString("target_password");
+        String plaintextPassword = cipher.openFromStorage(storedPassword);
         return new ConsoleInstanceRecord(
                 rs.getString("id"),
                 rs.getString("name"),
@@ -124,7 +147,7 @@ public class ConsoleInstanceStore {
                 rs.getInt("target_port"),
                 rs.getString("target_database"),
                 rs.getString("target_username"),
-                rs.getString("target_password"),
+                plaintextPassword,
                 created != null ? created.toInstant() : Instant.EPOCH,
                 updated != null ? updated.toInstant() : Instant.EPOCH
         );

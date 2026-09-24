@@ -5,13 +5,13 @@ spring:
   application:
     name: db-kernel-gateway
   # Console control-plane DB (NOT the proxied business database).
-  # File mode persists console-created instances across restarts.
-  # Passwords stored in clear for lab MVP — encrypt / secret-manager in Phase B.
+  # Override via gateway.console.jdbc-url / username / password (see ConsoleDataSourceEnvironmentPostProcessor).
+  # Passwords sealed with gateway.console.secret-key-base64 when set (enc:v1:…); else lab plaintext + WARN.
   datasource:
     url: jdbc:h2:file:${gateway.console.db-path:./data/gateway-console};MODE=PostgreSQL;AUTO_SERVER=FALSE;DB_CLOSE_DELAY=-1
     driver-class-name: org.h2.Driver
-    username: sa
-    password:
+    username: ${gateway.console.username:sa}
+    password: ${gateway.console.password:}
   h2:
     console:
       enabled: ${GATEWAY_H2_CONSOLE:false}
@@ -23,8 +23,17 @@ gateway:
   # Control-plane H2 file path (console-managed instances). Relative to process cwd.
   console:
     db-path: ${GATEWAY_CONSOLE_DB_PATH:./data/gateway-console}
+    # Optional JDBC override (when set, used instead of embedded file path). Other DBs are best-effort.
+    # jdbc-url: ${GATEWAY_CONSOLE_JDBC_URL:}
+    username: ${GATEWAY_CONSOLE_DB_USER:sa}
+    password: ${GATEWAY_CONSOLE_DB_PASSWORD:}
+    # 32-byte AES key Base64 for control-plane password/secret encryption. Empty = lab plaintext.
+    # secret-key-base64: ${GATEWAY_CONSOLE_SECRET_KEY_BASE64:}
+    secret-key-base64: ${GATEWAY_CONSOLE_SECRET_KEY_BASE64:}
+    # Optional API token for /console/api/** (Bearer or X-Console-Token). Blank = open (lab).
+    api-token: ${GATEWAY_CONSOLE_API_TOKEN:}
   # Result-set encrypt strategy key (console masking-rules strategy=encrypt).
-  # Uncomment / set GATEWAY_MASKING_KEY_BASE64 to enable encrypt; otherwise encrypt → HTTP 400.
+  # Or set via 管控台「安全」UI (stored encrypted when secret-key-base64 is set).
   # Never commit real keys.
   # masking:
   #   key-id: ${GATEWAY_MASKING_KEY_ID:default}

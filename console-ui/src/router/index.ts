@@ -10,6 +10,6 @@ export const router = createRouter({
     { path: '/', name: 'overview', component: OverviewView, meta: { title: '总览' } },
     { path: '/instances', name: 'instances', component: InstancesView, meta: { title: '网关实例' } },
     { path: '/catalog', name: 'catalog', component: CatalogView, meta: { title: '类型目录' } },
-    { path: '/ops', name: 'ops', component: OpsView, meta: { title: '运维' } },
+    { path: '/ops', name: 'ops', component: OpsView, meta: { title: '运维 / 安全' } },
   ],
 })

@@ -163,4 +163,13 @@ class ConsoleApiControllerTest {
         assertThat(sum.get("connectionsAccepted")).isEqualTo(5L);
         assertThat(sum.get("policyDenials")).isEqualTo(1L);
     }
+
+    @Test
+    void passwordNeverLeaksInConfigSummaryOrOverview() {
+        Map<String, Object> summary = console.configSummary();
+        assertThat(summary.toString()).doesNotContain("s3cret-should-not-leak");
+        assertThat(((Map<?, ?>) summary.get("target")).get("passwordConfigured")).isEqualTo(true);
+        Map<String, Object> overview = console.overview();
+        assertThat(overview.toString()).doesNotContain("s3cret-should-not-leak");
+    }
 }

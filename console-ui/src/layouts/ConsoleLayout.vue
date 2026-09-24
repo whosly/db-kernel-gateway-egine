@@ -9,7 +9,7 @@ const nav = [
   { to: '/', label: '总览' },
   { to: '/instances', label: '网关实例' },
   { to: '/catalog', label: '类型目录' },
-  { to: '/ops', label: '运维' },
+  { to: '/ops', label: '运维 / 安全' },
 ]
 </script>
 

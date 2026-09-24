@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { computed, inject, onMounted, reactive, ref, watch } from 'vue'
-import type { GatewayInstance, MaskingRule, MaskingRulePayload, MaskingStrategy } from '../api/types'
+import type { GatewayInstance, MaskingRule, MaskingRulePayload, MaskingStrategy, SchemaColumn } from '../api/types'
 import {
   createMaskingRule,
   deleteMaskingRule,
   getInstanceMetrics,
+  getSchemaColumns,
   listMaskingRules,
   updateMaskingRule,
 } from '../api/consoleApi'
@@ -20,6 +21,10 @@ const rulesError = ref<string | null>(null)
 const rulesLoading = ref(false)
 const editingId = ref<string | null>(null)
 const saving = ref(false)
+const schemaColumns = ref<SchemaColumn[]>([])
+const schemaLoading = ref(false)
+const schemaError = ref<string | null>(null)
+const schemaTableFilter = ref('')
 
 const strategyOptions: { value: MaskingStrategy; label: string }[] = [
   { value: 'null', label: '置空' },
@@ -155,6 +160,30 @@ async function removeRule(rule: MaskingRule) {
   }
 }
 
+
+async function loadSchemaHints() {
+  if (!props.instance) return
+  schemaLoading.value = true
+  schemaError.value = null
+  try {
+    const body = await getSchemaColumns(
+      props.instance.id,
+      schemaTableFilter.value.trim() || undefined,
+    )
+    schemaColumns.value = body.columns || []
+  } catch (e) {
+    schemaError.value = e instanceof Error ? e.message : String(e)
+    schemaColumns.value = []
+  } finally {
+    schemaLoading.value = false
+  }
+}
+
+function pickColumn(col: SchemaColumn) {
+  form.columnName = col.name
+  form.tableName = col.table || form.tableName
+}
+
 onMounted(() => {
   loadMetrics()
   loadRules()
@@ -228,7 +257,7 @@ watch(
           <h4>已配置规则</h4>
           <p class="muted tiny">
             协议无关 · 挂在本实例 MaskingEngine；写操作后热更新（不停监听端口；已有会话保持旧规则至重连）。
-            加密策略需进程配置 <code>gateway.masking.key-base64</code>。
+            加密策略需脱敏密钥（yaml 或「运维 → 安全」）。
           </p>
           <p v-if="rulesLoading" class="muted">加载中…</p>
           <p v-else-if="rulesError" class="err">{{ rulesError }}</p>
@@ -311,8 +340,35 @@ watch(
               <input v-model.number="form.hashHexLength" type="number" min="1" max="64" />
             </div>
             <p v-if="showStrategyFields === 'encrypt'" class="muted tiny">
-              使用网关配置密钥加密（AES-GCM）；控制台不展示密钥。未配置密钥时保存将返回 400。
+              使用脱敏密钥加密（AES-GCM）：yaml <code>gateway.masking.key-base64</code> 或「运维 → 安全」配置；控制台不回显密钥。
             </p>
+
+            <div class="schema-hint">
+              <div class="schema-head">
+                <strong>列提示</strong>
+                <span class="muted tiny">服务端 JDBC 元数据（协议无关）</span>
+              </div>
+              <div class="schema-row">
+                <input v-model="schemaTableFilter" placeholder="表名过滤（可选）" />
+                <button type="button" :disabled="schemaLoading" @click="loadSchemaHints">
+                  {{ schemaLoading ? '拉取中…' : '拉取列' }}
+                </button>
+              </div>
+              <p v-if="schemaError" class="err tiny">{{ schemaError }}</p>
+              <div v-else-if="schemaColumns.length" class="schema-list">
+                <button
+                  v-for="c in schemaColumns.slice(0, 40)"
+                  :key="c.table + '.' + c.name"
+                  type="button"
+                  class="chip"
+                  @click="pickColumn(c)"
+                >
+                  {{ c.table }}.{{ c.name }}
+                  <span class="muted">{{ c.typeName }}</span>
+                </button>
+                <p v-if="schemaColumns.length > 40" class="muted tiny">仅显示前 40 列，请缩小表过滤</p>
+              </div>
+            </div>
 
             <div class="form-actions">
               <button type="submit" class="primary" :disabled="saving">
@@ -372,4 +428,20 @@ footer { margin-top: 1.5rem; }
 .check { display: flex; align-items: flex-end; padding-bottom: 0.4rem; }
 .check label { display: flex; gap: 0.4rem; align-items: center; color: var(--text); }
 code { font-size: 0.8em; }
+.schema-hint {
+  margin-top: 0.75rem;
+  padding: 0.65rem;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+}
+.schema-head { display: flex; justify-content: space-between; gap: 0.5rem; margin-bottom: 0.4rem; }
+.schema-row { display: flex; gap: 0.4rem; }
+.schema-row input { flex: 1; }
+.schema-list { display: flex; flex-wrap: wrap; gap: 0.35rem; margin-top: 0.5rem; }
+.chip {
+  font-size: 0.75rem;
+  padding: 0.25rem 0.45rem;
+  border-radius: 999px;
+  background: var(--accent-soft);
+}
 </style>

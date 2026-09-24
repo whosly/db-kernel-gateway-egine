@@ -4,7 +4,7 @@
 > **更新原则**：只写有代码/测试/配置证据的结论；「规划中」不得写成「已实现」。  
 > **导航**：见 [README.md](README.md)。
 >
-> **近况**：Vue console Phase A + A+ — SPA + H2 实例 CRUD + 实例脱敏规则（热挂 MaskingEngine）。
+> **近况**：Vue console Phase A/A+/B — SPA + H2 实例 CRUD + 脱敏规则 + **密码信封加密 / 审计 / 脱敏密钥 UI / schema 列提示 / 可选 api-token**.
 
 ## 1. 构建与测试基线
 
@@ -12,10 +12,10 @@
 |---|---|---|
 | 非集成 `@Test`/`@ParameterizedTest` 注解数 | **450** | `mvn test` Results；排除 `*IntegrationTest` |
 | 集成测试 | 14 条注解；默认 surefire **排除** `*IntegrationTest`；无 local props 时 `-Pintegration-test` **assumeTrue 跳过**；本机有库时可 14/14 绿 | `pom.xml` excludes；跳过策略见 `docs/OPS.md` / `integration-test.properties` |
-| 本环境 `mvn test`（`JAVA_HOME`=JDK 17） | **BUILD SUCCESS：Tests run 450, Failures 0, Errors 0, Skipped 0** | surefire；含 SQL Server P0 + 管控台 Vue/H2 Phase A+A+ |
+| 本环境 `mvn test`（`JAVA_HOME`=JDK 17） | **BUILD SUCCESS：Tests run 468, Failures 0, Errors 0, Skipped 0** | surefire；含 SQL Server P0 + 管控台 Phase A/A+/B |
 | `pom.xml` 编译目标 | `maven.compiler.source/target=17` | **保持 17**；不升到 21 |
 
-**结论**：编译目标保持 17；VT 仅在 JDK 21+ 运行期启用。当前 `mvn test` 为 **450** 全绿（含 SQL Server P0 + 管控台 Vue/H2 Phase A+A+）。见 P0 / P1 / P2。
+**结论**：编译目标保持 17；VT 仅在 JDK 21+ 运行期启用。管控台已完成 Phase B（密码加密/审计/密钥 UI/schema/api-token）；完整 SSO 仍规划。见 P0 / P1 / P2。
 
 ## 2. 能力总览（按主题）
 
@@ -95,7 +95,7 @@ Spring 实际读取的键（`@Value`）与默认 `application.yml`、模板一�
 |---|---|---|---|---|
 | P2-1 | NIO / 少线程模型 | **missing（deferred）** | 仍 `ServerSocket.accept` + 阻塞读；并发模型选定为 **每连接线程 / 可选 VT**（`VirtualThreadExecutors`） | **不做 NIO 重写**；若 JDK 21+ VT 不足再开专项 |
 | P2-2 | JDBC vs 协议代理分裂 | **partial（improved）** | `DatabaseConnectionService` / adapter 字段 `@Deprecated` + javadoc；STATUS §6；wire 仍走 `BackendProvider` | 无调用方后可删类；勿接入 DuplexRelay |
-| P2-3 | HTTP 管控面 / 管控台 | **partial（improved）** | Vue3+TS+Vite；overview 全实例求和；H2 实例 CRUD；**Phase A+ 实例脱敏规则 CRUD + 热挂 MaskingEngine**（抽屉「脱敏规则」）。设计见 [`CONSOLE_ARCHITECTURE.md`](CONSOLE_ARCHITECTURE.md) §11 | 鉴权/密码加密/密钥管理 UI 未做 | 鉴权/HTTPS 仍未做；多实例真库集成未做 |
+| P2-3 | HTTP 管控面 / 管控台 | **partial（improved）** | Vue3+TS+Vite；H2 实例 CRUD；A+ 脱敏规则热挂；**Phase B**：控制面密码 `enc:v1:` AES-GCM、操作审计、脱敏密钥 API/UI、schema 列提示、可选 `api-token`。设计见 [`CONSOLE_ARCHITECTURE.md`](CONSOLE_ARCHITECTURE.md) §11–§12 | 完整 SSO/Spring Security、HTTPS 终止、审计进 spool 未做（规划） | 完整鉴权/HTTPS 仍规划；多实例真库集成未做 |
 | P2-4 | Metrics 出口 | **partial（improved）** | 每 listener 独立 metrics；overview `metrics` 全实例求和 + `legacyMetrics`；`/gateway/metrics` 仍 legacy | 未接 Micrometer | 未接 Micrometer 远程；告警阈值见 `docs/OPS.md` |
 | P2-5 | 审计测试与运维手册 | **partial（improved）** | P0-3 单测已有；**`docs/OPS.md`** 开启清单 / 告警清单；README 运维段改为索引 | JDBC 审计真库验收仍缺 |
 | P2-6 | 集成测试在 CI 可复现 | **partial（improved）** | 跳过策略写入 `integration-test.properties` + OPS；`-Pintegration-test` 无 props → `assumeTrue` skip；`-Pintegration-testcontainers` **stub only** | 真 Testcontainers 接线另开；默认 `mvn test` 仍不需 Docker |

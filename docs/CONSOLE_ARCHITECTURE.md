@@ -17,9 +17,9 @@
 | C5 | API 为迁移边界 | 换前端框架不改后端契约；后端演进不破坏已发布字段语义 |
 | C6 | 密钥永不回传 | 仅 `passwordConfigured` / 掩码；日志同样禁止明文 |
 | C7 | Java 17 | 后端编译目标保持 17 |
-| C8 | 鉴权本阶段不做 | 生产靠网络隔离 / 反代；文档标明风险 |
+| C8 | 鉴权本阶段不做完整 SSO | 可选 `gateway.console.api-token`（§12.7）；生产仍建议网络隔离 / 反代；完整 SSO 规划 |
 
-**本阶段非目标**：Auth/SSO、SQL Server 深度能力、独立 Node 生产部署、按品牌插件市场 UI。
+**本阶段非目标**：完整 Auth/SSO（仅可选 api-token）、SQL Server 深度能力、独立 Node 生产部署、按品牌插件市场 UI。
 
 ---
 
@@ -313,14 +313,14 @@ build: { outDir: 'dist', emptyOutDir: true }
 
 ## 6. 演进路线（防视野受限）
 
-| Phase | 内容 | 依赖 |
+| Phase | 内容 | 依赖 / 状态 |
 |---|---|---|
-| **A（当前·联调闭环）** | Vue/TS/Vite SPA；总览聚合；抽屉；**H2 持久化创建/删除 + 启停**；FE↔BE↔代理端口联调 | H2 + Runtime |
-| **B** | 控制面密码加密 / 可外置 DB；操作审计 | 密钥与合规 |
-| **C** | 鉴权；只读令牌；操作审计进 spool | Spring Security |
-| **D** | 可选独立前端部署（CDN + API 网关）；BFF | 运维需求 |
-| **A+（当前）** | 实例级脱敏规则 CRUD（H2）+ 热挂 MaskingEngine；encrypt 用配置密钥 | 现有 masking 包 |
-| **E** | 可观测图表（时序）；接 Micrometer | 指标后端 |
+| **A** | Vue/TS/Vite SPA；总览聚合；抽屉；**H2 持久化创建/删除 + 启停**；FE↔BE↔代理端口联调 | ✅ 完成 |
+| **A+** | 实例脱敏规则 CRUD + 热挂；**密钥管理 UI** + **schema 列提示** | ✅ 完成（见 §11 / §12） |
+| **B** | 控制面密码信封加密 / 可外置 DB；操作审计 | ✅ 完成（见 §12） |
+| **C** | 完整鉴权 / SSO；审计进 spool（本轮仅可选 `api-token`） | 规划；C-lite 见 §12.7 |
+| **D** | 可选独立前端部署（CDN + API 网关）；BFF | 规划 |
+| **E** | 可观测图表（时序）；接 Micrometer | 规划 |
 
 每阶段仍遵守 C1–C6；前端可替换，**API 版本**用文档章节号管理（现为 **契约 v1**）。
 
@@ -449,3 +449,134 @@ buildAdapter(instance)
 - [x] encrypt 无控制台密钥 UI，用网关配置密钥
 - [x] 与联调闭环（创建实例→启停→代理）同一路径
 
+
+
+---
+
+## 12. Phase B · 控制面安全加固（+ A+ 遗留 + 可选 API Token）
+
+> 作者自检通过后实现。仍遵守 C1–C7；协议无关；密钥永不回传。
+
+### 12.1 目标总览
+
+| 能力 | 本轮 | 说明 |
+|---|---|---|
+| 控制面密码信封加密 | ✅ | AES-GCM；主密钥 `gateway.console.secret-key-base64`（32 字节 AES，Base64） |
+| 可外置控制面 DB | ✅ | 保留 `db-path`；可选 `jdbc-url` / `username` / `password` |
+| 管控操作审计 | ✅ | H2 表 `gateway_console_audit` + SLF4J；可选列表 API |
+| 脱敏密钥管理 UI/API | ✅ | 状态查询 / 设置 / 清除；热重载；永不回传明文 |
+| Schema 列提示 | ✅ | 服务端 JDBC `DatabaseMetaData`；协议无关；无品牌 UI |
+| 可选 API Token | ✅（C-lite） | `gateway.console.api-token`；空白则开放（实验室默认） |
+| 完整 Spring Security / SSO | ❌ | Phase C 规划 |
+| Micrometer 图表 | ❌ | Phase E |
+| 独立 CDN 前端 | ❌ | Phase D |
+
+### 12.2 密码信封加密
+
+**配置**
+
+```yaml
+gateway:
+  console:
+    # 32-byte AES key, Base64。占位示例（勿当真钥提交）：
+    # secret-key-base64: ${GATEWAY_CONSOLE_SECRET_KEY_BASE64:}
+    secret-key-base64: ""
+```
+
+**存储形态**
+
+- 前缀：`enc:v1:` + Base64(`iv ‖ ciphertext ‖ tag`)，IV 12 字节，AES-GCM，tag 128 bit。
+- 写入：主密钥存在 → 明文密码加密后入库；主密钥缺失 → **实验室模式**允许明文写入并 **WARN 一次**。
+- 读取：有前缀 → 解密供运行时 bind；无前缀 → 视为遗留明文（兼容）；下次 update 时可顺带改写为密文。
+- API 仍只暴露 `passwordConfigured`，永不回传密码。
+- **加密写入缺主密钥**：返回清晰 **400/503**（消息说明需配置 `gateway.console.secret-key-base64`）。本实现：实验室模式仍允许明文落库（WARN），与「缺钥仍可 lab」一致；若运维强制加密，可另开开关（规划）。
+
+**组件**：`ConsoleSecretCipher`（控制面专用，与结果集 `MaskingCipher` 分离）。
+
+### 12.3 可外置控制面 DB
+
+| 属性 | 默认 | 说明 |
+|---|---|---|
+| `gateway.console.db-path` | `./data/gateway-console` | 嵌入式 H2 文件路径 |
+| `gateway.console.jdbc-url` | （空） | 非空时 **覆盖** 文件路径，直连该 JDBC URL |
+| `gateway.console.username` | `sa` | 控制面库用户 |
+| `gateway.console.password` | （空） | 控制面库口令 |
+
+- 单测继续用 H2 内存。
+- 其它 JDBC 库（PG 等）为 **尽力而为**（DDL 用 H2 `MERGE` / 标准 SQL 子集）；生产推荐仍 H2 文件或兼容库。
+- **禁止**把被代理业务库当作控制面库。
+
+### 12.4 管控操作审计
+
+表 `gateway_console_audit`：
+
+```text
+id (pk), at, action, instance_id null, detail_json, actor
+```
+
+- 写入时机：实例 create/update/delete、start/stop、脱敏规则 CRUD、脱敏密钥变更。
+- `detail_json`：**禁止**含密码、脱敏密钥、`secret-key` 材料。
+- 同步打一条 SLF4J `INFO`（同样无密钥）。
+- 可选：`GET /console/api/audit?limit=` 列表（默认有上限）。
+
+### 12.5 脱敏密钥管理（不回显明文）
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/console/api/security/masking-key` | `{configured, keyId, source:"config"|"console"|"none"}` |
+| PUT | `/console/api/security/masking-key` | body `{keyId?, keyBase64}` → 控制面 secrets 表加密存储；热重载；**永不返回 key** |
+| DELETE | `/console/api/security/masking-key` | 清除控制台覆盖；回退 yaml `gateway.masking.key-base64` |
+
+- 优先复用 / 扩展 `MaskingKeyProvider`、`InstanceMaskingRuleCompiler`（可变 holder）。
+- PUT 后：所有已绑定实例 `reloadMasking`（不停 TCP）。
+- secrets 表行用 `ConsoleSecretCipher` 加密；无主密钥时 PUT → 400/503。
+
+### 12.6 Schema 列提示（安全）
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/console/api/instances/{id}/schema/columns?table=` | `{columns:[{name,table,nullable,typeName}]}` |
+
+- 服务端用该实例 **已存目标凭据** 建 JDBC 连接，读 `DatabaseMetaData`。
+- 协议无关：仅按 `dbType` 拼 JDBC URL（实现细节），**无品牌 UI / 无品牌 API 路径**。
+- 实例未绑定凭据或连接失败 → **502** + 可读消息。
+- 不落业务库控制配置；短连接，用毕关闭。
+
+### 12.7 可选 API Token（Phase C-lite）
+
+```yaml
+gateway:
+  console:
+    api-token: ${GATEWAY_CONSOLE_API_TOKEN:}   # 空白 = 开放（实验室）
+```
+
+- 非空白时：`/console/api/**` 要求 `Authorization: Bearer <token>` **或** `X-Console-Token: <token>`；缺/错 → **401**。
+- **不**保护静态 SPA `/console` 与 `/console/` 资源（否则首屏无法加载；Token 由运维网络或后续 SSO 补）。
+- 非完整 Spring Security / SSO（仍属 Phase C）。
+
+### 12.8 演进表更新
+
+| Phase | 内容 | 状态 |
+|---|---|---|
+| **A** | Vue SPA；H2 实例 CRUD；启停；overview 聚合 | ✅ 完成 |
+| **A+** | 实例脱敏规则 CRUD + 热挂；**本轮补**：密钥 UI + schema 列提示 | ✅ 完成 |
+| **B** | 密码信封加密；可外置 DB；操作审计 | ✅ 完成 |
+| **C** | 完整鉴权 / SSO；审计进 spool | 规划（本轮仅 api-token） |
+| **D** | 独立 CDN 前端 | 规划 |
+| **E** | Micrometer 图表 | 规划 |
+
+### 12.9 自检清单（作者）
+
+- [x] 密码 `enc:v1:` AES-GCM；遗留明文可读；API 无泄漏
+- [x] 缺主密钥：lab 明文 WARN；加密相关写入有明确错误语义
+- [x] `db-path` + 可选 `jdbc-url` 外置；业务库隔离
+- [x] 审计表无密钥字段；关键写路径落审计 + SLF4J
+- [x] 脱敏密钥 GET 仅状态；PUT/DELETE 热重载；不回显
+- [x] schema columns 协议无关 JDBC metadata；失败 502
+- [x] api-token 可选；仅 `/console/api/**`
+- [x] 无品牌 API/UI 分叉；Java 17
+- [x] 单测：加解密往返、遗留明文、无密码泄漏、审计、密钥状态、token 401、schema（mock/H2）
+- [x] 前端中文标签；`vue-tsc` + `npm run build` 通过
+- [x] STATUS / README 如实更新
+
+**结论：设计可通过 → 进入 Phase B 实现。**
