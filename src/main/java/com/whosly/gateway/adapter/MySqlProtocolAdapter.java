@@ -2,36 +2,35 @@ package com.whosly.gateway.adapter;
 
 import com.whosly.gateway.adapter.mysql.MySQLDatabaseEventExtractor;
 import com.whosly.gateway.adapter.mysql.MySQLFrameCodec;
+import com.whosly.gateway.adapter.mysql.MySQLResultSetMaskingInterceptor;
 import com.whosly.gateway.adapter.mysql.MySQLSession;
 import com.whosly.gateway.adapter.mysql.MySqlGatewayErrorMapper;
+import com.whosly.gateway.adapter.protocol.BackendProvider;
 import com.whosly.gateway.adapter.protocol.DatabaseTrafficInspector;
 import com.whosly.gateway.adapter.protocol.DuplexRelay;
-import com.whosly.gateway.adapter.protocol.ProtocolMessage;
+import com.whosly.gateway.adapter.protocol.GatewayErrorMapping;
+import com.whosly.gateway.adapter.protocol.GatewayException;
+import com.whosly.gateway.adapter.protocol.MessagePipeline;
+import com.whosly.gateway.adapter.protocol.ProtocolErrorResponder;
 import com.whosly.gateway.parser.DruidSqlParser;
 import com.whosly.gateway.parser.SqlParser;
+import com.whosly.gateway.parser.StatementClassifier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
-import java.net.InetSocketAddress;
 import java.net.Socket;
-import java.time.Duration;
 import java.util.UUID;
 
-/**
- * MySQL transparent protocol proxy adapter.
- *
- * @author yueny09@163.com codealy
- * @since 2026-07-02
- */
 public class MySqlProtocolAdapter extends AbstractProtocolAdapter {
 
     private static final Logger log = LoggerFactory.getLogger(MySqlProtocolAdapter.class);
     private static final String PROTOCOL_NAME = "MySQL";
     private static final int DEFAULT_PORT = 3307;
-    private static final Duration TARGET_CONNECT_TIMEOUT = Duration.ofSeconds(10);
     private static final MySqlGatewayErrorMapper GATEWAY_ERROR_MAPPER = new MySqlGatewayErrorMapper();
     private static final MySQLFrameCodec FRAME_CODEC = new MySQLFrameCodec();
+    private static final ProtocolErrorResponder GATEWAY_ERROR_RESPONDER =
+            new ProtocolErrorResponder(FRAME_CODEC, GATEWAY_ERROR_MAPPER);
 
     public MySqlProtocolAdapter() {
         super(PROTOCOL_NAME, DEFAULT_PORT);
@@ -48,13 +47,10 @@ public class MySqlProtocolAdapter extends AbstractProtocolAdapter {
         MySQLSession session = new MySQLSession(sessionId);
         registerSession(session);
 
-        /*
-         * When the target is unreachable the gateway answers with a native MySQL
-         * ERR_Packet (rule 2.8) before closing, instead of a bare TCP reset.
-         */
+        BackendProvider backendProvider = createBackendProvider();
         Socket targetSocket;
         try {
-            targetSocket = connectTarget();
+            targetSocket = backendProvider.acquire();
         } catch (IOException e) {
             log.warn("MySQL proxy session {} could not reach target {}:{}: {}",
                     sessionId, targetHost, targetPort, e.getMessage());
@@ -65,46 +61,56 @@ public class MySqlProtocolAdapter extends AbstractProtocolAdapter {
             return;
         }
 
-        try (Socket target = targetSocket) {
+        try {
             log.info("MySQL proxy session {} connected {} to target {}:{}",
                     sessionId, clientSocket.getRemoteSocketAddress(), targetHost, targetPort);
+            MySQLDatabaseEventExtractor extractor =
+                    new MySQLDatabaseEventExtractor(PROTOCOL_NAME, sessionId, false, session);
             DatabaseTrafficInspector trafficInspector = new DatabaseTrafficInspector(
-                    new MySQLDatabaseEventExtractor(PROTOCOL_NAME, sessionId, false, session)::inspect,
+                    extractor::inspect,
                     databaseTrafficObserver,
-                    databaseRiskPolicy);
-            new DuplexRelay(sessionId, trafficInspector).relay(clientSocket, target);
+                    databaseRiskPolicy,
+                    session,
+                    new StatementClassifier(sqlParser),
+                    null,
+                    isRequireCleartextInspection(),
+                    getRuntimeMetrics());
+            MessagePipeline pipeline = maskingEngine.isActive()
+                    ? MessagePipeline.of(trafficInspector,
+                            new MySQLResultSetMaskingInterceptor(extractor, maskingEngine))
+                    : MessagePipeline.of(trafficInspector);
+            new DuplexRelay(sessionId, pipeline, GATEWAY_ERROR_RESPONDER, rewriteLimits)
+                    .relay(clientSocket, targetSocket);
         } catch (IOException e) {
             log.warn("MySQL proxy session {} closed: {}", sessionId, e.getMessage());
         } finally {
             session.close();
+            databaseTrafficObserver.onSessionClosed(sessionId);
             unregisterSession(session);
+            backendProvider.release(targetSocket);
             closeQuietly(clientSocket);
         }
     }
 
-    private static void sendGatewayError(Socket clientSocket, IOException cause) {
+    @Override
+    protected void rejectClientConnection(Socket clientSocket) {
+        log.warn("Rejecting MySQL client connection from {}", clientSocket.getRemoteSocketAddress());
+        sendGatewayError(clientSocket, new GatewayException(GatewayErrorMapping.RESOURCE_EXHAUSTED));
+        closeQuietly(clientSocket);
+    }
+
+    private static void sendGatewayError(Socket clientSocket, Throwable cause) {
         try {
-            ProtocolMessage message = GATEWAY_ERROR_MAPPER.toErrorMessage(cause);
-            FRAME_CODEC.write(message, clientSocket.getOutputStream());
-            clientSocket.getOutputStream().flush();
+            GATEWAY_ERROR_RESPONDER.respond(clientSocket.getOutputStream(), cause);
         } catch (IOException e) {
             log.debug("MySQL proxy session failed to send gateway error: {}", e.getMessage());
         }
-    }
-
-    private Socket connectTarget() throws IOException {
-        Socket targetSocket = new Socket();
-        targetSocket.setTcpNoDelay(true);
-        targetSocket.connect(new InetSocketAddress(targetHost, targetPort),
-                Math.toIntExact(TARGET_CONNECT_TIMEOUT.toMillis()));
-        return targetSocket;
     }
 
     private static void closeQuietly(Socket socket) {
         try {
             socket.close();
         } catch (IOException ignored) {
-            // Already closing.
         }
     }
 }

@@ -1,21 +1,27 @@
 package com.whosly.gateway.adapter;
 
+import com.whosly.gateway.adapter.postgresql.PostgreSQLCancelKeyRegistry;
 import com.whosly.gateway.adapter.postgresql.PostgreSQLDatabaseEventExtractor;
+import com.whosly.gateway.adapter.postgresql.PostgreSQLResultSetMaskingInterceptor;
 import com.whosly.gateway.adapter.postgresql.PostgreSQLFrameCodec;
 import com.whosly.gateway.adapter.postgresql.PostgreSQLProtocolErrorMapper;
 import com.whosly.gateway.adapter.postgresql.PostgreSQLSession;
+import com.whosly.gateway.adapter.protocol.BackendProvider;
 import com.whosly.gateway.adapter.protocol.DatabaseTrafficInspector;
 import com.whosly.gateway.adapter.protocol.DuplexRelay;
+import com.whosly.gateway.adapter.protocol.GatewayErrorMapping;
+import com.whosly.gateway.adapter.protocol.GatewayException;
+import com.whosly.gateway.adapter.protocol.MessagePipeline;
+import com.whosly.gateway.adapter.protocol.ProtocolErrorResponder;
 import com.whosly.gateway.adapter.protocol.ProtocolMessage;
 import com.whosly.gateway.parser.DruidSqlParser;
 import com.whosly.gateway.parser.SqlParser;
+import com.whosly.gateway.parser.StatementClassifier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
-import java.net.InetSocketAddress;
 import java.net.Socket;
-import java.time.Duration;
 import java.util.UUID;
 
 /**
@@ -34,10 +40,16 @@ public class PostgreSQLProtocolAdapter extends AbstractProtocolAdapter {
     private static final Logger log = LoggerFactory.getLogger(PostgreSQLProtocolAdapter.class);
     private static final String PROTOCOL_NAME = "PostgreSQL";
     private static final int DEFAULT_PORT = 5432;
-    private static final Duration TARGET_CONNECT_TIMEOUT = Duration.ofSeconds(10);
     private static final int FIRST_CLIENT_MESSAGE_TIMEOUT_MS = 5000;
     private static final PostgreSQLFrameCodec FRAME_CODEC = new PostgreSQLFrameCodec();
     private static final PostgreSQLProtocolErrorMapper GATEWAY_ERROR_MAPPER = new PostgreSQLProtocolErrorMapper();
+    private static final ProtocolErrorResponder GATEWAY_ERROR_RESPONDER =
+            new ProtocolErrorResponder(FRAME_CODEC, GATEWAY_ERROR_MAPPER);
+    /**
+     * Correlates CancelRequest keys with the sessions of this adapter, so an
+     * observed cancel request can be attributed to the session it targets.
+     */
+    private final PostgreSQLCancelKeyRegistry cancelKeyRegistry = new PostgreSQLCancelKeyRegistry();
 
     public PostgreSQLProtocolAdapter() {
         super(PROTOCOL_NAME, DEFAULT_PORT);
@@ -54,32 +66,58 @@ public class PostgreSQLProtocolAdapter extends AbstractProtocolAdapter {
         PostgreSQLSession session = new PostgreSQLSession(sessionId);
         registerSession(session);
 
+        BackendProvider backendProvider = createBackendProvider();
         Socket targetSocket;
         try {
-            targetSocket = connectTarget();
+            targetSocket = backendProvider.acquire();
         } catch (IOException e) {
             log.warn("PostgreSQL proxy session {} could not reach target {}:{}: {}",
                     sessionId, targetHost, targetPort, e.getMessage());
             sendStartupError(clientSocket, e);
             session.close();
+            cancelKeyRegistry.unregister(sessionId);
             unregisterSession(session);
             closeQuietly(clientSocket);
             return;
         }
 
-        try (Socket target = targetSocket) {
+        try {
             log.info("PostgreSQL proxy session {} connected {} to target {}:{}",
                     sessionId, clientSocket.getRemoteSocketAddress(), targetHost, targetPort);
+            PostgreSQLDatabaseEventExtractor extractor = new PostgreSQLDatabaseEventExtractor(
+                    PROTOCOL_NAME, sessionId, false, session, cancelKeyRegistry);
             DatabaseTrafficInspector trafficInspector = new DatabaseTrafficInspector(
-                    new PostgreSQLDatabaseEventExtractor(PROTOCOL_NAME, sessionId, false, session)::inspect,
+                    extractor::inspect,
                     databaseTrafficObserver,
-                    databaseRiskPolicy);
-            new DuplexRelay(sessionId, trafficInspector).relay(clientSocket, target);
+                    databaseRiskPolicy,
+                    session,
+                    new StatementClassifier(sqlParser),
+                    extractor::isOpaqueTunnel,
+                    isRequireCleartextInspection(),
+                    getRuntimeMetrics());
+            /*
+             * Result-set masking shares the extractor with the observer, exactly as on the
+             * MySQL side: the RowDescription is already tracked there, and a second state
+             * machine would drift from it (rule 2.10). With no rule registered the engine
+             * is inactive and the pipeline is unchanged.
+             */
+            MessagePipeline pipeline = maskingEngine.isActive()
+                    ? MessagePipeline.of(trafficInspector,
+                            new PostgreSQLResultSetMaskingInterceptor(extractor, maskingEngine))
+                    : MessagePipeline.of(trafficInspector);
+            new DuplexRelay(sessionId, pipeline, GATEWAY_ERROR_RESPONDER, rewriteLimits)
+                    .relay(clientSocket, targetSocket);
         } catch (IOException e) {
             log.warn("PostgreSQL proxy session {} closed: {}", sessionId, e.getMessage());
         } finally {
             session.close();
+            // Drop the cancel keys with the session so a later cancel cannot
+            // resolve to a connection that no longer exists.
+            cancelKeyRegistry.unregister(sessionId);
+            // Let the audit sink release the sequence counter of this session.
+            databaseTrafficObserver.onSessionClosed(sessionId);
             unregisterSession(session);
+            backendProvider.release(targetSocket);
             closeQuietly(clientSocket);
         }
     }
@@ -98,7 +136,14 @@ public class PostgreSQLProtocolAdapter extends AbstractProtocolAdapter {
      *   <li>{@code StartupMessage}: report the error immediately.</li>
      * </ul>
      */
-    private static void sendStartupError(Socket clientSocket, IOException cause) {
+    @Override
+    protected void rejectClientConnection(Socket clientSocket) {
+        log.warn("Rejecting PostgreSQL client connection from {}", clientSocket.getRemoteSocketAddress());
+        sendStartupError(clientSocket, new GatewayException(GatewayErrorMapping.RESOURCE_EXHAUSTED));
+        closeQuietly(clientSocket);
+    }
+
+    private static void sendStartupError(Socket clientSocket, Throwable cause) {
         try {
             clientSocket.setSoTimeout(FIRST_CLIENT_MESSAGE_TIMEOUT_MS);
             ProtocolMessage first = FRAME_CODEC.readStartupMessage(clientSocket.getInputStream());
@@ -118,25 +163,23 @@ public class PostgreSQLProtocolAdapter extends AbstractProtocolAdapter {
                 return;
             }
 
-            ProtocolMessage error = GATEWAY_ERROR_MAPPER.toErrorMessage(cause);
-            FRAME_CODEC.write(error, clientSocket.getOutputStream());
-            clientSocket.getOutputStream().flush();
+            GATEWAY_ERROR_RESPONDER.respond(clientSocket.getOutputStream(), cause);
         } catch (IOException | RuntimeException e) {
             log.debug("PostgreSQL proxy session failed to send gateway error: {}", e.getMessage());
         }
     }
 
+    /**
+     * Index of observed backend cancel keys, keyed by backend process id and
+     * secret. Exposed for inspection; key material is never logged.
+     */
+    public PostgreSQLCancelKeyRegistry getCancelKeyRegistry() {
+        return cancelKeyRegistry;
+    }
+
     private static int requestCode(ProtocolMessage startupFamilyMessage) {
         byte[] payload = startupFamilyMessage.payload();
         return PostgreSQLFrameCodec.readInt4(payload, 0, payload.length);
-    }
-
-    private Socket connectTarget() throws IOException {
-        Socket targetSocket = new Socket();
-        targetSocket.setTcpNoDelay(true);
-        targetSocket.connect(new InetSocketAddress(targetHost, targetPort),
-                Math.toIntExact(TARGET_CONNECT_TIMEOUT.toMillis()));
-        return targetSocket;
     }
 
     private static void closeQuietly(Socket socket) {

@@ -167,6 +167,105 @@ class MySqlProtocolAdapterTest {
         }
     }
 
+    @Test
+    void rejectsConnectionBeyondConfiguredLimitWithNativeError() throws Exception {
+        try (ServerSocket targetServer = new ServerSocket(0, 4, InetAddress.getLoopbackAddress());
+             ServerSocket portProbe = new ServerSocket(0, 1, InetAddress.getLoopbackAddress())) {
+            int proxyPort = portProbe.getLocalPort();
+            portProbe.close();
+
+            MySqlProtocolAdapter adapter = new MySqlProtocolAdapter();
+            adapter.setPort(proxyPort);
+            adapter.setTargetHost(InetAddress.getLoopbackAddress().getHostAddress());
+            adapter.setTargetPort(targetServer.getLocalPort());
+            adapter.setMaxConnections(1);
+            adapter.start();
+
+            ExecutorService executorService = Executors.newFixedThreadPool(2);
+            try {
+                Future<Socket> acceptedTarget = executorService.submit(targetServer::accept);
+
+                try (Socket first = new Socket(InetAddress.getLoopbackAddress(), proxyPort);
+                     Socket heldTarget = acceptedTarget.get(2, TimeUnit.SECONDS)) {
+                    assertThat(heldTarget).isNotNull();
+
+                    try (Socket second = new Socket(InetAddress.getLoopbackAddress(), proxyPort)) {
+                        second.setSoTimeout(3000);
+                        byte[] received = second.getInputStream().readAllBytes();
+
+                        assertThat(received.length).isGreaterThan(5);
+                        assertThat(received[4] & 0xFF).isEqualTo(0xFF);
+                        assertThat(new String(received, 7, 6, StandardCharsets.US_ASCII))
+                                .isEqualTo("#HY000");
+                    }
+                }
+            } finally {
+                executorService.shutdownNow();
+                adapter.stop();
+            }
+        }
+    }
+
+    @Test
+    void rejectsClientAddressesOutsideAllowlist() throws Exception {
+        try (ServerSocket portProbe = new ServerSocket(0, 1, InetAddress.getLoopbackAddress())) {
+            int proxyPort = portProbe.getLocalPort();
+            portProbe.close();
+
+            MySqlProtocolAdapter adapter = new MySqlProtocolAdapter();
+            adapter.setPort(proxyPort);
+            adapter.setClientAddressPolicy(address -> false);
+            adapter.start();
+
+            try (Socket client = new Socket(InetAddress.getLoopbackAddress(), proxyPort)) {
+                client.setSoTimeout(3000);
+                assertThat(client.getInputStream().read()).isEqualTo(-1);
+            } finally {
+                adapter.stop();
+            }
+        }
+    }
+
+    @Test
+    void stopClosesInFlightConnections() throws Exception {
+        try (ServerSocket targetServer = new ServerSocket(0, 2, InetAddress.getLoopbackAddress());
+             ServerSocket portProbe = new ServerSocket(0, 1, InetAddress.getLoopbackAddress())) {
+            int proxyPort = portProbe.getLocalPort();
+            portProbe.close();
+
+            MySqlProtocolAdapter adapter = new MySqlProtocolAdapter();
+            adapter.setPort(proxyPort);
+            adapter.setTargetHost(InetAddress.getLoopbackAddress().getHostAddress());
+            adapter.setTargetPort(targetServer.getLocalPort());
+            adapter.start();
+
+            ExecutorService executorService = Executors.newSingleThreadExecutor();
+            try {
+                Future<Socket> acceptedTarget = executorService.submit(targetServer::accept);
+
+                Socket client = new Socket(InetAddress.getLoopbackAddress(), proxyPort);
+                try (Socket heldTarget = acceptedTarget.get(2, TimeUnit.SECONDS)) {
+                    assertThat(heldTarget).isNotNull();
+                    adapter.stop();
+
+                    client.setSoTimeout(3000);
+                    int read;
+                    try {
+                        read = client.getInputStream().read();
+                    } catch (Exception e) {
+                        read = -1;
+                    }
+                    assertThat(read).isEqualTo(-1);
+                } finally {
+                    client.close();
+                }
+            } finally {
+                executorService.shutdownNow();
+                adapter.stop();
+            }
+        }
+    }
+
     private static byte[] readExact(InputStream inputStream, int length) throws Exception {
         byte[] bytes = new byte[length];
         int offset = 0;

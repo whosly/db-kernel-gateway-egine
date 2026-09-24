@@ -4,7 +4,12 @@ import com.whosly.gateway.adapter.PostgreSQLProtocolAdapter;
 import com.whosly.gateway.adapter.postgresql.PostgreSQLSession;
 import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
+import org.postgresql.copy.CopyManager;
+import org.postgresql.core.BaseConnection;
 
+import java.io.ByteArrayOutputStream;
+import java.io.StringReader;
+import java.nio.charset.StandardCharsets;
 import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.PreparedStatement;
@@ -103,6 +108,50 @@ class PostgreSqlGatewayIntegrationTest extends DatabaseGatewayIntegrationTestSup
             }
 
             assertObservedSql("select current_database()");
+        } finally {
+            stopQuietly(adapter);
+        }
+    }
+
+    @Test
+    void proxiesCopyStreamsThroughGateway() throws Exception {
+        requireIntegrationEnabled();
+
+        PostgreSQLProtocolAdapter adapter = new PostgreSQLProtocolAdapter();
+        int proxyPort = freePort();
+        adapter.setPort(proxyPort);
+        adapter.setTargetHost(CONFIG.postgreSqlHost());
+        adapter.setTargetPort(CONFIG.postgreSqlPort());
+        adapter.setDatabaseTrafficObserver(observedEvents::add);
+
+        try {
+            adapter.start();
+
+            String url = "jdbc:postgresql://localhost:" + proxyPort + "/" + CONFIG.postgreSqlDatabase()
+                    + "?sslmode=disable";
+            try (Connection connection = DriverManager.getConnection(url,
+                    CONFIG.postgreSqlUsername(), CONFIG.postgreSqlPassword())) {
+                CopyManager copyManager = new CopyManager((BaseConnection) connection);
+
+                ByteArrayOutputStream copyOutput = new ByteArrayOutputStream();
+                long copiedRows = copyManager.copyOut("COPY (SELECT generate_series(1, 500)) TO STDOUT",
+                        copyOutput);
+                assertThat(copiedRows).isEqualTo(500);
+                assertThat(copyOutput.toString(StandardCharsets.UTF_8).lines().count()).isEqualTo(500);
+
+                try (Statement statement = connection.createStatement()) {
+                    statement.execute("create temp table gateway_copy_test(id int)");
+                }
+                long inserted = copyManager.copyIn("COPY gateway_copy_test(id) FROM STDIN",
+                        new StringReader("1\n2\n3\n"));
+                assertThat(inserted).isEqualTo(3);
+
+                try (Statement statement = connection.createStatement();
+                     ResultSet resultSet = statement.executeQuery("select count(*) from gateway_copy_test")) {
+                    assertThat(resultSet.next()).isTrue();
+                    assertThat(resultSet.getInt(1)).isEqualTo(3);
+                }
+            }
         } finally {
             stopQuietly(adapter);
         }

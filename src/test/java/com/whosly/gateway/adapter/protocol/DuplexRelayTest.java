@@ -1,17 +1,26 @@
 package com.whosly.gateway.adapter.protocol;
 
+import com.whosly.gateway.adapter.mysql.MySQLFrameCodec;
+import com.whosly.gateway.adapter.mysql.MySQLMessageFraming;
+import com.whosly.gateway.adapter.mysql.MySqlGatewayErrorMapper;
 import org.junit.jupiter.api.Test;
 
 import java.io.InputStream;
 import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.net.SocketTimeoutException;
+import java.nio.charset.StandardCharsets;
+import java.util.List;
+import java.util.Locale;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class DuplexRelayTest {
 
@@ -48,6 +57,224 @@ class DuplexRelayTest {
             relayFuture.get(2, TimeUnit.SECONDS);
             executorService.shutdownNow();
         }
+    }
+
+    @Test
+    void writesBytesUnchangedWhenThePipelineDoesNotRewrite() throws Exception {
+        try (SocketPair left = SocketPair.open();
+             SocketPair right = SocketPair.open()) {
+            ExecutorService executorService = Executors.newSingleThreadExecutor();
+            try {
+                List<Integer> observedLengths = new CopyOnWriteArrayList<>();
+                MessageInterceptor observer =
+                        Interceptors.observe(message -> observedLengths.add(message.originalLength()));
+                DuplexRelay relay = new DuplexRelay("observe-test", MessagePipeline.of(observer));
+
+                Future<?> relayFuture = executorService.submit(() -> {
+                    try {
+                        relay.relay(left.serverSide, right.serverSide);
+                    } catch (Exception e) {
+                        throw new RuntimeException(e);
+                    }
+                });
+
+                byte[] payload = new byte[]{0x16, 0x03, 0x01, 0x00, 0x2a, 0x00, (byte) 0xff};
+                left.clientSide.getOutputStream().write(payload);
+                left.clientSide.getOutputStream().flush();
+
+                assertThat(readExact(right.clientSide.getInputStream(), payload.length)).isEqualTo(payload);
+                assertThat(observedLengths).isNotEmpty();
+
+                left.clientSide.close();
+                right.clientSide.close();
+                relayFuture.get(2, TimeUnit.SECONDS);
+            } finally {
+                executorService.shutdownNow();
+            }
+        }
+    }
+
+    @Test
+    void writesTheReplacementPayloadProducedByARewriteInterceptor() throws Exception {
+        try (SocketPair left = SocketPair.open();
+             SocketPair right = SocketPair.open()) {
+            ExecutorService executorService = Executors.newSingleThreadExecutor();
+            try {
+                MessageInterceptor upperCase = Interceptors.rewrite(message -> {
+                    String text = new String(message.originalBytes(), message.originalOffset(),
+                            message.originalLength(), StandardCharsets.US_ASCII);
+                    return message.withReplacement(
+                            text.toUpperCase(Locale.ROOT).getBytes(StandardCharsets.US_ASCII));
+                });
+                DuplexRelay relay = new DuplexRelay("rewrite-test", MessagePipeline.of(upperCase));
+
+                Future<?> relayFuture = executorService.submit(() -> {
+                    try {
+                        relay.relay(left.serverSide, right.serverSide);
+                    } catch (Exception e) {
+                        throw new RuntimeException(e);
+                    }
+                });
+
+                byte[] payload = "select 1".getBytes(StandardCharsets.US_ASCII);
+                left.clientSide.getOutputStream().write(payload);
+                left.clientSide.getOutputStream().flush();
+
+                byte[] received = readExact(right.clientSide.getInputStream(), payload.length);
+                assertThat(new String(received, StandardCharsets.US_ASCII)).isEqualTo("SELECT 1");
+
+                left.clientSide.close();
+                right.clientSide.close();
+                relayFuture.get(2, TimeUnit.SECONDS);
+            } finally {
+                executorService.shutdownNow();
+            }
+        }
+    }
+
+    @Test
+    void answersDeniedTrafficWithProtocolNativeError() throws Exception {
+        try (SocketPair left = SocketPair.open();
+             SocketPair right = SocketPair.open()) {
+            ExecutorService executorService = Executors.newSingleThreadExecutor();
+            try {
+                TrafficInspector denyAll = TrafficDecision::deny;
+                ProtocolErrorResponder responder = new ProtocolErrorResponder(
+                        new MySQLFrameCodec(), new MySqlGatewayErrorMapper());
+                DuplexRelay relay = new DuplexRelay("deny-test", denyAll, responder);
+
+                Future<?> relayFuture = executorService.submit(() -> {
+                    try {
+                        relay.relay(left.serverSide, right.serverSide);
+                    } catch (Exception e) {
+                        throw new RuntimeException(e);
+                    }
+                });
+
+                left.clientSide.getOutputStream().write("select 1".getBytes(StandardCharsets.US_ASCII));
+                left.clientSide.getOutputStream().flush();
+
+                byte[] received = left.clientSide.getInputStream().readAllBytes();
+
+                assertThat(received.length).isGreaterThan(12);
+                assertThat(received[4] & 0xFF).isEqualTo(0xFF);
+                assertThat(new String(received, 7, 6, StandardCharsets.US_ASCII)).isEqualTo("#42000");
+                relayFuture.get(2, TimeUnit.SECONDS);
+            } finally {
+                executorService.shutdownNow();
+            }
+        }
+    }
+
+    @Test
+    void holdsASplitMessageUntilItIsCompleteBeforeRewritingIt() throws Exception {
+        try (SocketPair left = SocketPair.open();
+             SocketPair right = SocketPair.open()) {
+            ExecutorService executorService = Executors.newSingleThreadExecutor();
+            try {
+                DuplexRelay relay = new DuplexRelay("hold-test",
+                        MessagePipeline.of(packetUpperCasingInterceptor()),
+                        new ProtocolErrorResponder(new MySQLFrameCodec(), new MySqlGatewayErrorMapper()),
+                        RewriteLimits.defaults());
+
+                Future<?> relayFuture = executorService.submit(() -> {
+                    try {
+                        relay.relay(left.serverSide, right.serverSide);
+                    } catch (Exception e) {
+                        throw new RuntimeException(e);
+                    }
+                });
+
+                byte[] message = new MySQLFrameCodec()
+                        .packet("select 1".getBytes(StandardCharsets.US_ASCII), 0);
+                int splitAt = message.length - 3;
+                left.clientSide.getOutputStream().write(message, 0, splitAt);
+                left.clientSide.getOutputStream().flush();
+
+                // The message is not whole yet, so nothing may have been forwarded.
+                right.clientSide.setSoTimeout(300);
+                assertThatThrownBy(() -> right.clientSide.getInputStream().read())
+                        .isInstanceOf(SocketTimeoutException.class);
+
+                left.clientSide.getOutputStream().write(message, splitAt, message.length - splitAt);
+                left.clientSide.getOutputStream().flush();
+
+                right.clientSide.setSoTimeout(2000);
+                byte[] received = readExact(right.clientSide.getInputStream(), message.length);
+                // The packet header is four bytes, so the rewritten payload starts at 4.
+                assertThat(new String(received, 4, 8, StandardCharsets.US_ASCII)).isEqualTo("SELECT 1");
+
+                left.clientSide.close();
+                right.clientSide.close();
+                relayFuture.get(2, TimeUnit.SECONDS);
+            } finally {
+                executorService.shutdownNow();
+            }
+        }
+    }
+
+    @Test
+    void rejectsAMessageThatExceedsTheRewriteLimit() throws Exception {
+        try (SocketPair left = SocketPair.open();
+             SocketPair right = SocketPair.open()) {
+            ExecutorService executorService = Executors.newSingleThreadExecutor();
+            try {
+                DuplexRelay relay = new DuplexRelay("limit-test",
+                        MessagePipeline.of(packetUpperCasingInterceptor()),
+                        new ProtocolErrorResponder(new MySQLFrameCodec(), new MySqlGatewayErrorMapper()),
+                        new RewriteLimits(8, 1000));
+
+                Future<?> relayFuture = executorService.submit(() -> {
+                    try {
+                        relay.relay(left.serverSide, right.serverSide);
+                    } catch (Exception e) {
+                        throw new RuntimeException(e);
+                    }
+                });
+
+                // Larger than the byte bound and still incomplete, so the gateway must
+                // reject rather than forward bytes it cannot rewrite.
+                byte[] message = new MySQLFrameCodec()
+                        .packet("0123456789".getBytes(StandardCharsets.US_ASCII), 0);
+                left.clientSide.getOutputStream().write(message, 0, message.length - 2);
+                left.clientSide.getOutputStream().flush();
+
+                byte[] received = left.clientSide.getInputStream().readAllBytes();
+
+                assertThat(received.length).isGreaterThan(12);
+                assertThat(received[4] & 0xFF).isEqualTo(0xFF);
+                assertThat(new String(received, 7, 6, StandardCharsets.US_ASCII)).isEqualTo("#HY000");
+                relayFuture.get(2, TimeUnit.SECONDS);
+            } finally {
+                executorService.shutdownNow();
+            }
+        }
+    }
+
+    /**
+     * A rewrite that can only act on a whole MySQL packet, which is what makes it
+     * ask the data path for message boundaries.
+     */
+    private static MessageInterceptor packetUpperCasingInterceptor() {
+        return new MessageInterceptor() {
+            @Override
+            public InterceptorPhase phase() {
+                return InterceptorPhase.REWRITE;
+            }
+
+            @Override
+            public TrafficDecision intercept(WireMessage message) {
+                String text = new String(message.originalBytes(), message.originalOffset(),
+                        message.originalLength(), StandardCharsets.US_ASCII);
+                return TrafficDecision.forward(message.withReplacement(
+                        text.toUpperCase(Locale.ROOT).getBytes(StandardCharsets.US_ASCII)));
+            }
+
+            @Override
+            public MessageBounder messageBounder(TrafficDirection direction) {
+                return MySQLMessageFraming::completeMessageEnds;
+            }
+        };
     }
 
     private static byte[] readExact(InputStream inputStream, int length) throws Exception {

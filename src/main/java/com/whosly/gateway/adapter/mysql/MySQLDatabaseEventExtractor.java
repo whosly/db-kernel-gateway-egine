@@ -1,14 +1,21 @@
 package com.whosly.gateway.adapter.mysql;
 
 import com.whosly.gateway.adapter.protocol.DatabaseTrafficEvent;
+import com.whosly.gateway.adapter.protocol.MessageBounder;
 import com.whosly.gateway.adapter.protocol.ProtocolConnectionState;
 import com.whosly.gateway.adapter.protocol.TrafficDirection;
+import com.whosly.gateway.masking.ColumnMetadata;
 
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Observes cleartext MySQL traffic and extracts auditable SQL events.
@@ -67,6 +74,14 @@ public class MySQLDatabaseEventExtractor {
     private static final int EOF_PACKET_HEADER = 0xFE;
     private static final int ERR_PACKET_HEADER = 0xFF;
 
+    // Every client command packet starts at sequence 0.
+    private static final int COMMAND_START_SEQUENCE = 0;
+
+    // Minimum payload of a COM_STMT_PREPARE prepare-ok header with CLIENT_PROTOCOL_41.
+    private static final int PREPARE_HEADER_LENGTH = 12;
+
+    private static final Logger log = LoggerFactory.getLogger(MySQLDatabaseEventExtractor.class);
+
     private final String protocolName;
     private final String sessionId;
     /** Optional session used to publish observed protocol state; null in some tests. */
@@ -91,16 +106,51 @@ public class MySQLDatabaseEventExtractor {
     private MySQLResponsePhase responsePhase = MySQLResponsePhase.IDLE;
     /** Column definition packets still to skip in the current result set. */
     private int remainingColumnDefinitions;
+    /** True while the current response streams result set rows. */
+    private boolean resultSetInProgress;
     /** True while the client uploads LOAD DATA LOCAL INFILE content. */
     private boolean localInfileInProgress;
-    /** True after a TLS/compression switch: bytes become opaque and are not parsed. */
-    private boolean opaqueTunnel;
+    /**
+     * True after a TLS/compression switch: bytes become opaque and are not parsed.
+     *
+     * <p>Volatile because the two relay directions share this observer: the client
+     * direction detects the switch and the target direction must stop holding
+     * bytes for a rewrite (rule 2.10).</p>
+     */
+    private volatile boolean opaqueTunnel;
+
+    public boolean isOpaqueTunnel() {
+        return opaqueTunnel;
+    }
     /** Client capability flags from the handshake response; they drive optional layouts. */
     private long clientCapabilityFlags;
     /** True once the first client packet (handshake response) has been parsed. */
     private boolean clientHandshakeResponseSeen;
+    /** Shape the command in flight declared it would produce; null when none. */
+    private MySQLResponseShape pendingResponseShape;
+    /** Command whose response is being observed; null when none. */
+    private MySQLCommandType pendingCommand;
+    /** Column metadata of the result set being observed, in column order. */
+    private final List<ColumnMetadata> currentResultSetColumns = new ArrayList<>();
+    /** Declared column count of the result set being observed. */
+    private int currentResultSetColumnCount;
+    /** True when the server packet just observed was a result-set row. */
+    private boolean lastResponsePacketWasResultSetRow;
+    /** True when response observation stopped and waits for the next command. */
+    private boolean responseObservationSuspended;
+    /** Column definitions counted while consuming a COM_FIELD_LIST response. */
+    private int columnListCount;
+    /** Parameter definition packets still expected in a COM_STMT_PREPARE response. */
+    private int prepareParamDefinitions;
+    /** Column definition packets still expected in a COM_STMT_PREPARE response. */
+    private int prepareColumnDefinitions;
+    /** Position inside a COM_STMT_PREPARE metadata tail. */
+    private MySQLPreparePhase preparePhase = MySQLPreparePhase.HEADER;
     /** Parameter types of the previous COM_QUERY, reused when new_params_bound_flag is 0. */
     private int[] lastQueryAttributeTypes = new int[0];
+    /** Count of sequence/malformed anomalies; forwarding is never affected by them. */
+    private final AtomicLong protocolAnomalies = new AtomicLong();
+    private final AtomicBoolean protocolAnomalyLogged = new AtomicBoolean();
 
     public MySQLDatabaseEventExtractor(String protocolName, String sessionId) {
         this(protocolName, sessionId, true, null);
@@ -121,6 +171,74 @@ public class MySQLDatabaseEventExtractor {
 
     public List<DatabaseTrafficEvent> extract(byte[] bytes, int offset, int length) {
         return extractClientCommandBytes(bytes, offset, length);
+    }
+
+    /**
+     * Message boundaries this protocol layer can offer a rewrite (rule 2.10).
+     *
+     * <p>MySQL framing is the same in both directions (a 4-byte packet header), so
+     * only the opaque switch can take it away: an encrypted or compressed session
+     * has no cleartext headers to trust.</p>
+     *
+     * @param direction direction whose framing is needed; MySQL does not vary by
+     *                  direction
+     * @return the bounder, or {@code null} when this session cannot be framed
+     */
+    /**
+     * Captures the metadata of one column definition.
+     *
+     * <p>The row masking path needs it to decide which columns to touch and which
+     * values it may rewrite at all. A packet this cannot parse simply leaves the
+     * column list incomplete, which that path treats as "not safe to mask".</p>
+     */
+    private void observeColumnDefinition(byte[] packet, int payloadOffset, int payloadLength) {
+        MySQLColumnMetadata.parse(packet, payloadOffset, payloadLength, resultSetValueFormat())
+                .ifPresent(currentResultSetColumns::add);
+    }
+
+    /**
+     * Wire format of the rows a result set will carry.
+     *
+     * <p>The text protocol carries text values, while an executed prepared statement
+     * carries type-encoded binary values. Masking must tell them apart: rewriting a
+     * binary value as text would corrupt the result set.</p>
+     */
+    private ColumnMetadata.ValueFormat resultSetValueFormat() {
+        return pendingCommand == MySQLCommandType.COM_STMT_EXECUTE
+                || pendingCommand == MySQLCommandType.COM_STMT_FETCH
+                ? ColumnMetadata.ValueFormat.BINARY
+                : ColumnMetadata.ValueFormat.TEXT;
+    }
+
+    /** Column metadata observed for the result set in flight, in column order. */
+    public List<ColumnMetadata> currentResultSetColumns() {
+        return List.copyOf(currentResultSetColumns);
+    }
+
+    /** Declared column count of the result set in flight; 0 when none is observed. */
+    public int currentResultSetColumnCount() {
+        return currentResultSetColumnCount;
+    }
+
+    /** True when the server packet just observed was a result-set row. */
+    public boolean lastResponsePacketWasResultSetRow() {
+        return lastResponsePacketWasResultSetRow;
+    }
+
+    /** Command whose response is being observed, when one is in flight. */
+    public Optional<MySQLCommandType> pendingCommand() {
+        return Optional.ofNullable(pendingCommand);
+    }
+
+    public MessageBounder messageBounder(TrafficDirection direction) {
+        /*
+         * The phase is read on every call, not when the bounder is created: the
+         * relay keeps one bounder for the whole session, so a captured flag would
+         * keep framing an already-opaque session as if it were cleartext.
+         */
+        return (bytes, offset, length) -> opaqueTunnel
+                ? null
+                : MySQLMessageFraming.completeMessageEnds(bytes, offset, length);
     }
 
     public List<DatabaseTrafficEvent> inspect(TrafficDirection direction, byte[] bytes, int offset, int length) {
@@ -193,6 +311,7 @@ public class MySQLDatabaseEventExtractor {
             frameContinuation = false;
             responsePhase = MySQLResponsePhase.IDLE;
             remainingColumnDefinitions = 0;
+            resultSetInProgress = false;
             localInfileInProgress = false;
         }
 
@@ -241,6 +360,17 @@ public class MySQLDatabaseEventExtractor {
                 frameContinuation = true;
                 appendLogicalPayload(buffered, payloadOffset, payloadLength);
             } else {
+                int sequenceId = MySQLFrameCodec.sequenceId(buffered, cursor, buffered.length);
+                if (payloadLength > 0 && sequenceId == COMMAND_START_SEQUENCE) {
+                    /*
+                     * A command always starts at sequence 0, which makes it the one
+                     * observation boundary that stays trustworthy even when the
+                     * previous response could not be interpreted (rule 2.10/3.2).
+                     */
+                    resyncObservation();
+                } else if (payloadLength > 0) {
+                    recordProtocolAnomaly("command packet sequence " + sequenceId + " (expected 0)");
+                }
                 extractPacket(buffered, payloadOffset, payloadLength).ifPresent(events::add);
             }
             cursor += packetLength;
@@ -310,14 +440,59 @@ public class MySQLDatabaseEventExtractor {
             return Optional.empty();
         }
 
-        // COM_INIT_DB changes session state instead of producing a SQL event.
         MySQLCommandType command = commandType.get();
+        if (command == MySQLCommandType.COM_QUIT) {
+            // COM_QUIT ends the session; the server closes the connection.
+            advanceSession(ProtocolConnectionState.CLOSING);
+            return Optional.empty();
+        }
+
+        /*
+         * Declare what the target will answer before observing anything (rule
+         * 3.6). A command that draws no response must not move the session into
+         * EXECUTING, otherwise it would stay there until some later command
+         * finishes; an unrecognised shape suspends observation instead of guessing.
+         */
+        boolean expectsResponse = prepareResponseObservation(command);
+        if (expectsResponse) {
+            /*
+             * A command cycle starts here: the session moves to EXECUTING and
+             * returns to READY when the matching response completes (rule
+             * 2.1/2.5). State is observation only, so an illegal transition is
+             * ignored, never raised.
+             */
+            advanceSession(ProtocolConnectionState.EXECUTING);
+        }
+
+        // COM_RESET_CONNECTION clears session state without re-authenticating.
+        if (command == MySQLCommandType.COM_RESET_CONNECTION) {
+            if (session != null) {
+                session.resetObservedState();
+            }
+            return Optional.empty();
+        }
+        // COM_CHANGE_USER re-authenticates on the same connection; the target
+        // database performs it, the gateway mirrors the resulting identity.
+        if (command == MySQLCommandType.COM_CHANGE_USER) {
+            observeChangeUser(packet, payloadOffset + 1, payloadOffset + payloadLength);
+            return Optional.empty();
+        }
+        // COM_STMT_CLOSE drops one prepared statement and draws no response.
+        if (command == MySQLCommandType.COM_STMT_CLOSE) {
+            if (session != null) {
+                session.markPreparedStatementClosed();
+            }
+            return Optional.empty();
+        }
+        // COM_INIT_DB changes session state instead of producing a SQL event.
         if (command == MySQLCommandType.COM_INIT_DB) {
             observeInitDb(packet, payloadOffset + 1, payloadOffset + payloadLength);
             return Optional.empty();
         }
+
         // Only text SQL and prepared-statement SQL are audited for now.
-        if (command != MySQLCommandType.COM_QUERY && command != MySQLCommandType.COM_STMT_PREPARE) {
+        if (!expectsResponse
+                || (command != MySQLCommandType.COM_QUERY && command != MySQLCommandType.COM_STMT_PREPARE)) {
             return Optional.empty();
         }
 
@@ -488,6 +663,16 @@ public class MySQLDatabaseEventExtractor {
 
     private void observeCommandPhaseResponses(byte[] bytes, int offset, int length) {
         /*
+         * While observation is suspended nothing is interpreted, and the buffer is
+         * dropped so an unattributable response can neither accumulate nor be
+         * mistaken for the next command's answer (rule 2.10).
+         */
+        if (responseObservationSuspended) {
+            pendingServerBytes.reset();
+            return;
+        }
+
+        /*
          * Packets are consumed strictly in order and interpreted through the
          * response phase machine. Basing the decision on the packet order (not
          * on a single sequence id) is what allows the EOF that follows column
@@ -508,6 +693,13 @@ public class MySQLDatabaseEventExtractor {
             }
 
             if (payloadLength > 0) {
+                /*
+                 * Server response packets are intentionally NOT sequence-validated:
+                 * a multi-statement response legitimately restarts or continues the
+                 * sequence at points the observer cannot infer from the response
+                 * side alone, so validating there would only produce false alarms.
+                 * Command-side sequences are validated where the rule is exact.
+                 */
                 processResponsePacket(buffered, cursor + MySQLFrameCodec.HEADER_LENGTH, payloadLength);
             }
             cursor += packetLength;
@@ -524,10 +716,13 @@ public class MySQLDatabaseEventExtractor {
             return;
         }
 
+        // Reset per packet: the flag must describe this packet, not the previous one.
+        lastResponsePacketWasResultSetRow = false;
         int firstByte = packet[payloadOffset] & 0xFF;
         switch (responsePhase) {
             case IDLE, RESPONSE_HEADER -> handleResponseHeader(packet, payloadOffset, payloadLength, firstByte);
             case COLUMN_DEFINITIONS -> {
+                observeColumnDefinition(packet, payloadOffset, payloadLength);
                 remainingColumnDefinitions--;
                 if (remainingColumnDefinitions <= 0) {
                     responsePhase = hasCapability(MySQLCapability.CLIENT_DEPRECATE_EOF)
@@ -536,29 +731,92 @@ public class MySQLDatabaseEventExtractor {
                 }
             }
             case COLUMN_TERMINATOR -> responsePhase = MySQLResponsePhase.ROWS;
+            case COLUMN_LIST -> consumeColumnList(packet, payloadOffset, payloadLength, firstByte);
+            case PREPARE -> handlePrepareResponse(packet, payloadOffset, payloadLength, firstByte);
             case ROWS -> {
                 if (firstByte == EOF_PACKET_HEADER) {
                     observeResultSetTerminator(packet, payloadOffset, payloadLength);
+                } else if (resultSetInProgress) {
+                    lastResponsePacketWasResultSetRow = true;
+                    if (session != null) {
+                        session.incrementResultSetRows();
+                    }
                 }
             }
         }
     }
 
     private void handleResponseHeader(byte[] packet, int payloadOffset, int payloadLength, int firstByte) {
-        if (firstByte == OK_PACKET_HEADER) {
-            applyOkPacket(packet, payloadOffset, payloadLength);
+        if (firstByte == ERR_PACKET_HEADER) {
+            // ERR is valid for every command that expects a response.
+            observeErrPacket(packet, payloadOffset, payloadLength);
+            completeResponse();
+            finishLocalInfile();
             return;
         }
-        if (firstByte == ERR_PACKET_HEADER) {
-            observeErrPacket(packet, payloadOffset, payloadLength);
-            responsePhase = MySQLResponsePhase.IDLE;
-            finishLocalInfile();
+
+        MySQLResponseShape shape = pendingResponseShape;
+        if (shape == null) {
+            // No command declared these bytes, so their meaning is unknown.
+            suspendObservation("response packet with no declared command shape");
+            return;
+        }
+
+        switch (shape) {
+            case OK -> {
+                if (firstByte == OK_PACKET_HEADER) {
+                    applyOkPacket(packet, payloadOffset, payloadLength);
+                } else {
+                    suspendObservation("expected an OK packet, got 0x" + Integer.toHexString(firstByte));
+                }
+            }
+            case EOF_ONLY -> {
+                /*
+                 * Deprecated commands answer with EOF, or with OK when the client
+                 * negotiated CLIENT_DEPRECATE_EOF.
+                 */
+                if (firstByte == EOF_PACKET_HEADER) {
+                    observeResultSetTerminator(packet, payloadOffset, payloadLength);
+                } else if (firstByte == OK_PACKET_HEADER) {
+                    applyOkPacket(packet, payloadOffset, payloadLength);
+                } else {
+                    suspendObservation("expected EOF or OK, got 0x" + Integer.toHexString(firstByte));
+                }
+            }
+            case RAW_STRING -> {
+                /*
+                 * COM_STATISTICS answers with a single unmarked string packet. It
+                 * carries no metadata worth keeping, so the command ends here.
+                 */
+                completeResponse();
+            }
+            case COLUMN_LIST -> {
+                columnListCount = 0;
+                consumeColumnList(packet, payloadOffset, payloadLength, firstByte);
+            }
+            case PREPARE -> handlePrepareResponse(packet, payloadOffset, payloadLength, firstByte);
+            case RESULTSET -> handleResultSetHeader(packet, payloadOffset, payloadLength, firstByte);
+            default -> suspendObservation("unsupported response shape " + shape);
+        }
+    }
+
+    /**
+     * Handles the first packet of a {@code RESULTSET} response.
+     *
+     * <p>A statement that returns no rows legitimately answers with an OK_Packet
+     * instead of a column count, and {@code LOAD DATA} answers with a LOCAL INFILE
+     * request.</p>
+     */
+    private void handleResultSetHeader(byte[] packet, int payloadOffset, int payloadLength, int firstByte) {
+        if (firstByte == OK_PACKET_HEADER) {
+            applyOkPacket(packet, payloadOffset, payloadLength);
             return;
         }
         if (firstByte == LOCAL_INFILE_HEADER) {
             // LOAD DATA LOCAL INFILE: the server asks the client to upload a file.
             localInfileInProgress = true;
             responsePhase = MySQLResponsePhase.IDLE;
+            resultSetInProgress = false;
             advanceSession(ProtocolConnectionState.STREAMING);
             return;
         }
@@ -566,9 +824,108 @@ public class MySQLDatabaseEventExtractor {
         LengthEncodedInteger columnCount =
                 readLengthEncodedInteger(packet, payloadOffset, payloadOffset + payloadLength);
         remainingColumnDefinitions = safeLongToInt(columnCount.value());
-        responsePhase = remainingColumnDefinitions > 0
+        resultSetInProgress = remainingColumnDefinitions > 0;
+        if (resultSetInProgress) {
+            // The column list describes exactly one result set.
+            currentResultSetColumns.clear();
+            currentResultSetColumnCount = remainingColumnDefinitions;
+            if (session != null) {
+                // Result set metadata observation (rule 2.6).
+                session.beginResultSet(remainingColumnDefinitions);
+            }
+        }
+        responsePhase = resultSetInProgress
                 ? MySQLResponsePhase.COLUMN_DEFINITIONS
                 : MySQLResponsePhase.ROWS;
+    }
+
+    /**
+     * Consumes one packet of a {@code COM_FIELD_LIST} response.
+     *
+     * <p>This response carries no column count packet: it is a run of column
+     * definitions ended by EOF, or by OK when EOF is deprecated. Reading its first
+     * definition as a column count is exactly the misread rule 3.6 warns about,
+     * because that packet starts with the catalog length (normally 3, for
+     * {@code "def"}).</p>
+     */
+    private void consumeColumnList(byte[] packet, int payloadOffset, int payloadLength, int firstByte) {
+        if (firstByte == EOF_PACKET_HEADER || firstByte == OK_PACKET_HEADER) {
+            if (session != null) {
+                // The number of field definitions is this response's column count.
+                session.beginResultSet(columnListCount);
+            }
+            if (firstByte == EOF_PACKET_HEADER) {
+                observeResultSetTerminator(packet, payloadOffset, payloadLength);
+            } else {
+                applyOkPacket(packet, payloadOffset, payloadLength);
+            }
+            return;
+        }
+
+        columnListCount++;
+        responsePhase = MySQLResponsePhase.COLUMN_LIST;
+    }
+
+    /**
+     * Consumes one packet of a {@code COM_STMT_PREPARE} response.
+     *
+     * <p>The prepare-ok header announces how many parameter and column definitions
+     * follow, and each block is terminated by EOF unless the client deprecated
+     * EOF. Modeling the tail is what keeps those definitions from being mistaken
+     * for a result set header.</p>
+     */
+    private void handlePrepareResponse(byte[] packet, int payloadOffset, int payloadLength, int firstByte) {
+        switch (preparePhase) {
+            case HEADER -> {
+                if (firstByte != OK_PACKET_HEADER || payloadLength < PREPARE_HEADER_LENGTH) {
+                    suspendObservation("malformed COM_STMT_PREPARE response header");
+                    return;
+                }
+                // status (1), statement_id (4), num_columns (2), num_params (2), reserved (1), ...
+                prepareColumnDefinitions = safeLongToInt(
+                        readLittleEndian(packet, payloadOffset + 5, 2, payloadOffset + payloadLength));
+                prepareParamDefinitions = safeLongToInt(
+                        readLittleEndian(packet, payloadOffset + 7, 2, payloadOffset + payloadLength));
+                if (session != null) {
+                    // The statement now exists server-side until it is closed.
+                    session.markPreparedStatementOpened();
+                }
+                preparePhase = prepareParamDefinitions > 0
+                        ? MySQLPreparePhase.PARAM_DEFINITIONS
+                        : phaseAfterPrepareParams();
+            }
+            case PARAM_DEFINITIONS -> {
+                prepareParamDefinitions--;
+                if (prepareParamDefinitions <= 0) {
+                    preparePhase = hasCapability(MySQLCapability.CLIENT_DEPRECATE_EOF)
+                            ? phaseAfterPrepareParams()
+                            : MySQLPreparePhase.PARAM_TERMINATOR;
+                }
+            }
+            case PARAM_TERMINATOR -> preparePhase = phaseAfterPrepareParams();
+            case COLUMN_DEFINITIONS -> {
+                prepareColumnDefinitions--;
+                if (prepareColumnDefinitions <= 0) {
+                    preparePhase = hasCapability(MySQLCapability.CLIENT_DEPRECATE_EOF)
+                            ? MySQLPreparePhase.DONE
+                            : MySQLPreparePhase.COLUMN_TERMINATOR;
+                }
+            }
+            case COLUMN_TERMINATOR -> preparePhase = MySQLPreparePhase.DONE;
+            case DONE -> {
+                // Nothing left to consume; the header already completed this response.
+            }
+        }
+
+        if (preparePhase == MySQLPreparePhase.DONE) {
+            completeResponse();
+        } else {
+            responsePhase = MySQLResponsePhase.PREPARE;
+        }
+    }
+
+    private MySQLPreparePhase phaseAfterPrepareParams() {
+        return prepareColumnDefinitions > 0 ? MySQLPreparePhase.COLUMN_DEFINITIONS : MySQLPreparePhase.DONE;
     }
 
     /**
@@ -580,7 +937,7 @@ public class MySQLDatabaseEventExtractor {
         finishLocalInfile();
 
         if (payloadLength < 7) {
-            responsePhase = MySQLResponsePhase.IDLE;
+            completeResponse();
             return;
         }
 
@@ -591,7 +948,7 @@ public class MySQLDatabaseEventExtractor {
         LengthEncodedInteger lastInsertId = readLengthEncodedInteger(packet, cursor, payloadEnd);
         cursor = lastInsertId.nextOffset();
         if (cursor + 4 > payloadEnd) {
-            responsePhase = MySQLResponsePhase.IDLE;
+            completeResponse();
             return;
         }
 
@@ -602,9 +959,12 @@ public class MySQLDatabaseEventExtractor {
             session.setLastWarningCount(warningCount);
             session.applyStatusFlags(statusFlags);
         }
-        responsePhase = hasMoreResults(statusFlags)
-                ? MySQLResponsePhase.RESPONSE_HEADER
-                : MySQLResponsePhase.IDLE;
+        if (hasMoreResults(statusFlags)) {
+            responsePhase = MySQLResponsePhase.RESPONSE_HEADER;
+            resultSetInProgress = false;
+        } else {
+            completeResponse();
+        }
     }
 
     /**
@@ -625,7 +985,7 @@ public class MySQLDatabaseEventExtractor {
             LengthEncodedInteger lastInsertId = readLengthEncodedInteger(packet, cursor, payloadEnd);
             cursor = lastInsertId.nextOffset();
             if (cursor + 4 > payloadEnd) {
-                responsePhase = MySQLResponsePhase.IDLE;
+                completeResponse();
                 return;
             }
 
@@ -638,7 +998,7 @@ public class MySQLDatabaseEventExtractor {
         } else {
             // Classic EOF packet: header, warnings (2), status flags (2).
             if (payloadLength < 5) {
-                responsePhase = MySQLResponsePhase.IDLE;
+                completeResponse();
                 return;
             }
             warningCount = (packet[payloadOffset + 1] & 0xFF) | ((packet[payloadOffset + 2] & 0xFF) << 8);
@@ -651,9 +1011,12 @@ public class MySQLDatabaseEventExtractor {
         if (session != null) {
             session.applyStatusFlags(statusFlags);
         }
-        responsePhase = hasMoreResults(statusFlags)
-                ? MySQLResponsePhase.RESPONSE_HEADER
-                : MySQLResponsePhase.IDLE;
+        if (hasMoreResults(statusFlags)) {
+            responsePhase = MySQLResponsePhase.RESPONSE_HEADER;
+            resultSetInProgress = false;
+        } else {
+            completeResponse();
+        }
     }
 
     private boolean hasMoreResults(int statusFlags) {
@@ -693,6 +1056,114 @@ public class MySQLDatabaseEventExtractor {
     private void advanceSession(ProtocolConnectionState state) {
         if (session != null) {
             session.tryTransitionTo(state);
+        }
+    }
+
+    /**
+     * Ends the current command response: the observer returns to IDLE and the
+     * session moves back to READY, closing the EXECUTING command cycle.
+     */
+    private void completeResponse() {
+        responsePhase = MySQLResponsePhase.IDLE;
+        resultSetInProgress = false;
+        pendingResponseShape = null;
+        pendingCommand = null;
+        currentResultSetColumns.clear();
+        currentResultSetColumnCount = 0;
+        lastResponsePacketWasResultSetRow = false;
+        advanceSession(ProtocolConnectionState.READY);
+    }
+
+    /**
+     * Declares the response a command will produce before any response packet is
+     * seen (rule 3.6).
+     *
+     * @return {@code false} when the command draws no observable response, so no
+     *         command cycle may start
+     */
+    private boolean prepareResponseObservation(MySQLCommandType command) {
+        MySQLResponseShape shape = command.getResponseShape();
+        if (!command.expectsResponse() || shape == MySQLResponseShape.NO_RESPONSE) {
+            return false;
+        }
+        if (shape == MySQLResponseShape.UNKNOWN) {
+            suspendObservation("command " + command.name() + " has an unknown response shape");
+            return false;
+        }
+        if (shape == MySQLResponseShape.STREAM) {
+            suspendObservation("command " + command.name() + " starts a response stream that never ends");
+            return false;
+        }
+
+        pendingResponseShape = shape;
+        pendingCommand = command;
+        if (shape == MySQLResponseShape.PREPARE) {
+            preparePhase = MySQLPreparePhase.HEADER;
+            prepareParamDefinitions = 0;
+            prepareColumnDefinitions = 0;
+        }
+        return true;
+    }
+
+    /**
+     * Observation resync point (rule 2.10).
+     *
+     * <p>A client command packet is the one boundary the observer can always
+     * trust, because every command starts at sequence 0 (rule 3.2). Any
+     * misalignment left behind by the previous response is discarded here, and
+     * confidence returns to {@code CONFIRMED}.</p>
+     */
+    private void resyncObservation() {
+        responsePhase = MySQLResponsePhase.RESPONSE_HEADER;
+        resultSetInProgress = false;
+        remainingColumnDefinitions = 0;
+        columnListCount = 0;
+        pendingResponseShape = null;
+        responseObservationSuspended = false;
+        pendingServerBytes.reset();
+        if (session != null) {
+            session.confirmObservation();
+        }
+    }
+
+    /**
+     * Stops interpreting response packets until the next client command.
+     *
+     * <p>Observation is a best-effort side channel: when a response cannot be
+     * interpreted it must stop rather than guess, and it must never affect byte
+     * forwarding (rule 2.10).</p>
+     */
+    private void suspendObservation(String detail) {
+        recordProtocolAnomaly(detail);
+        responseObservationSuspended = true;
+        responsePhase = MySQLResponsePhase.IDLE;
+        resultSetInProgress = false;
+        remainingColumnDefinitions = 0;
+        pendingResponseShape = null;
+        pendingServerBytes.reset();
+        if (session != null) {
+            session.suspendObservation();
+        }
+    }
+
+    /**
+     * Number of frame anomalies observed (unexpected sequence ids, malformed
+     * headers). Recorded for diagnostics only: bytes are always forwarded and
+     * observation continues.
+     */
+    public long getProtocolAnomalyCount() {
+        return protocolAnomalies.get();
+    }
+
+    private void recordProtocolAnomaly(String detail) {
+        protocolAnomalies.incrementAndGet();
+        if (session != null) {
+            // An anomaly degrades observation without stopping it (rule 2.10).
+            session.markObservationUncertain();
+        }
+        if (protocolAnomalyLogged.compareAndSet(false, true)) {
+            log.warn("MySQL protocol anomaly on session {}: {} (further anomalies are counted only)",
+                    sessionId, detail);
         }
     }
 
@@ -758,6 +1229,34 @@ public class MySQLDatabaseEventExtractor {
         }
     }
 
+    /**
+     * Reads the new client identity and default database from
+     * {@code COM_CHANGE_USER}. As with the initial handshake response, the
+     * authentication payload is skipped and never stored or logged.
+     */
+    private void observeChangeUser(byte[] packet, int offset, int endExclusive) {
+        if (session == null) {
+            return;
+        }
+
+        CursorResult username = readNullTerminated(packet, offset, endExclusive);
+        if (username == null) {
+            return;
+        }
+        session.putAttribute("client.user", username.value());
+
+        int cursor = skipAuthResponse(packet, username.nextOffset(), endExclusive, clientCapabilityFlags);
+        if (cursor < 0) {
+            return;
+        }
+
+        CursorResult database = readNullTerminated(packet, cursor, endExclusive);
+        if (database != null && !database.value().isEmpty()) {
+            session.setCurrentDatabase(database.value());
+            session.putAttribute("client.database", database.value());
+        }
+    }
+
     private static CursorResult readNullTerminated(byte[] bytes, int offset, int endExclusive) {
         if (offset >= endExclusive) {
             return null;
@@ -805,13 +1304,35 @@ public class MySQLDatabaseEventExtractor {
     private enum MySQLResponsePhase {
         /** No response in flight. */
         IDLE,
-        /** Expecting the first packet of a response: OK, ERR or column count. */
+        /** Expecting the first packet of a response; the branch comes from the declared shape. */
         RESPONSE_HEADER,
         /** Counting down the column definition packets of a result set. */
         COLUMN_DEFINITIONS,
         /** Skipping the EOF that follows column definitions (without CLIENT_DEPRECATE_EOF). */
         COLUMN_TERMINATOR,
+        /** Consuming the column definitions of a COM_FIELD_LIST response. */
+        COLUMN_LIST,
+        /** Consuming the metadata tail of a COM_STMT_PREPARE response. */
+        PREPARE,
         /** Consuming row packets until the result set terminator. */
         ROWS
+    }
+
+    /**
+     * Position inside a {@code COM_STMT_PREPARE} metadata tail.
+     */
+    private enum MySQLPreparePhase {
+        /** The prepare-ok header announcing the metadata counts. */
+        HEADER,
+        /** Parameter definition packets. */
+        PARAM_DEFINITIONS,
+        /** The EOF closing the parameter definitions. */
+        PARAM_TERMINATOR,
+        /** Column definition packets. */
+        COLUMN_DEFINITIONS,
+        /** The EOF closing the column definitions. */
+        COLUMN_TERMINATOR,
+        /** Everything the header announced has been consumed. */
+        DONE
     }
 }

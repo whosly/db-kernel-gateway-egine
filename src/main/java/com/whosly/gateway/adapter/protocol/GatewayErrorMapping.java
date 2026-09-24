@@ -19,6 +19,7 @@ public enum GatewayErrorMapping {
     INTERNAL_GATEWAY_ERROR(1105, "HY000", "XX000", "internal gateway error"),
     RESOURCE_EXHAUSTED(1041, "HY000", "53200", "gateway resource exhausted"),
     CONNECTION_TIMEOUT(2013, "HY000", "08006", "target connection timed out"),
+    RISK_DENIED(1142, "42000", "42501", "operation denied by gateway risk policy"),
     GATEWAY_SHUTTING_DOWN(1053, "08S01", "57P01", "gateway shutting down");
 
     private final int mySqlErrno;
@@ -56,6 +57,9 @@ public enum GatewayErrorMapping {
      * by the transparent relay.</p>
      */
     public static GatewayErrorMapping fromThrowable(Throwable error) {
+        if (error instanceof GatewayException gatewayException) {
+            return gatewayException.getMapping();
+        }
         if (error instanceof SocketTimeoutException) {
             return CONNECTION_TIMEOUT;
         }

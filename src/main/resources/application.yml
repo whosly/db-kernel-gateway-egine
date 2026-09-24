@@ -1,37 +1,32 @@
-﻿server:
-  port: 0  # 使用随机端口
+server:
+  port: ${SERVER_PORT:8080}
 
 spring:
   application:
-    name: db-kernel-gateway-egine
+    name: db-kernel-gateway
+
+# Gateway proxy configuration
+gateway:
+  # Proxy listen port (protocol-specific adapter binds here)
+  proxy-port: ${GATEWAY_PROXY_PORT:3307}
+  # Target database (fallback when backend-endpoints is empty)
+  target-host: ${GATEWAY_TARGET_HOST:127.0.0.1}
+  target-port: ${GATEWAY_TARGET_PORT:3306}
+  target-username: ${GATEWAY_TARGET_USERNAME:}
+  target-password: ${GATEWAY_TARGET_PASSWORD:}
+  target-database: ${GATEWAY_TARGET_DATABASE:}
+  # Comma-separated failover list: host:port,host:port
+  # When set, overrides single target-host/target-port for BackendProvider.
+  backend-endpoints: ${GATEWAY_BACKEND_ENDPOINTS:}
+  virtual-threads: ${GATEWAY_VIRTUAL_THREADS:true}
+  # require-cleartext-inspection: true
+  # When true, TLS/opaque tunnel sessions are denied (fail-closed for audit).
+  # Default false: opaque tunnels are allowed but not inspected.
+  max-connections: ${GATEWAY_MAX_CONNECTIONS:256}
+  idle-timeout-millis: ${GATEWAY_IDLE_TIMEOUT_MILLIS:0}
+  proxy-db-type: ${GATEWAY_PROXY_DB_TYPE:mysql}
 
 logging:
   level:
-    com.whosly.gateway: DEBUG
-    com.whosly.gateway.adapter: DEBUG
-  pattern:
-    console: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n"
-
-gateway:
-  # 数据库类型配置， 类型包括  mysql、postgresql
-  proxy-db-type: ${GATEWAY_PROXY_DB_TYPE:postgresql}
-  # 代理端口
-  proxy-port: ${GATEWAY_PROXY_PORT:5433}
-
-  # 目标数据库配置
-  target:
-    # 真实目标库凭据由环境变量或本地测试配置注入，避免写入可提交配置。
-    host: ${GATEWAY_TARGET_HOST:localhost}
-    port: ${GATEWAY_TARGET_PORT:5432}
-    username: ${GATEWAY_TARGET_USERNAME:}
-    password: ${GATEWAY_TARGET_PASSWORD:}
-    database: ${GATEWAY_TARGET_DATABASE:}
-
-  connection:
-    pool:
-      initial-size: 5
-      max-size: 20
-      min-idle: 2
-  security:
-    authentication:
-      enabled: true
+    root: INFO
+    com.whosly.gateway: INFO

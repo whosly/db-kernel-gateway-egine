@@ -22,4 +22,12 @@ class GatewayErrorMappingTest {
         assertThat(GatewayErrorMapping.RESOURCE_EXHAUSTED.getMySqlErrno()).isEqualTo(1041);
         assertThat(GatewayErrorMapping.RESOURCE_EXHAUSTED.getPostgreSqlState()).isEqualTo("53200");
     }
+
+    @Test
+    void resolvesGatewayExceptionToItsOwnMapping() {
+        assertThat(GatewayErrorMapping.fromThrowable(new GatewayException(GatewayErrorMapping.RISK_DENIED)))
+                .isEqualTo(GatewayErrorMapping.RISK_DENIED);
+        assertThat(GatewayErrorMapping.RISK_DENIED.getMySqlSqlState()).isEqualTo("42000");
+        assertThat(GatewayErrorMapping.RISK_DENIED.getPostgreSqlState()).isEqualTo("42501");
+    }
 }

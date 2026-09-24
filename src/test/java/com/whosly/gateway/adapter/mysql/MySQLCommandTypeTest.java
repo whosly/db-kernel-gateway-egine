@@ -29,6 +29,37 @@ class MySQLCommandTypeTest {
     }
 
     @Test
+    void declaresTheResponseShapeEachCommandProduces() {
+        assertThat(MySQLCommandType.COM_QUERY.expectsResponse()).isTrue();
+        assertThat(MySQLCommandType.COM_QUERY.getResponseShape()).isEqualTo(MySQLResponseShape.RESULTSET);
+        assertThat(MySQLCommandType.COM_FIELD_LIST.getResponseShape()).isEqualTo(MySQLResponseShape.COLUMN_LIST);
+        assertThat(MySQLCommandType.COM_STATISTICS.getResponseShape()).isEqualTo(MySQLResponseShape.RAW_STRING);
+        assertThat(MySQLCommandType.COM_SET_OPTION.getResponseShape()).isEqualTo(MySQLResponseShape.EOF_ONLY);
+        assertThat(MySQLCommandType.COM_STMT_PREPARE.getResponseShape()).isEqualTo(MySQLResponseShape.PREPARE);
+        assertThat(MySQLCommandType.COM_BINLOG_DUMP.getResponseShape()).isEqualTo(MySQLResponseShape.STREAM);
+
+        assertThat(MySQLCommandType.COM_STMT_SEND_LONG_DATA.expectsResponse()).isFalse();
+        assertThat(MySQLCommandType.COM_STMT_SEND_LONG_DATA.getResponseShape())
+                .isEqualTo(MySQLResponseShape.NO_RESPONSE);
+        assertThat(MySQLCommandType.COM_STMT_CLOSE.expectsResponse()).isFalse();
+        assertThat(MySQLCommandType.COM_QUIT.expectsResponse()).isFalse();
+    }
+
+    @Test
+    void keepsTheResponseDeclarationConsistentForEveryCommand() {
+        assertThat(MySQLCommandType.values()).allSatisfy(command -> {
+            MySQLResponseShape shape = command.getResponseShape();
+            assertThat(shape).as("command %s", command).isNotNull();
+
+            boolean drawsNoResponse = shape == MySQLResponseShape.NO_RESPONSE
+                    || shape == MySQLResponseShape.UNKNOWN;
+            assertThat(command.expectsResponse())
+                    .as("command %s", command)
+                    .isEqualTo(!drawsNoResponse);
+        });
+    }
+
+    @Test
     void returnsEmptyForUnknownCommandCode() {
         assertThat(MySQLCommandType.fromCode(0x7F)).isEmpty();
     }

@@ -64,6 +64,20 @@ public final class DatabaseTrafficEvent {
         return Optional.ofNullable(attributes.get(name));
     }
 
+    /**
+     * Copy of this event carrying a different statement.
+     *
+     * <p>Used by audit masking: everything else about the observation, including
+     * when it happened and its attributes, is preserved.</p>
+     */
+    public DatabaseTrafficEvent withStatement(String statement) {
+        Builder builder = builder(protocolName, sessionId, operation,
+                Objects.requireNonNull(statement, "statement must not be null"))
+                .observedAt(observedAt);
+        attributes.forEach(builder::attribute);
+        return builder.build();
+    }
+
     public static Builder builder(String protocolName, String sessionId, String operation, String statement) {
         return new Builder(protocolName, sessionId, operation, statement);
     }
