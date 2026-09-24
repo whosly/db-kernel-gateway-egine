@@ -11,11 +11,13 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class ProtocolAdapterRegistryTest {
 
     @Test
-    void builtInsCreateMysqlAndPostgresqlAdapters() {
+    void builtInsCreateMysqlPostgresqlAndSqlServerAdapters() {
         ProtocolAdapterRegistry registry = ProtocolAdapterRegistry.withBuiltIns();
         assertThat(registry.create("mysql")).isInstanceOf(MySqlProtocolAdapter.class);
         assertThat(registry.create("postgresql")).isInstanceOf(PostgreSQLProtocolAdapter.class);
         assertThat(registry.create("postgres")).isInstanceOf(PostgreSQLProtocolAdapter.class);
+        assertThat(registry.create("sqlserver")).isInstanceOf(SqlServerProtocolAdapter.class);
+        assertThat(registry.create("mssql")).isInstanceOf(SqlServerProtocolAdapter.class);
     }
 
     @Test
@@ -26,21 +28,17 @@ class ProtocolAdapterRegistryTest {
                 .isInstanceOf(PostgreSQLBackendSessionReset.class);
         assertThat(registry.createSessionReset("postgres"))
                 .isInstanceOf(PostgreSQLBackendSessionReset.class);
+        assertThat(registry.createSessionReset("sqlserver")).isSameAs(BackendSessionReset.NONE);
+        assertThat(registry.createSessionReset("mssql")).isSameAs(BackendSessionReset.NONE);
     }
 
     @Test
-    void reservedOracleAndSqlServerThrowClearUnsupportedMessage() {
+    void reservedOracleThrowsClearUnsupportedMessage() {
         ProtocolAdapterRegistry registry = ProtocolAdapterRegistry.withBuiltIns();
         assertThatThrownBy(() -> registry.create("oracle"))
                 .isInstanceOf(UnsupportedOperationException.class)
                 .hasMessageContaining("oracle")
                 .hasMessageContaining("not implemented");
-        assertThatThrownBy(() -> registry.create("sqlserver"))
-                .isInstanceOf(UnsupportedOperationException.class)
-                .hasMessageContaining("sqlserver");
-        assertThatThrownBy(() -> registry.create("mssql"))
-                .isInstanceOf(UnsupportedOperationException.class)
-                .hasMessageContaining("sqlserver");
     }
 
     @Test

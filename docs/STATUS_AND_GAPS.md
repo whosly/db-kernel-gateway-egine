@@ -8,18 +8,19 @@
 
 | 项 | 现状 | 证据 |
 |---|---|---|
-| 非集成 `@Test`/`@ParameterizedTest` 注解数 | **409** | `mvn test` Results；排除 `*IntegrationTest` |
+| 非集成 `@Test`/`@ParameterizedTest` 注解数 | **418** | `mvn test` Results；排除 `*IntegrationTest` |
 | 集成测试 | 14 条注解；默认 surefire **排除** `*IntegrationTest`；无 local props 时 `-Pintegration-test` **assumeTrue 跳过**；本机有库时可 14/14 绿 | `pom.xml` excludes；跳过策略见 `docs/OPS.md` / `integration-test.properties` |
-| 本环境 `mvn test`（`JAVA_HOME`=JDK 17） | **BUILD SUCCESS：Tests run 409, Failures 0, Errors 0, Skipped 0** | surefire；含 P1-4 handshake RoutingContext |
+| 本环境 `mvn test`（`JAVA_HOME`=JDK 17） | **BUILD SUCCESS：Tests run 418, Failures 0, Errors 0, Skipped 0** | surefire；含 SQL Server P0 framing/registry/adapter |
 | `pom.xml` 编译目标 | `maven.compiler.source/target=17` | **保持 17**；不升到 21 |
 
-**结论**：编译目标保持 17；VT 仅在 JDK 21+ 运行期启用。当前 `mvn test` 为 **409** 全绿（含 P1-4 handshake RoutingContext）。见 P0 / P1 / P2。
+**结论**：编译目标保持 17；VT 仅在 JDK 21+ 运行期启用。当前 `mvn test` 为 **418** 全绿（含 SQL Server P0）。见 P0 / P1 / P2。
 
 ## 2. 能力总览（按主题）
 
 | 主题 | 状态 | 摘要 |
 |---|---|---|
 | MySQL / PG 透明转发 | **done** | 阻塞 `ServerSocket` + 双工 `DuplexRelay` 逐字节转发 |
+| SQL Server（TDS）透明转发 | **partial（P0）** | `SqlServerProtocolAdapter` + framing；无观测/脱敏；计划 [`SQLSERVER_TDS_PLAN.md`](SQLSERVER_TDS_PLAN.md) |
 | 明文观测 / 状态机 | **partial** | 命令/消息抽取与会话状态齐全；TLS/压缩后 opaque |
 | 结果集脱敏 | **partial** | MySQL 文本+二进制、PG 已接线；类型边界见 README；无规则时透明 |
 | 审计 spool / JDBC ship | **partial** | 实现齐全；专用单元测试已补（P0-3）；默认关闭 |
@@ -38,7 +39,7 @@ Spring 实际读取的键（`@Value`）与默认 `application.yml`、模板一�
 
 | 键 | 默认（代码） | 说明 |
 |---|---|---|
-| `gateway.proxy-db-type` | `mysql` | `mysql` \| `postgresql`（经 `ProtocolAdapterRegistry`）；`oracle`/`sqlserver`/`mssql` 预留 stub |
+| `gateway.proxy-db-type` | `mysql` | `mysql` \| `postgresql` \| `sqlserver`/`mssql`（经 `ProtocolAdapterRegistry`）；`oracle` 仍为 stub |
 | `gateway.proxy-port` | `3307` | 协议代理监听端口 |
 | `gateway.target.host` / `.port` / `.username` / `.password` / `.database` | 见代码默认 | 单后端；模板见 `application-*-template.yml` |
 | `gateway.backend-endpoints` | 空 | `host:port,...` 追加 failover 列表 |
@@ -93,7 +94,7 @@ Spring 实际读取的键（`@Value`）与默认 `application.yml`、模板一�
 | P2-4 | Metrics 出口 | **partial（improved）** | 共享 `GatewayRuntimeMetrics` bean；`GET /gateway/metrics` + Actuator `@Endpoint(id=gateway)`；单测覆盖 snapshot | 未接 Micrometer 远程；告警阈值见 `docs/OPS.md` |
 | P2-5 | 审计测试与运维手册 | **partial（improved）** | P0-3 单测已有；**`docs/OPS.md`** 开启清单 / 告警清单；README 运维段改为索引 | JDBC 审计真库验收仍缺 |
 | P2-6 | 集成测试在 CI 可复现 | **partial（improved）** | 跳过策略写入 `integration-test.properties` + OPS；`-Pintegration-test` 无 props → `assumeTrue` skip；`-Pintegration-testcontainers` **stub only** | 真 Testcontainers 接线另开；默认 `mvn test` 仍不需 Docker |
-| P2-7 | 多库扩展点 / Oracle·SQL Server | **partial（extension only）** | `ProtocolAdapterRegistry` + `ProtocolAdapterFactory`；内置 mysql/postgresql；`oracle`/`sqlserver`/`mssql` stub 抛清晰 `UnsupportedOperationException`；文档说明如何 register | **不**实现 Oracle/TDS 完整 wire；新库需自研 adapter + 可选 reset 后 register |
+| P2-7 | 多库扩展点 / Oracle·SQL Server | **in-progress / partial（SQL Server P0）** | 第三库定为 **SQL Server TDS**（非 Oracle）。`SqlServerProtocolAdapter` + `sqlserver`/`mssql` 注册 + TDS framing + 透明 `DuplexRelay`；模板 `application-sqlserver-template.yml`（31433→1433）；计划见 [`SQLSERVER_TDS_PLAN.md`](SQLSERVER_TDS_PLAN.md)。Oracle 仍 stub。P0 **无** Login7 观测/脱敏/协议 reset | P1 观测与 Docker 冒烟；P2 深消息/脱敏/cancel；Oracle 另开 |
 
 
 ### 4.1 TLS / 明文强制（产品策略，P1-1）
@@ -116,7 +117,8 @@ Spring 实际读取的键（`@Value`）与默认 `application.yml`、模板一�
 |---|---|---|---|
 | **PostgreSQL** | **有**（cleartext StartupMessage 的 `user` / `database`） | `PostgreSQLStartupRouting` peek 首包 → `acquire(context)` → `DuplexRelay` 前缀 replay 原字节 | 客户端先发；SSLRequest/CancelRequest 无身份 → empty + replay |
 | **MySQL** | **无**（恒 `RoutingContext.empty()`） | 先连 fallback/默认后端发 greeting，再中继；Handshake Response 仅观测（`MySqlHandshakeResponseRouting`） | server-first；伪造 Initial Handshake 违反透明规则；延后重连会破坏基于 scramble 的认证 |
-| **Oracle / SQL Server** | 未实现 wire | stub；应实现同一 `RoutingHandshakeProbe` | 扩展点已预留 |
+| **SQL Server（TDS）** | P0 透明中继；身份 **无**（空 `RoutingContext`） | `SqlServerProtocolAdapter` 先 `acquire(empty)` 再双工；PreLogin 无 user/db；Login7 观测属 P1 | 见 [`SQLSERVER_TDS_PLAN.md`](SQLSERVER_TDS_PLAN.md) |
+| **Oracle** | 未实现 wire | stub；应实现同一 `RoutingHandshakeProbe` | 扩展点已预留 |
 
 **配置含义**：`gateway.routing.rules` 的 `match-database` / `match-username` 对 **PostgreSQL cleartext startup** 在首连时生效；对 **MySQL** 首连仍走 fallback（规则不参与初始选路）。SSL/加密协商后的 PG opaque 路径同样看不到 StartupMessage 参数，走 fallback。
 

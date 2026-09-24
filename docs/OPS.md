@@ -60,3 +60,19 @@
 - **数据平面**：客户端 wire → adapter → `BackendProvider` → 目标库 socket。
 - `DatabaseConnectionService`（DriverManager）已 **@Deprecated**，**不参与**转发；勿与透明代理混淆。
 - 审计 `destination=jdbc` 是独立目的库，与被代理库分离。
+
+
+## SQL Server 本地实验室（可选）
+
+> 计划与阶段见 [`SQLSERVER_TDS_PLAN.md`](SQLSERVER_TDS_PLAN.md)。P0 为透明 TDS 中继脚手架；**勿**把生产 SA 密码写入已提交文件。
+
+| 项 | 值 |
+|---|---|
+| 模板 | `application-sqlserver-template.yml` → 复制为 `application-dev.yml`（gitignore） |
+| 网关端口 | **31433** |
+| 目标端口 | **1433** |
+| 模板密码 | `change-me`（占位） |
+| 本地 Docker 示例 SA | `Aa123456.`（含末尾点号；与本机 MySQL/PG lab 习惯一致） |
+| 生产 | 另行配置；环境变量 / 密钥管理，**不**提交 git |
+
+若 SA 复杂度策略拒绝 `Aa123456.`，可改用 `Aa123456!` 并只改本地 `application-dev.yml`。本仓库执行环境默认 **不**自动 `docker run`。

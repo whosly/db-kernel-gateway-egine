@@ -9,6 +9,7 @@
 | [../AGENTS.md](../AGENTS.md) | 仓库硬约束（分层、透明性、安全、工作约定） | 开发前必读 |
 | [STATUS_AND_GAPS.md](STATUS_AND_GAPS.md) | **本分支功能现状与缺口（P0/P1/P2）** | 证据来自代码/测试；随实现更新 |
 | [OPS.md](OPS.md) | **运维开启清单 / 告警清单 / 集成跳过策略** | 面向部署；与 STATUS P2 对齐 |
+| [SQLSERVER_TDS_PLAN.md](SQLSERVER_TDS_PLAN.md) | **SQL Server（TDS）接入计划 P0/P1/P2** | 第三协议决策与脚手架边界 |
 | [PROTOCOL_REFERENCE_TABLES.md](PROTOCOL_REFERENCE_TABLES.md) | 协议参考表镜像（能力位、命令码、错误码等） | **镜像**；真源是 `adapter.*` 枚举 |
 | [rules/database-protocol-rules.md](rules/database-protocol-rules.md) | 数据库 wire protocol 规则 | 描述协议应当如何，不是现状清单 |
 | [rules/ai-error-handling-rules.md](rules/ai-error-handling-rules.md) | 失败分类与修复流程 | 流程约束 |
@@ -20,6 +21,7 @@
 2. 协议开发：`AGENTS.md` → `rules/database-protocol-rules.md` → `PROTOCOL_REFERENCE_TABLES.md` → 代码。
 3. 排期 / 评审：`STATUS_AND_GAPS.md`（先看 P0）。
 4. 新库接入：`ProtocolAdapterRegistry` javadoc + README「扩展新数据库」。
+5. SQL Server：[`SQLSERVER_TDS_PLAN.md`](SQLSERVER_TDS_PLAN.md) → 代码 `adapter/sqlserver`。
 
 ## 图示
 

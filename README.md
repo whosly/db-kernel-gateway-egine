@@ -1,6 +1,6 @@
 # 数据库内核网关引擎
 
-基于 **Java 17** 的透明数据库协议网关：客户端连网关端口，网关把 **MySQL / PostgreSQL wire protocol** 流量转发到真实目标库，并在**明文阶段**提供 SQL 观测、可选审计留痕与结果集脱敏等扩展点。
+基于 **Java 17** 的透明数据库协议网关：客户端连网关端口，网关把 **MySQL / PostgreSQL** wire 流量转发到真实目标库，并在**明文阶段**提供 SQL 观测、可选审计留痕与结果集脱敏等扩展点。第三协议 **SQL Server（TDS）** 处于 **P0 脚手架 / 透明中继**（见 [`docs/SQLSERVER_TDS_PLAN.md`](docs/SQLSERVER_TDS_PLAN.md)），**不是**完整观测/脱敏实现。
 
 > 网关不伪造握手能力、不校验也不保存客户端明文密码；认证与结果由目标库完成。  
 > 能力边界以本 README「功能清单」与 [`docs/STATUS_AND_GAPS.md`](docs/STATUS_AND_GAPS.md) 为准——规划中的能力不会写成「已实现」。
@@ -9,10 +9,12 @@
 
 - [分支与验证基线](#分支与验证基线)
 - [功能清单](#功能清单)
+- [端口速查](#端口速查)
 - [环境要求](#环境要求)
 - [配置说明](#配置说明)
 - [快速开始 · MySQL](#快速开始--mysql)
 - [快速开始 · PostgreSQL](#快速开始--postgresql)
+- [快速开始 · SQL Server（P0）](#快速开始--sql-serverp0)
 - [构建与测试](#构建与测试)
 - [演示](#演示)
 - [审计与脱敏](#审计与脱敏)
@@ -21,9 +23,9 @@
 
 ## 分支与验证基线
 
-| 项 | 本分支（`future/database-wire-protocol-foundation` / `a725050`） |
+| 项 | 本分支（`future/database-wire-protocol-foundation`） |
 |---|---|
-| 默认单元测试 | **398** 条全绿（JDK 17；`pom` 排除 `*IntegrationTest`；以 STATUS §1 为准） |
+| 默认单元测试 | **418** 条全绿（JDK 17；`pom` 排除 `*IntegrationTest`；以 STATUS §1 为准） |
 | 真库集成 `-Pintegration-test` | **14 / 14** 全绿（2026-09-24，本地 Docker MySQL `:13308` + PostgreSQL `:5432`） |
 | JDK / 编译 | `pom` 目标 **17**；虚拟线程经 `VirtualThreadExecutors` **反射**在 JDK 21+ 启用，JDK 17 回退平台线程池（STATUS P0-1） |
 | 核心数据路径 | 透明代理、查询/结果、预处理、错误透传、脱敏 happy path、PG `COPY` — **已在集成中 live-proven** |
@@ -66,6 +68,8 @@
 | 连接池化 | **已接线·默认关** | `gateway.pool.enabled`；`reset-mode=none\|protocol`；protocol=MySQL `COM_RESET_CONNECTION` / PG `DISCARD ALL` |
 | Actuator / HTTP 指标出口 | **已接线·内存计数** | `/gateway/metrics` + `/actuator/gateway`；无远程 Micrometer |
 | 非交互启动 | **已实现** | `Application` 自动 start；`gateway.cli.interactive` 默认 false |
+| SQL Server（TDS）透明中继 | **部分（P0 脚手架）** | `SqlServerProtocolAdapter` 注册 `sqlserver`/`mssql`；双工字节转发 + TDS framing 单测；**无** Login7 观测 / 脱敏 / 协议 reset / 真库集成证明。计划：[`docs/SQLSERVER_TDS_PLAN.md`](docs/SQLSERVER_TDS_PLAN.md) |
+| Oracle | **未实现** | stub：`gateway.proxy-db-type=oracle` 启动失败并提示 |
 
 > 主流代理在数据平面上也不靠「跨线程共享可变协议状态」保证正确——本仓库同样让每条连接的协议状态在任一时刻只属于一个执行体。
 
@@ -87,7 +91,7 @@
 4. 设置 `gateway.proxy-db-type=mydb`。池/TLS/路由等治理由基类继承，无需改 `PooledBackendProvider` / `RoutingBackendProvider`。
 5. 身份感知路由：在 `acquire` 前填充 `RoutingContext`（database/username）；未填充时走默认 failover 列表。
 
-内置：`mysql`、`postgresql`（别名 `postgres`）。预留 stub：`oracle`、`sqlserver`（别名 `mssql`）— 选择后启动失败并提示未实现。
+内置：`mysql`、`postgresql`（别名 `postgres`）、`sqlserver`（别名 `mssql`，**P0 透明中继**）。预留 stub：`oracle` — 选择后启动失败并提示未实现。SQL Server 阶段见 [`docs/SQLSERVER_TDS_PLAN.md`](docs/SQLSERVER_TDS_PLAN.md)。
 
 ### 启用协议 reset
 
@@ -114,12 +118,23 @@ gateway:
 
 组合顺序：**Routing → Pool → Failover/Fixed**。`routing.enabled=false`（默认）时行为与仅 failover 相同。Oracle / SQL Server 适配器填充同一 `RoutingContext` 即可复用。
 
+
+## 端口速查
+
+| 协议 | `proxy-db-type` | 网关监听（客户端连） | 目标库（示例） | 模板 |
+|---|---|---|---|---|
+| MySQL | `mysql` | **33307** | 13308（lab Docker）/ 3306 | `application-mysql-template.yml` |
+| PostgreSQL | `postgresql` / `postgres` | **35433** | 5432 | `application-postgresql-template.yml` |
+| SQL Server（TDS） | `sqlserver` / `mssql` | **31433** | 1433 | `application-sqlserver-template.yml` |
+
+共享治理（任意 `proxy-db-type`）：`gateway.pool.*`、`gateway.tls.*`、`gateway.routing.*`、`gateway.risk.*`、`gateway.audit.*` — 状态见上方功能清单与 STATUS。
+
 ## 环境要求
 
 - JDK 17+（编译目标 17；JDK 21+ 运行时可选用虚拟线程）
 - Maven 3.6+
-- 本地或远端 MySQL / PostgreSQL（集成示例端口：MySQL **13308**、PostgreSQL **5432**）
-- 可选：`mysql` / `psql` 客户端做手工验证
+- 本地或远端 MySQL / PostgreSQL（集成示例端口：MySQL **13308**、PostgreSQL **5432**）；SQL Server 目标 **1433**（P0 可选，无默认集成）
+- 可选：`mysql` / `psql` / SQL Server 客户端（如 `sqlcmd`、JDBC）做手工验证
 
 ## 配置说明
 
@@ -127,7 +142,7 @@ gateway:
 |---|---|
 | `src/main/resources/application.yml` | 通用默认（嵌套 `gateway.target.*`，与 `GatewayConfig` 对齐） |
 | `src/main/resources/application-dev.yml` | 本地开发（已 gitignore） |
-| `application-mysql-template.yml` / `application-postgresql-template.yml` | 推荐复制为 `application-dev.yml` 的模板 |
+| `application-mysql-template.yml` / `application-postgresql-template.yml` / `application-sqlserver-template.yml` | 推荐复制为 `application-dev.yml` 的模板 |
 
 **以 `GatewayConfig` 的 `@Value` 为准**：默认 `application.yml` 与模板均使用嵌套键 `gateway.target.*` 和 `gateway.idle-timeout-seconds`（P0-2 已对齐）。本地开发仍建议复制模板为 `application-dev.yml`。详见 [`docs/STATUS_AND_GAPS.md`](docs/STATUS_AND_GAPS.md) §3。
 
@@ -135,7 +150,7 @@ gateway:
 |---|---|
 | `server.port` | Spring HTTP（Web / 预留管控） |
 | `gateway.proxy-port` | 数据库协议代理端口（客户端连这里） |
-| `gateway.proxy-db-type` | `mysql` \| `postgresql`（经 `ProtocolAdapterRegistry`；`oracle`/`sqlserver`/`mssql` stub） |
+| `gateway.proxy-db-type` | `mysql` \| `postgresql` \| `sqlserver`/`mssql`（经 registry）；`oracle` stub |
 | `gateway.target.host` / `port` / `username` / `password` / `database` | 主后端（**嵌套**） |
 | `gateway.backend-endpoints` | 可选 `host:port,host:port` failover |
 | `gateway.routing.enabled` / `rules` | 可选按库名/用户/权重路由（默认关） |
@@ -212,9 +227,40 @@ psql client -> gateway:35433 -> target postgresql (:5432 等)
 
 ![PostgreSQL gateway flow](assets/postgresql-gateway-flow.gif)
 
+
+## 快速开始 · SQL Server（P0）
+
+> **诚实边界**：P0 提供可启动的透明 TDS 双工中继与 framing 单测，**不是**完整协议观测/脱敏产品。阶段与非目标见 [`docs/SQLSERVER_TDS_PLAN.md`](docs/SQLSERVER_TDS_PLAN.md)。
+
+```bash
+cp src/main/resources/application-sqlserver-template.yml src/main/resources/application-dev.yml
+# 编辑 application-dev.yml：target 指向本机 SQL Server，password 换成你的口令（勿提交）
+# 本地 Docker 实验室示例 SA：Aa123456.（含末尾点号；见 docs/OPS.md）— 生产另行配置
+mvn spring-boot:run -Dspring-boot.run.profiles=dev
+```
+
+```yaml
+gateway:
+  proxy-db-type: sqlserver   # 或 mssql
+  proxy-port: 31433
+  target:
+    host: localhost
+    port: 1433
+    username: sa
+    password: change-me      # 模板占位；勿提交真实密码
+    database: master
+```
+
+```text
+SQL client / JDBC -> gateway:31433 -> target SQL Server (:1433)
+```
+
+JDBC 示例（encrypt 按环境调整）：
+`jdbc:sqlserver://localhost:31433;databaseName=master;encrypt=false;trustServerCertificate=true`
+
 ## 构建与测试
 
-对照 commit：`a725050`（或本仓库当前 HEAD）。
+对照 commit：本仓库当前 HEAD（以 `git rev-parse HEAD` / STATUS §1 为准）。
 
 ```bash
 # 默认：非集成单元测试（见 STATUS §1 计数）
@@ -321,6 +367,8 @@ mvn -Pintegration-test test
 |---|---|
 | [`AGENTS.md`](AGENTS.md) | 分层、透明性不变量、安全与工作约定 |
 | [`docs/STATUS_AND_GAPS.md`](docs/STATUS_AND_GAPS.md) | **本分支现状 / P0–P2 缺口** |
+| [`docs/SQLSERVER_TDS_PLAN.md`](docs/SQLSERVER_TDS_PLAN.md) | **SQL Server（TDS）接入计划** |
+| [`docs/OPS.md`](docs/OPS.md) | 运维开启 / 告警 / 本地 lab 密码说明 |
 | [`docs/PROTOCOL_REFERENCE_TABLES.md`](docs/PROTOCOL_REFERENCE_TABLES.md) | 协议表镜像（真源为代码枚举） |
 | [`docs/rules/database-protocol-rules.md`](docs/rules/database-protocol-rules.md) | 协议规则（应当怎样） |
 | [`docs/rules/ai-error-handling-rules.md`](docs/rules/ai-error-handling-rules.md) | 失败处理流程 |

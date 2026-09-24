@@ -4,7 +4,6 @@ import com.whosly.gateway.adapter.mysql.MySqlBackendSessionReset;
 import com.whosly.gateway.adapter.postgresql.PostgreSQLBackendSessionReset;
 import com.whosly.gateway.adapter.protocol.BackendSessionReset;
 import com.whosly.gateway.adapter.stub.OracleProtocolAdapterStub;
-import com.whosly.gateway.adapter.stub.SqlServerProtocolAdapterStub;
 
 import java.util.Locale;
 import java.util.Map;
@@ -28,9 +27,9 @@ import java.util.function.Supplier;
  *   <li>Document the type in README / STATUS; keep reserved stubs until ready.</li>
  * </ol>
  *
- * <p>Built-in: {@code mysql}, {@code postgresql}/{@code postgres}. Reserved stubs:
- * {@code oracle}, {@code sqlserver}/{@code mssql} — create throws
- * {@link UnsupportedOperationException} with a clear message.</p>
+ * <p>Built-in: {@code mysql}, {@code postgresql}/{@code postgres},
+ * {@code sqlserver}/{@code mssql} (TDS transparent P0). Reserved stub:
+ * {@code oracle} — create throws {@link UnsupportedOperationException}.</p>
  */
 public final class ProtocolAdapterRegistry {
 
@@ -40,16 +39,16 @@ public final class ProtocolAdapterRegistry {
     }
 
     /**
-     * Registry preloaded with built-in MySQL / PostgreSQL and reserved stubs.
+     * Registry preloaded with built-in MySQL / PostgreSQL / SQL Server and Oracle stub.
      */
     public static ProtocolAdapterRegistry withBuiltIns() {
         ProtocolAdapterRegistry registry = new ProtocolAdapterRegistry();
         registry.register("mysql", MySqlProtocolAdapter::new, MySqlBackendSessionReset::new);
         registry.register("postgresql", PostgreSQLProtocolAdapter::new, PostgreSQLBackendSessionReset::new);
         registry.registerAlias("postgres", "postgresql");
-        registry.register("oracle", OracleProtocolAdapterStub::unsupported, BackendSessionReset::none);
-        registry.register("sqlserver", SqlServerProtocolAdapterStub::unsupported, BackendSessionReset::none);
+        registry.register("sqlserver", SqlServerProtocolAdapter::new, BackendSessionReset::none);
         registry.registerAlias("mssql", "sqlserver");
+        registry.register("oracle", OracleProtocolAdapterStub::unsupported, BackendSessionReset::none);
         return registry;
     }
 
