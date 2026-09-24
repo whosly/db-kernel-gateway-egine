@@ -34,6 +34,9 @@ import org.springframework.beans.factory.DisposableBean;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
+import com.whosly.gateway.console.SupportedDatabaseCatalog;
+import com.whosly.gateway.runtime.GatewayListenerRuntime;
+import org.springframework.context.annotation.Primary;
 import org.springframework.context.annotation.Configuration;
 
 import java.io.IOException;
@@ -294,11 +297,6 @@ public class GatewayConfig implements DisposableBean {
 
 
     @Bean
-    public GatewayRuntimeMetrics gatewayRuntimeMetrics() {
-        return new GatewayRuntimeMetrics();
-    }
-
-    @Bean
     public ProtocolAdapterRegistry protocolAdapterRegistry() {
         // Built-ins: mysql + postgresql; reserved stubs: oracle / sqlserver / mssql.
         // Callers may obtain this bean and register("mydb", MyDbAdapter::new, MyDbReset::new).
@@ -306,39 +304,94 @@ public class GatewayConfig implements DisposableBean {
     }
 
     /**
-     * Non-Spring / unit-test entry: builds against {@link #protocolAdapterRegistry()}.
-     * Spring injects the {@code ProtocolAdapterRegistry} bean into the overloaded {@code @Bean}.
+     * Non-Spring / unit-test entry: one adapter from process-level {@code proxy-*} / {@code target.*}.
      */
     public ProtocolAdapter protocolAdapter() {
-        return protocolAdapter(protocolAdapterRegistry());
+        return buildAdapter(
+                protocolAdapterRegistry(),
+                proxyDbType,
+                proxyPort,
+                targetHost,
+                targetPort,
+                targetUsername,
+                targetPassword,
+                targetDatabase,
+                new GatewayRuntimeMetrics());
     }
 
+    /**
+     * Same-JVM multi-listener manager. Builds 1..N adapters from {@code gateway.instances}
+     * (or a synthetic default when the list is empty).
+     */
     @Bean
-    public ProtocolAdapter protocolAdapter(ProtocolAdapterRegistry protocolAdapterRegistry) {
+    public GatewayListenerRuntime gatewayListenerRuntime(
+            ProtocolAdapterRegistry protocolAdapterRegistry,
+            GatewayInstanceProperties instanceProperties,
+            SupportedDatabaseCatalog catalog) {
+        return new GatewayListenerRuntime(this, protocolAdapterRegistry, instanceProperties, catalog);
+    }
+
+    /**
+     * Legacy single-adapter bean for {@code /gateway/*}, CLI, and Actuator.
+     * Aliases the runtime "legacy" instance (proxy-* match, else {@code default}, else first bound).
+     */
+    @Bean
+    @Primary
+    public ProtocolAdapter protocolAdapter(GatewayListenerRuntime gatewayListenerRuntime) {
+        return gatewayListenerRuntime.getLegacyAdapter();
+    }
+
+    /**
+     * Process-visible metrics bean aliases the legacy instance counters
+     * ({@code /gateway/metrics}). Per-instance maps live on each listener — see console registry.
+     */
+    @Bean
+    public GatewayRuntimeMetrics gatewayRuntimeMetrics(GatewayListenerRuntime gatewayListenerRuntime) {
+        return gatewayListenerRuntime.getLegacyMetrics();
+    }
+
+    /**
+     * Builds one governed adapter for a concrete instance (or the process-level default).
+     * Shared pool/TLS/routing/audit/risk beans are applied; metrics are per-call (per-instance).
+     */
+    public ProtocolAdapter buildAdapter(ProtocolAdapterRegistry protocolAdapterRegistry,
+                                        String dbType,
+                                        int listenPort,
+                                        String instanceTargetHost,
+                                        int instanceTargetPort,
+                                        String instanceTargetUsername,
+                                        String instanceTargetPassword,
+                                        String instanceTargetDatabase,
+                                        GatewayRuntimeMetrics metrics) {
         ProtocolAdapter created;
         try {
-            created = protocolAdapterRegistry.create(proxyDbType);
+            created = protocolAdapterRegistry.create(dbType);
         } catch (UnsupportedOperationException e) {
             // Reserved stubs throw UOE — surface as IllegalArgumentException for config errors.
             throw new IllegalArgumentException(e.getMessage(), e);
         }
         if (!(created instanceof AbstractProtocolAdapter adapter)) {
             throw new IllegalStateException(
-                    "ProtocolAdapter for '" + proxyDbType + "' must extend AbstractProtocolAdapter "
+                    "ProtocolAdapter for '" + dbType + "' must extend AbstractProtocolAdapter "
                             + "so pool/TLS/governance can be applied");
         }
-        adapter.setPort(proxyPort);
-        adapter.setTargetHost(targetHost);
-        adapter.setTargetPort(targetPort);
-        adapter.setTargetUsername(targetUsername);
-        adapter.setTargetPassword(targetPassword);
-        adapter.setTargetDatabase(targetDatabase);
-        applyConnectionGovernance(adapter, protocolAdapterRegistry);
+        adapter.setPort(listenPort);
+        adapter.setTargetHost(instanceTargetHost);
+        adapter.setTargetPort(instanceTargetPort);
+        adapter.setTargetUsername(instanceTargetUsername);
+        adapter.setTargetPassword(instanceTargetPassword);
+        adapter.setTargetDatabase(instanceTargetDatabase);
+        applyConnectionGovernance(adapter, protocolAdapterRegistry, dbType,
+                instanceTargetHost, instanceTargetPort, metrics);
         return adapter;
     }
 
     private void applyConnectionGovernance(AbstractProtocolAdapter adapter,
-                                           ProtocolAdapterRegistry protocolAdapterRegistry) {
+                                           ProtocolAdapterRegistry protocolAdapterRegistry,
+                                           String dbType,
+                                           String instanceTargetHost,
+                                           int instanceTargetPort,
+                                           GatewayRuntimeMetrics metrics) {
         adapter.setMaxConnections(maxConnections);
         adapter.setIdleTimeoutSeconds(idleTimeoutSeconds);
         adapter.setClientAddressPolicy(clientAddressPolicy());
@@ -346,13 +399,13 @@ public class GatewayConfig implements DisposableBean {
         adapter.setRewriteLimits(rewriteLimits());
         adapter.setMaskingEngine(maskingEngine());
         adapter.setVirtualThreadsEnabled(virtualThreads);
-        adapter.setBackendEndpoints(parseBackendEndpoints());
+        adapter.setBackendEndpoints(parseBackendEndpoints(instanceTargetHost, instanceTargetPort));
         adapter.setRequireCleartextInspection(resolveRequireCleartextInspection());
         adapter.setPoolEnabled(poolEnabled);
         adapter.setPoolMaxIdle(poolMaxIdle);
-        adapter.setBackendSessionReset(resolveBackendSessionReset(protocolAdapterRegistry));
+        adapter.setBackendSessionReset(resolveBackendSessionReset(protocolAdapterRegistry, dbType));
         adapter.setClientTlsTerminator(buildClientTlsTerminator());
-        adapter.setRuntimeMetrics(gatewayRuntimeMetrics());
+        adapter.setRuntimeMetrics(metrics != null ? metrics : new GatewayRuntimeMetrics());
         applyRouting(adapter);
         try {
             adapter.setDatabaseTrafficObserver(databaseTrafficObserver());
@@ -364,13 +417,13 @@ public class GatewayConfig implements DisposableBean {
     /**
      * Resolves {@code gateway.pool.reset-mode}.
      * {@code none} (default): {@link BackendSessionReset#none()}.
-     * {@code protocol}: SPI from the registry for the current proxy-db-type.
+     * {@code protocol}: SPI from the registry for the instance db-type.
      */
-    private BackendSessionReset resolveBackendSessionReset(ProtocolAdapterRegistry registry) {
+    private BackendSessionReset resolveBackendSessionReset(ProtocolAdapterRegistry registry, String dbType) {
         String mode = poolResetMode == null ? "none" : poolResetMode.toLowerCase(Locale.ROOT).trim();
         return switch (mode) {
             case "none" -> BackendSessionReset.none();
-            case "protocol" -> registry.createSessionReset(proxyDbType);
+            case "protocol" -> registry.createSessionReset(dbType);
             default -> throw new IllegalArgumentException(
                     "Unsupported gateway.pool.reset-mode: " + poolResetMode
                             + " (supported: none, protocol)");
@@ -433,9 +486,10 @@ public class GatewayConfig implements DisposableBean {
         adapter.setRoutingRules(rules);
     }
 
-    private List<com.whosly.gateway.adapter.protocol.BackendEndpoint> parseBackendEndpoints() {
+    private List<com.whosly.gateway.adapter.protocol.BackendEndpoint> parseBackendEndpoints(
+            String primaryHost, int primaryPort) {
         List<com.whosly.gateway.adapter.protocol.BackendEndpoint> endpoints = new ArrayList<>();
-        endpoints.add(new com.whosly.gateway.adapter.protocol.BackendEndpoint(targetHost, targetPort));
+        endpoints.add(new com.whosly.gateway.adapter.protocol.BackendEndpoint(primaryHost, primaryPort));
         if (backendEndpoints == null || backendEndpoints.isBlank()) {
             return endpoints;
         }

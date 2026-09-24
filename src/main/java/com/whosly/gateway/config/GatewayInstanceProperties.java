@@ -38,6 +38,8 @@ public class GatewayInstanceProperties {
         private Integer targetPort;
         private String targetDatabase;
         private String targetUsername;
+        /** Optional; blank → inherit {@code gateway.target.password}. Never log. */
+        private String targetPassword;
 
         public String getId() {
             return id;
@@ -117,6 +119,14 @@ public class GatewayInstanceProperties {
 
         public void setTargetUsername(String targetUsername) {
             this.targetUsername = targetUsername;
+        }
+
+        public String getTargetPassword() {
+            return targetPassword;
+        }
+
+        public void setTargetPassword(String targetPassword) {
+            this.targetPassword = targetPassword;
         }
     }
 }

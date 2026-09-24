@@ -26,7 +26,7 @@
 
 | 项 | 本分支（`future/database-wire-protocol-foundation`） |
 |---|---|
-| 默认单元测试 | **428** 条全绿（JDK 17；`pom` 排除 `*IntegrationTest`；以 STATUS §1 为准） |
+| 默认单元测试 | **436** 条全绿（JDK 17；`pom` 排除 `*IntegrationTest`；以 STATUS §1 为准） |
 | 真库集成 `-Pintegration-test` | **14 / 14** 全绿（2026-09-24，本地 Docker MySQL `:13308` + PostgreSQL `:5432`） |
 | JDK / 编译 | `pom` 目标 **17**；虚拟线程经 `VirtualThreadExecutors` **反射**在 JDK 21+ 启用，JDK 17 回退平台线程池（STATUS P0-1） |
 | 核心数据路径 | 透明代理、查询/结果、预处理、错误透传、脱敏 happy path、PG `COPY` — **已在集成中 live-proven** |
@@ -165,7 +165,7 @@ gateway:
 | `gateway.risk.denied-operations` | 逗号分隔协议操作名拒绝清单（空=allow-all） |
 | `gateway.risk.denied-statement-keywords` | 逗号分隔语句关键字子串拒绝清单（空=allow-all） |
 | `gateway.catalog.databases[]` | 支持库**类型**目录（id/maturity/enabled/ports/notes）；`GET /console/api/supported-databases` |
-| `gateway.instances[]` | 协议无关**实例**注册表（可多类型混部）；空则管控台合成 `id=default` |
+| `gateway.instances[]` | 协议无关**实例**注册表（可多类型混部）；非空=多 listener；空则合成 `id=default` |
 
 ## 快速开始 · MySQL
 
@@ -375,7 +375,8 @@ mvn -Pintegration-test test
 | 设计 | [`docs/CONSOLE_DESIGN.md`](docs/CONSOLE_DESIGN.md) |
 
 一等实体是 **网关实例**（监听端口 + `dbType` 标签），不是按 MySQL/PG 分拆的控制台。  
-类型目录（`gateway.catalog`）与实例注册表（`gateway.instances`）分离。今日运行时仍绑定单个 `ProtocolAdapter`；多 listener 模型已在注册表预留。
+类型目录（`gateway.catalog`）与实例注册表（`gateway.instances`）分离。  
+`gateway.instances` 非空时，同 JVM 为每个 enabled+creatable 实例启动独立 listener（MySQL+PG 可混部）；空列表仍合成 `id=default`。遗留 `/gateway/*` 操作 legacy 实例（匹配 `proxy-*`）。
 
 目录配置示例：
 

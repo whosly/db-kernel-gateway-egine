@@ -99,8 +99,9 @@ gateway:
         defaultTargetPort: 1521
         notes: "预留 stub；consoleCreateAllowed=false"
 
-  # Instance registry (protocol-agnostic). Empty → console synthesizes id=default from proxy-* / target.*.
-  # Multiple mixed-type entries are supported in the model; runtime binds one ProtocolAdapter today.
+  # Instance registry (protocol-agnostic). Empty → synthesize id=default from proxy-* / target.*
+  # Non-empty → each enabled creatable entry gets its own ProtocolAdapter listener (same JVM).
+  # Defaults stay single-instance safe: leave this commented unless you need multi-listener.
   # instances:
   #   - id: gw-mysql-1
   #     name: 业务库代理
@@ -108,11 +109,18 @@ gateway:
   #     listen-host: 0.0.0.0
   #     listen-port: 33307
   #     enabled: true
+  #     # optional target overrides; password inherits gateway.target.password when omitted
+  #     # target-host: 127.0.0.1
+  #     # target-port: 3306
+  #     # target-database: app
+  #     # target-username: root
   #   - id: gw-pg-1
   #     name: 分析库代理
   #     db-type: postgresql
   #     listen-port: 35433
   #     enabled: true
+  #     # target-host: 127.0.0.1
+  #     # target-port: 5432
 
 logging:
   level:

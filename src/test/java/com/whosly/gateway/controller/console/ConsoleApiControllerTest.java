@@ -6,14 +6,16 @@ import com.whosly.gateway.adapter.protocol.GatewayRuntimeMetrics;
 import com.whosly.gateway.adapter.protocol.ProtocolSession;
 import com.whosly.gateway.config.GatewayCatalogProperties;
 import com.whosly.gateway.config.GatewayConfig;
-import com.whosly.gateway.config.GatewayInstanceProperties;
 import com.whosly.gateway.console.GatewayInstance;
 import com.whosly.gateway.console.GatewayInstanceRegistry;
 import com.whosly.gateway.console.SupportedDatabaseCatalog;
+import com.whosly.gateway.runtime.GatewayListenerRuntime;
+import com.whosly.gateway.runtime.GatewayListenerRuntime.ManagedListener;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -28,11 +30,17 @@ class ConsoleApiControllerTest {
 
     @BeforeEach
     void setUp() {
-        ProtocolAdapter adapter = mock(ProtocolAdapter.class);
-        when(adapter.isRunning()).thenReturn(true);
-        when(adapter.getProtocolName()).thenReturn("MySQL");
-        when(adapter.getDefaultPort()).thenReturn(33307);
-        when(adapter.getActiveSessions()).thenReturn(List.<ProtocolSession>of());
+        ProtocolAdapter mysqlAdapter = mock(ProtocolAdapter.class);
+        when(mysqlAdapter.isRunning()).thenReturn(true);
+        when(mysqlAdapter.getProtocolName()).thenReturn("MySQL");
+        when(mysqlAdapter.getDefaultPort()).thenReturn(33307);
+        when(mysqlAdapter.getActiveSessions()).thenReturn(List.<ProtocolSession>of());
+
+        ProtocolAdapter pgAdapter = mock(ProtocolAdapter.class);
+        when(pgAdapter.isRunning()).thenReturn(false);
+        when(pgAdapter.getProtocolName()).thenReturn("PostgreSQL");
+        when(pgAdapter.getDefaultPort()).thenReturn(35433);
+        when(pgAdapter.getActiveSessions()).thenReturn(List.<ProtocolSession>of());
 
         GatewayRuntimeMetrics metrics = new GatewayRuntimeMetrics();
         metrics.recordConnectionAccepted();
@@ -59,23 +67,20 @@ class ConsoleApiControllerTest {
         SupportedDatabaseCatalog catalog =
                 new SupportedDatabaseCatalog(catalogProps, ProtocolAdapterRegistry.withBuiltIns());
 
-        GatewayInstanceProperties instanceProperties = new GatewayInstanceProperties();
-        GatewayInstanceProperties.InstanceEntry a = new GatewayInstanceProperties.InstanceEntry();
-        a.setId("gw-1");
-        a.setName("实例一");
-        a.setDbType("mysql");
-        a.setListenPort(33307);
-        GatewayInstanceProperties.InstanceEntry b = new GatewayInstanceProperties.InstanceEntry();
-        b.setId("gw-2");
-        b.setName("实例二");
-        b.setDbType("postgresql");
-        b.setListenPort(35433);
-        instanceProperties.setInstances(List.of(a, b));
+        Map<String, ManagedListener> listeners = new LinkedHashMap<>();
+        listeners.put("gw-1", new ManagedListener(
+                "gw-1", "实例一", "mysql", "0.0.0.0", 33307, true, true,
+                true, "127.0.0.1", 3306, "mysql", "root",
+                mysqlAdapter, metrics));
+        listeners.put("gw-2", new ManagedListener(
+                "gw-2", "实例二", "postgresql", "0.0.0.0", 35433, true, true,
+                true, "127.0.0.1", 5432, "postgres", "pg",
+                pgAdapter, new GatewayRuntimeMetrics()));
 
-        GatewayInstanceRegistry registry = new GatewayInstanceRegistry(
-                instanceProperties, gatewayConfig, catalog, adapter, metrics);
+        GatewayListenerRuntime runtime = new GatewayListenerRuntime(listeners, "gw-1");
+        GatewayInstanceRegistry registry = new GatewayInstanceRegistry(runtime);
 
-        console = new ConsoleApiController(catalog, registry, adapter, metrics, gatewayConfig);
+        console = new ConsoleApiController(catalog, registry, mysqlAdapter, metrics, gatewayConfig);
     }
 
     @Test
@@ -95,6 +100,7 @@ class ConsoleApiControllerTest {
         assertThat(instances).extracting(GatewayInstance::id).containsExactly("gw-1", "gw-2");
         assertThat(instances).extracting(GatewayInstance::dbType)
                 .containsExactly("mysql", "postgresql");
+        assertThat(instances).allMatch(GatewayInstance::bound);
     }
 
     @Test

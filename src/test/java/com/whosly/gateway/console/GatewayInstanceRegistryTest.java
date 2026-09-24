@@ -1,63 +1,32 @@
 package com.whosly.gateway.console;
 
 import com.whosly.gateway.adapter.ProtocolAdapter;
-import com.whosly.gateway.adapter.ProtocolAdapterRegistry;
 import com.whosly.gateway.adapter.protocol.GatewayRuntimeMetrics;
 import com.whosly.gateway.adapter.protocol.ProtocolSession;
-import com.whosly.gateway.config.GatewayCatalogProperties;
-import com.whosly.gateway.config.GatewayConfig;
-import com.whosly.gateway.config.GatewayInstanceProperties;
 import com.whosly.gateway.console.GatewayInstance.InstanceStatus;
-import org.junit.jupiter.api.BeforeEach;
+import com.whosly.gateway.runtime.GatewayListenerRuntime;
+import com.whosly.gateway.runtime.GatewayListenerRuntime.ManagedListener;
 import org.junit.jupiter.api.Test;
-import org.springframework.test.util.ReflectionTestUtils;
 
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 class GatewayInstanceRegistryTest {
 
-    private GatewayConfig gatewayConfig;
-    private ProtocolAdapter adapter;
-    private SupportedDatabaseCatalog catalog;
-    private GatewayInstanceProperties instanceProperties;
-
-    @BeforeEach
-    void setUp() {
-        gatewayConfig = new GatewayConfig();
-        ReflectionTestUtils.setField(gatewayConfig, "proxyDbType", "mysql");
-        ReflectionTestUtils.setField(gatewayConfig, "proxyPort", 33307);
-        ReflectionTestUtils.setField(gatewayConfig, "targetHost", "127.0.0.1");
-        ReflectionTestUtils.setField(gatewayConfig, "targetPort", 3306);
-        ReflectionTestUtils.setField(gatewayConfig, "targetUsername", "root");
-        ReflectionTestUtils.setField(gatewayConfig, "targetPassword", "secret");
-        ReflectionTestUtils.setField(gatewayConfig, "targetDatabase", "mysql");
-
-        adapter = mock(ProtocolAdapter.class);
-        when(adapter.isRunning()).thenReturn(true);
-        when(adapter.getProtocolName()).thenReturn("MySQL");
-        when(adapter.getDefaultPort()).thenReturn(33307);
-        when(adapter.getActiveSessions()).thenReturn(List.<ProtocolSession>of());
-
-        GatewayCatalogProperties catalogProps = new GatewayCatalogProperties();
-        catalogProps.setDatabases(List.of(
-                type("mysql", "MySQL", true, "ga"),
-                type("postgresql", "PostgreSQL", true, "ga"),
-                type("sqlserver", "SQL Server", true, "partial"),
-                type("oracle", "Oracle", false, "stub")
-        ));
-        catalog = new SupportedDatabaseCatalog(catalogProps, ProtocolAdapterRegistry.withBuiltIns());
-        instanceProperties = new GatewayInstanceProperties();
-    }
-
     @Test
     void synthesizesDefaultInstanceWhenListEmpty() {
-        GatewayInstanceRegistry registry = registry();
+        ProtocolAdapter adapter = runningAdapter("MySQL", 33307);
+        ManagedListener def = listener("default", "默认网关实例", "mysql", 33307, true, true, adapter);
+        GatewayInstanceRegistry registry = registry(Map.of("default", def), "default");
+
         List<GatewayInstance> instances = registry.listInstances();
         assertThat(instances).hasSize(1);
         GatewayInstance only = instances.get(0);
@@ -69,13 +38,17 @@ class GatewayInstanceRegistryTest {
     }
 
     @Test
-    void listsMixedTypesWithOnlyMatchingInstanceBound() {
-        instanceProperties.setInstances(List.of(
-                entry("gw-mysql", "业务", "mysql", 33307, true),
-                entry("gw-pg", "分析", "postgresql", 35433, true),
-                entry("gw-mssql", "遗留", "sqlserver", 31433, true)
-        ));
-        GatewayInstanceRegistry registry = registry();
+    void listsMixedTypesWithAllCreatableInstancesBound() {
+        ProtocolAdapter mysqlAdapter = runningAdapter("MySQL", 33307);
+        ProtocolAdapter pgAdapter = runningAdapter("PostgreSQL", 35433);
+        ProtocolAdapter mssqlAdapter = runningAdapter("SQLServer", 31433);
+
+        Map<String, ManagedListener> map = new LinkedHashMap<>();
+        map.put("gw-mysql", listener("gw-mysql", "业务", "mysql", 33307, true, true, mysqlAdapter));
+        map.put("gw-pg", listener("gw-pg", "分析", "postgresql", 35433, true, true, pgAdapter));
+        map.put("gw-mssql", listener("gw-mssql", "遗留", "sqlserver", 31433, true, true, mssqlAdapter));
+
+        GatewayInstanceRegistry registry = registry(map, "gw-mysql");
         List<GatewayInstance> instances = registry.listInstances();
         assertThat(instances).hasSize(3);
 
@@ -84,73 +57,93 @@ class GatewayInstanceRegistryTest {
         assertThat(mysql.status()).isEqualTo(InstanceStatus.RUNNING);
 
         GatewayInstance pg = registry.findById("gw-pg").orElseThrow();
-        assertThat(pg.bound()).isFalse();
-        assertThat(pg.status()).isEqualTo(InstanceStatus.UNBOUND);
-        assertThat(pg.startable()).isFalse();
+        assertThat(pg.bound()).isTrue();
+        assertThat(pg.status()).isEqualTo(InstanceStatus.RUNNING);
+        assertThat(pg.startable()).isTrue();
 
         GatewayInstance mssql = registry.findById("gw-mssql").orElseThrow();
         assertThat(mssql.dbType()).isEqualTo("sqlserver");
-        assertThat(mssql.bound()).isFalse();
+        assertThat(mssql.bound()).isTrue();
+        assertThat(mssql.status()).isEqualTo(InstanceStatus.RUNNING);
     }
 
     @Test
-    void startStopOnlyOnBoundInstance() {
-        instanceProperties.setInstances(List.of(
-                entry("gw-mysql", "业务", "mysql", 33307, true),
-                entry("gw-pg", "分析", "postgresql", 35433, true)
-        ));
-        // toInstance() also probes isRunning for the bound instance — keep false so start() invokes adapter.start().
-        when(adapter.isRunning()).thenReturn(false);
-        GatewayInstanceRegistry registry = registry();
+    void startStopIndependentlyPerBoundInstance() {
+        ProtocolAdapter mysqlAdapter = startableAdapter("MySQL", 33307);
+        ProtocolAdapter pgAdapter = startableAdapter("PostgreSQL", 35433);
+
+        Map<String, ManagedListener> map = new LinkedHashMap<>();
+        map.put("gw-mysql", listener("gw-mysql", "业务", "mysql", 33307, true, true, mysqlAdapter));
+        map.put("gw-pg", listener("gw-pg", "分析", "postgresql", 35433, true, true, pgAdapter));
+
+        GatewayInstanceRegistry registry = registry(map, "gw-mysql");
 
         Map<String, Object> started = registry.start("gw-mysql");
-        verify(adapter).start();
+        verify(mysqlAdapter).start();
         assertThat(started.get("ok")).isEqualTo(true);
 
-        Map<String, Object> unbound = registry.start("gw-pg");
-        assertThat(unbound.get("ok")).isEqualTo(false);
-        assertThat(unbound.get("message").toString()).contains("未绑定");
+        Map<String, Object> startedPg = registry.start("gw-pg");
+        verify(pgAdapter).start();
+        assertThat(startedPg.get("ok")).isEqualTo(true);
+    }
+
+    private static ProtocolAdapter startableAdapter(String protocol, int port) {
+        ProtocolAdapter adapter = mock(ProtocolAdapter.class);
+        AtomicBoolean running = new AtomicBoolean(false);
+        when(adapter.isRunning()).thenAnswer(inv -> running.get());
+        doAnswer(inv -> {
+            running.set(true);
+            return null;
+        }).when(adapter).start();
+        doAnswer(inv -> {
+            running.set(false);
+            return null;
+        }).when(adapter).stop();
+        when(adapter.getProtocolName()).thenReturn(protocol);
+        when(adapter.getDefaultPort()).thenReturn(port);
+        when(adapter.getActiveSessions()).thenReturn(List.<ProtocolSession>of());
+        return adapter;
     }
 
     @Test
     void oracleInstanceIsUnsupported() {
-        instanceProperties.setInstances(List.of(
-                entry("gw-ora", "Oracle", "oracle", 31521, true)
-        ));
-        // Process type won't match oracle port/type → still UNSUPPORTED due to not creatable
-        ReflectionTestUtils.setField(gatewayConfig, "proxyDbType", "oracle");
-        ReflectionTestUtils.setField(gatewayConfig, "proxyPort", 31521);
-        GatewayInstanceRegistry registry = registry();
-        GatewayInstance ora = registry.findById("gw-ora").orElseThrow();
-        assertThat(ora.status()).isEqualTo(InstanceStatus.UNSUPPORTED);
-        assertThat(ora.startable()).isFalse();
+        ManagedListener ora = listener("gw-ora", "Oracle", "oracle", 31521, true, false, null);
+        GatewayInstanceRegistry registry = registry(Map.of("gw-ora", ora), "gw-ora");
+
+        GatewayInstance instance = registry.findById("gw-ora").orElseThrow();
+        assertThat(instance.status()).isEqualTo(InstanceStatus.UNSUPPORTED);
+        assertThat(instance.startable()).isFalse();
+        assertThat(instance.bound()).isFalse();
     }
 
-    private GatewayInstanceRegistry registry() {
-        return new GatewayInstanceRegistry(
-                instanceProperties, gatewayConfig, catalog, adapter, new GatewayRuntimeMetrics());
+    @Test
+    void disabledInstanceIsDisabledNotUnbound() {
+        ManagedListener disabled = listener("gw-off", "关闭", "mysql", 33307, false, true, null);
+        GatewayInstanceRegistry registry = registry(Map.of("gw-off", disabled), "gw-off");
+        GatewayInstance instance = registry.findById("gw-off").orElseThrow();
+        assertThat(instance.status()).isEqualTo(InstanceStatus.DISABLED);
+        assertThat(instance.bound()).isFalse();
     }
 
-    private static GatewayInstanceProperties.InstanceEntry entry(
-            String id, String name, String dbType, int port, boolean enabled) {
-        GatewayInstanceProperties.InstanceEntry e = new GatewayInstanceProperties.InstanceEntry();
-        e.setId(id);
-        e.setName(name);
-        e.setDbType(dbType);
-        e.setListenPort(port);
-        e.setEnabled(enabled);
-        return e;
+    private static GatewayInstanceRegistry registry(Map<String, ManagedListener> map, String legacyId) {
+        return new GatewayInstanceRegistry(new GatewayListenerRuntime(map, legacyId));
     }
 
-    private static GatewayCatalogProperties.DatabaseEntry type(
-            String id, String name, boolean enabled, String maturity) {
-        GatewayCatalogProperties.DatabaseEntry e = new GatewayCatalogProperties.DatabaseEntry();
-        e.setId(id);
-        e.setDisplayName(name);
-        e.setEnabled(enabled);
-        e.setMaturity(maturity);
-        e.setDefaultProxyPort(1);
-        e.setDefaultTargetPort(1);
-        return e;
+    private static ProtocolAdapter runningAdapter(String protocol, int port) {
+        ProtocolAdapter adapter = mock(ProtocolAdapter.class);
+        when(adapter.isRunning()).thenReturn(true);
+        when(adapter.getProtocolName()).thenReturn(protocol);
+        when(adapter.getDefaultPort()).thenReturn(port);
+        when(adapter.getActiveSessions()).thenReturn(List.<ProtocolSession>of());
+        return adapter;
+    }
+
+    private static ManagedListener listener(String id, String name, String dbType, int port,
+                                            boolean enabled, boolean creatable,
+                                            ProtocolAdapter adapter) {
+        return new ManagedListener(
+                id, name, dbType, "0.0.0.0", port, enabled, creatable,
+                true, "127.0.0.1", 3306, "db", "user",
+                adapter, new GatewayRuntimeMetrics());
     }
 }

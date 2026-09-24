@@ -20,7 +20,7 @@
 | 列出网关实例 | ✅ | 配置驱动；可多条、多类型 |
 | 单实例状态 / 指标 / 启停 | ✅ | 绑定运行时 adapter 的实例可操作 |
 | 非密钥配置摘要 | ✅ | 密码脱敏；从不回传明文 |
-| 同进程多 listener 真实运行 | 🔜 | 注册表与 API 已按多实例建模；运行时仍可先绑一个 adapter |
+| 同进程多 listener 真实运行 | ✅ | `GatewayListenerRuntime` 为每个 creatable 实例建独立 ProtocolAdapter；单测覆盖 mysql+pg 独立启停 |
 | 鉴权 / SSO | 🔜 | 延期；生产靠网络隔离 / 反代 |
 
 ## 3. 领域模型
@@ -61,7 +61,7 @@ GatewayInstance
 | RUNNING | 已绑定且 adapter 在跑 |
 | STOPPED | 已绑定且 adapter 已停 |
 | DISABLED | `enabled=false` |
-| UNBOUND | 已配置但本进程尚未挂 listener（多 listener 落地前的占位） |
+| UNBOUND | 保留枚举兼容；多 listener 落地后 creatable 实例不再使用（见 STATUS） |
 | UNSUPPORTED | `dbType` 不可创建（stub / 未注册） |
 
 ### 3.3 配置
@@ -89,8 +89,9 @@ gateway:
       enabled: true
 ```
 
-今日运行时：`GatewayConfig` 仍创建 **一个** `ProtocolAdapter`。  
-`GatewayInstanceRegistry` 将「与当前 `proxy-db-type` + `proxy-port` 匹配的实例」标为 **bound**，启停委托该 adapter；其余实例可见为 UNBOUND（为双 listener 预留）。
+运行时：`GatewayListenerRuntime` 为每个 **enabled + creatable** 的 `gateway.instances[]` 条目创建独立 `ProtocolAdapter`（空列表则合成 `id=default`）。  
+`GatewayInstanceRegistry` 委托 runtime 启停；实例指标为 **每 listener 独立** `GatewayRuntimeMetrics`。  
+遗留 `/gateway/*` / Actuator / CLI 仍注入 **legacy** adapter：优先匹配 `proxy-db-type`+`proxy-port`，否则 `default`，否则第一个已绑定实例。
 
 ## 4. REST API（实例中心 · 类型无关）
 
@@ -143,9 +144,16 @@ static/console/*
 docs/CONSOLE_DESIGN.md
 ```
 
-## 8. 非目标（本提交）
+## 8. 运行时组件
 
-- 真实双/多 `ServerSocket` 同进程（模型已预留）
-- SQL Server 功能深化
+```text
+runtime/GatewayListenerRuntime.java   # 同 JVM 多 listener 管理
+console/GatewayInstanceRegistry.java  # 管控台视图 / 启停委托
+```
+
+## 9. 非目标（本阶段）
+
+- SQL Server 功能深化（保持 P0 透明）
 - Auth/SSO
 - 按 DB 品牌的独立页面或 API
+- Docker / Testcontainers 多实例 live 证明（单测已覆盖独立启停）
