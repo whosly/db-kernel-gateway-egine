@@ -3,17 +3,19 @@
 > **分支**：`future/database-wire-protocol-foundation`  
 > **更新原则**：只写有代码/测试/配置证据的结论；「规划中」不得写成「已实现」。  
 > **导航**：见 [README.md](README.md)。
+>
+> **近况**：Vue console Phase A — SPA + overview 聚合 + H2 管控台实例持久化（联调闭环）。
 
 ## 1. 构建与测试基线
 
 | 项 | 现状 | 证据 |
 |---|---|---|
-| 非集成 `@Test`/`@ParameterizedTest` 注解数 | **436** | `mvn test` Results；排除 `*IntegrationTest` |
+| 非集成 `@Test`/`@ParameterizedTest` 注解数 | **440** | `mvn test` Results；排除 `*IntegrationTest` |
 | 集成测试 | 14 条注解；默认 surefire **排除** `*IntegrationTest`；无 local props 时 `-Pintegration-test` **assumeTrue 跳过**；本机有库时可 14/14 绿 | `pom.xml` excludes；跳过策略见 `docs/OPS.md` / `integration-test.properties` |
-| 本环境 `mvn test`（`JAVA_HOME`=JDK 17） | **BUILD SUCCESS：Tests run 436, Failures 0, Errors 0, Skipped 0** | surefire；含 SQL Server P0 + 管控台 console/instance 单测 |
+| 本环境 `mvn test`（`JAVA_HOME`=JDK 17） | **BUILD SUCCESS：Tests run 440, Failures 0, Errors 0, Skipped 0** | surefire；含 SQL Server P0 + 管控台 Vue/H2 Phase A |
 | `pom.xml` 编译目标 | `maven.compiler.source/target=17` | **保持 17**；不升到 21 |
 
-**结论**：编译目标保持 17；VT 仅在 JDK 21+ 运行期启用。当前 `mvn test` 为 **436** 全绿（含 SQL Server P0 + 管控台实例/目录）。见 P0 / P1 / P2。
+**结论**：编译目标保持 17；VT 仅在 JDK 21+ 运行期启用。当前 `mvn test` 为 **440** 全绿（含 SQL Server P0 + 管控台 Vue/H2 Phase A）。见 P0 / P1 / P2。
 
 ## 2. 能力总览（按主题）
 
@@ -93,8 +95,8 @@ Spring 实际读取的键（`@Value`）与默认 `application.yml`、模板一�
 |---|---|---|---|---|
 | P2-1 | NIO / 少线程模型 | **missing（deferred）** | 仍 `ServerSocket.accept` + 阻塞读；并发模型选定为 **每连接线程 / 可选 VT**（`VirtualThreadExecutors`） | **不做 NIO 重写**；若 JDK 21+ VT 不足再开专项 |
 | P2-2 | JDBC vs 协议代理分裂 | **partial（improved）** | `DatabaseConnectionService` / adapter 字段 `@Deprecated` + javadoc；STATUS §6；wire 仍走 `BackendProvider` | 无调用方后可删类；勿接入 DuplexRelay |
-| P2-3 | HTTP 管控面 / 管控台 | **partial（improved）** | 既有 `/gateway/*`；管控台 `/console`；**同 JVM 多 listener**：`GatewayListenerRuntime` 按 `gateway.instances[]` 创建多 `ProtocolAdapter`（空列表合成 default）；注册表启停按 id；legacy `/gateway/*` 映射 proxy-* 匹配实例。单测：`GatewayListenerRuntimeTest` + registry。设计见 [`CONSOLE_DESIGN.md`](CONSOLE_DESIGN.md) | 鉴权/HTTPS 仍未做；多实例真库集成未做 |
-| P2-4 | Metrics 出口 | **partial（improved）** | **每 listener 独立** `GatewayRuntimeMetrics`（管控台 `instances/{id}/metrics`）；进程级 `/gateway/metrics` / Actuator 绑定 **legacy** 实例计数（非全实例聚合） | 未接 Micrometer 远程；告警阈值见 `docs/OPS.md` |
+| P2-3 | HTTP 管控面 / 管控台 | **partial（improved）** | Vue3+TS+Vite `console-ui/` + `frontend-maven-plugin`；overview **全实例求和**；**POST/DELETE + H2** 联调闭环；YAML 实例 stop-only。设计见 [`CONSOLE_ARCHITECTURE.md`](CONSOLE_ARCHITECTURE.md) | 鉴权/密码加密未做；脱敏 UI 延期 | 鉴权/HTTPS 仍未做；多实例真库集成未做 |
+| P2-4 | Metrics 出口 | **partial（improved）** | 每 listener 独立 metrics；overview `metrics` 全实例求和 + `legacyMetrics`；`/gateway/metrics` 仍 legacy | 未接 Micrometer | 未接 Micrometer 远程；告警阈值见 `docs/OPS.md` |
 | P2-5 | 审计测试与运维手册 | **partial（improved）** | P0-3 单测已有；**`docs/OPS.md`** 开启清单 / 告警清单；README 运维段改为索引 | JDBC 审计真库验收仍缺 |
 | P2-6 | 集成测试在 CI 可复现 | **partial（improved）** | 跳过策略写入 `integration-test.properties` + OPS；`-Pintegration-test` 无 props → `assumeTrue` skip；`-Pintegration-testcontainers` **stub only** | 真 Testcontainers 接线另开；默认 `mvn test` 仍不需 Docker |
 | P2-7 | 多库扩展点 / Oracle·SQL Server | **in-progress / partial（SQL Server P0）** | 第三库定为 **SQL Server TDS**（非 Oracle）。`SqlServerProtocolAdapter` + `sqlserver`/`mssql` 注册 + TDS framing + 透明 `DuplexRelay`；模板 `application-sqlserver-template.yml`（31433→1433）；计划见 [`SQLSERVER_TDS_PLAN.md`](SQLSERVER_TDS_PLAN.md)。Oracle 仍 stub。P0 **无** Login7 观测/脱敏/协议 reset | P1 观测与 Docker 冒烟；P2 深消息/脱敏/cancel；Oracle 另开 |

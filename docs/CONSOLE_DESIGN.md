@@ -4,6 +4,9 @@
 > 模型：**协议无关 · 实例中心 · 多实例多类型**。  
 > 适配器成熟度：MySQL / PostgreSQL 今日可启停；SQL Server 仅目录；Oracle stub。
 
+> **前后端完整架构（分层 / 契约 / 演进）**：见 [`CONSOLE_ARCHITECTURE.md`](CONSOLE_ARCHITECTURE.md)。  
+> 本文保留领域模型与 API 摘要；实现以架构文档 Phase A 为准。
+
 ## 1. 核心原则
 
 1. **一等实体 = 网关实例（Gateway Instance）**，不是「MySQL 管控台」或「PG 管控台」。
@@ -52,6 +55,7 @@ GatewayInstance
   passwordConfigured: bool   # 仅布尔；无明文
   bound: boolean             # 是否已绑定本进程 ProtocolAdapter
   metrics: map               # 绑定时有值
+  source: config|console     # YAML vs 管控台 H2
 ```
 
 **status 语义**
@@ -102,9 +106,11 @@ gateway:
 | GET | `/console/api/instances/{id}` | 单实例详情（无密钥） |
 | GET | `/console/api/instances/{id}/status` | 状态 |
 | GET | `/console/api/instances/{id}/metrics` | 指标 |
+| POST | `/console/api/instances` | 创建（H2 + runtime）；密码不回传 |
+| DELETE | `/console/api/instances/{id}` | 仅 source=console |
 | POST | `/console/api/instances/{id}/start` | 启（仅 bound+creatable） |
 | POST | `/console/api/instances/{id}/stop` | 停 |
-| GET | `/console/api/overview` | 总览聚合 |
+| GET | `/console/api/overview` | 总览；`metrics`=全实例求和，`legacyMetrics`=遗留 adapter；见架构文档 §2.5 |
 | GET | `/console/api/health` | 进程健康（聚合 bound 实例） |
 | GET | `/console/api/config/summary` | 非密钥摘要 |
 
@@ -121,7 +127,10 @@ gateway:
 3. **类型目录** — catalog 表
 4. **运维** — 配置摘要 / 与 `/gateway` 关系说明
 
-静态资源：`static/console/{index.html,console.css,console.js}`，无 Node 构建。
+前端：`console-ui/`（Vue 3 + TS + Vite，`base: '/console/'`）；`mvn package` 经
+`frontend-maven-plugin` 输出到 `target/classes/static/console/`。
+管控台创建的实例持久化在嵌入式 H2（`gateway.console.db-path`，默认 `./data/gateway-console`）；
+YAML `gateway.instances` 为启动引导，不可经 API 删除。
 
 ## 6. 安全
 

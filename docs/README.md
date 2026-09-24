@@ -10,6 +10,7 @@
 | [STATUS_AND_GAPS.md](STATUS_AND_GAPS.md) | **本分支功能现状与缺口（P0/P1/P2）** | 证据来自代码/测试；随实现更新 |
 | [OPS.md](OPS.md) | **运维开启清单 / 告警清单 / 集成跳过策略** | 面向部署；与 STATUS P2 对齐 |
 | [SQLSERVER_TDS_PLAN.md](SQLSERVER_TDS_PLAN.md) | **SQL Server（TDS）接入计划 P0/P1/P2** | 第三协议决策与脚手架边界 |
+| [CONSOLE_ARCHITECTURE.md](CONSOLE_ARCHITECTURE.md) | **管控台前后端架构（分层 / 契约 v1 / Vue+TS+Vite / 演进）** | Phase A 实现依据；自检通过 |
 | [CONSOLE_DESIGN.md](CONSOLE_DESIGN.md) | **数据库管控台设计（实例中心 · 协议无关）** | 类型目录 ≠ 实例注册表；多实例模型 |
 | [PROTOCOL_REFERENCE_TABLES.md](PROTOCOL_REFERENCE_TABLES.md) | 协议参考表镜像（能力位、命令码、错误码等） | **镜像**；真源是 `adapter.*` 枚举 |
 | [rules/database-protocol-rules.md](rules/database-protocol-rules.md) | 数据库 wire protocol 规则 | 描述协议应当如何，不是现状清单 |
