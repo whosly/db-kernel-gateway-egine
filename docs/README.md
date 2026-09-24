@@ -23,3 +23,4 @@
 
 - `../assets/mysql-gateway-flow.gif`
 - `../assets/postgresql-gateway-flow.gif`
+- `../assets/demo-mysql-pg-gateway.gif`（可选：集成/构建 PASS 录屏）

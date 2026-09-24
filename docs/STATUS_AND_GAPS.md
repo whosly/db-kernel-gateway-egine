@@ -1,6 +1,6 @@
 # 功能现状与缺口（本分支）
 
-> **分支**：`future/database-wire-protocol-foundation`（对照 commit `7a1ab3b`）  
+> **分支**：`future/database-wire-protocol-foundation`（对照 commit `a725050`）  
 > **更新原则**：只写有代码/测试/配置证据的结论；「规划中」不得写成「已实现」。  
 > **导航**：见 [README.md](README.md)。
 
@@ -9,7 +9,7 @@
 | 项 | 现状 | 证据 |
 |---|---|---|
 | 非集成 `@Test`/`@ParameterizedTest` 注解数 | **326**（历史基线 323 + `VirtualThreadExecutorsTest` 3） | `mvn test` Results；排除 `*IntegrationTest` |
-| 集成测试 | 14 条注解；默认 surefire **排除** `*IntegrationTest` | `pom.xml` surefire excludes；`-Pintegration-test` 才跑 |
+| 集成测试 | 14 条注解；默认 surefire **排除** `*IntegrationTest`；本机 `-Pintegration-test` **14/14** 绿（2026-09-24，Docker MySQL `:13308` + PG `:5432`） | `pom.xml` surefire excludes；`-Pintegration-test` 才跑 |
 | 本环境 `mvn test`（`JAVA_HOME`=JDK 17） | **BUILD SUCCESS：Tests run 326, Failures 0, Errors 0, Skipped 0** | 日志 `/workspace/repos/mvn-test-jdk17-after-vt-fix.log`；VT 经反射，JDK 17 回退固定池 |
 | `pom.xml` 编译目标 | `maven.compiler.source/target=17` | **保持 17**；不升到 21 |
 
@@ -61,7 +61,7 @@ Spring 实际读取的键（`@Value`）与模板一致的是嵌套 `gateway.targ
 |---|---|---|---|---|
 | P0-1 | JDK 17 与虚拟线程 API | **fixed** | `VirtualThreadExecutors` 用 MethodHandles 反射调用 `ofVirtual` / `newThreadPerTaskExecutor`；`AbstractProtocolAdapter` / `DuplexRelay` 无直接符号；`pom` 保持 17；JDK 17 回退平台池 | 已落地反射方案；JDK 21+ 运行时仍可用 VT；勿把 `pom` 升到 21 |
 | P0-2 | `application.yml` 与 `GatewayConfig` 键不一致 | **partial/bug** | yml：`target-host`、`idle-timeout-millis`；代码：`gateway.target.host`、`idle-timeout-seconds` | 统一为嵌套 `target.*` + `idle-timeout-seconds`（与模板一致），或改 `@Value` 兼容扁平键 |
-| P0-3 | 文档宣称的审计验收测试缺失 | **missing** | README 提到 `AuditTrailAcceptanceTest` / `shipsEveryStatement...`；`src/test` **无** audit 测试类 | 补 `AuditSpool`/`AuditShipper`/`SpoolingTrafficObserver` 单元与并发验收，或从 README 删除虚假引用 |
+| P0-3 | 审计专用验收测试缺失 | **missing** | `src/test` **无** audit 测试类；README 已改为明确「验收测试仍缺」、不再引用 `AuditTrailAcceptanceTest` | 补 `AuditSpool`/`AuditShipper`/`SpoolingTrafficObserver` 单元与并发验收 |
 | P0-4 | 风控默认全放行且无装配 | **partial** | `DatabaseRiskPolicy.allowAll()`；`GatewayConfig` 不注入策略 | 至少提供可配置拒绝清单（语句类型/关键字）或文档明确「默认无风控」并提供示例 `@Bean` |
 
 ### P1（协议完整度 / 安全边界）
