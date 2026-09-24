@@ -14,6 +14,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -99,11 +100,7 @@ public class DuplexRelay {
 
         CountDownLatch firstDirectionDone = new CountDownLatch(1);
         AtomicReference<IOException> failure = new AtomicReference<>();
-        ExecutorService executorService = Executors.newFixedThreadPool(2, runnable -> {
-            Thread thread = new Thread(runnable, "duplex-relay-" + sessionId);
-            thread.setDaemon(true);
-            return thread;
-        });
+        ExecutorService executorService = newRelayExecutor(sessionId);
 
         Future<?> clientToTarget = executorService.submit(() ->
                 copy(TrafficDirection.CLIENT_TO_TARGET, "client->target", clientSocket, targetSocket,
@@ -157,9 +154,6 @@ public class DuplexRelay {
         }
     }
 
-    /**
-     * Transparent path: every read is inspected and written exactly as it arrived.
-     */
     private void copyImmediately(TrafficDirection trafficDirection, String direction, InputStream inputStream,
                                  OutputStream outputStream, Socket clientSocket) throws IOException {
         byte[] buffer = new byte[bufferSize];
@@ -172,15 +166,10 @@ public class DuplexRelay {
         }
     }
 
-    /**
-     * Rewrite path: only whole messages are inspected, so the tail of a read that
-     * does not complete a message is held until the rest of it arrives.
-     */
     private void copyWholeMessages(TrafficDirection trafficDirection, String direction, Socket source,
                                    InputStream inputStream, OutputStream outputStream, Socket clientSocket,
                                    MessageBounder messageBounder) throws IOException {
         MessageHoldBuffer holdBuffer = new MessageHoldBuffer(messageBounder, rewriteLimits);
-        // The client socket may carry the adapter's idle timeout; restore it exactly.
         int originalSoTimeout = source.getSoTimeout();
         byte[] buffer = new byte[bufferSize];
         boolean flushHeldTail = false;
@@ -192,7 +181,6 @@ public class DuplexRelay {
                     count = inputStream.read(buffer);
                 } catch (SocketTimeoutException timeout) {
                     if (!holdBuffer.isHolding()) {
-                        // Not a hold we asked for: the socket's own timeout still applies.
                         throw timeout;
                     }
                     if (rewriteLimits.exceedsHoldTime(holdBuffer.heldMillis())) {
@@ -223,12 +211,6 @@ public class DuplexRelay {
                     continue;
                 }
 
-                /*
-                 * One message per inspection. The bounder reported where each message
-                 * ends, and an interceptor that must rewrite a whole message can only
-                 * reason about exactly one of them: handing it two packets at once
-                 * would make it parse values across a message boundary.
-                 */
                 boolean keepRelaying = true;
                 int start = 0;
                 for (int end : window.messageEnds()) {
@@ -247,11 +229,6 @@ public class DuplexRelay {
         } finally {
             restoreSoTimeout(source, originalSoTimeout);
             if (flushHeldTail) {
-                /*
-                 * The session ended on a message boundary that never arrived. A
-                 * truncated tail cannot be rewritten, and dropping bytes would be
-                 * worse than forwarding what the peer actually sent.
-                 */
                 byte[] tail = holdBuffer.drain();
                 if (tail.length > 0) {
                     outputStream.write(tail);
@@ -261,11 +238,6 @@ public class DuplexRelay {
         }
     }
 
-    /**
-     * Bounds how long a {@code read} may block while a message is being assembled,
-     * so the hold timeout is enforced even when the rest of the message never
-     * arrives.
-     */
     private void applyHoldReadTimeout(Socket source, MessageHoldBuffer holdBuffer, int originalSoTimeout)
             throws SocketException {
         if (!holdBuffer.isHolding()) {
@@ -288,10 +260,6 @@ public class DuplexRelay {
         }
     }
 
-    /**
-     * Inspects one message and writes it. Returns {@code false} when the connection
-     * must stop being relayed.
-     */
     private boolean dispatch(WireMessage message, String direction, OutputStream outputStream, Socket clientSocket)
             throws IOException {
         TrafficDecision decision = trafficInspector.inspect(message);
@@ -308,14 +276,6 @@ public class DuplexRelay {
         return true;
     }
 
-    /**
-     * Writes the decided payload to the destination.
-     *
-     * <p>Without a rewrite the bytes that arrived are written straight from the
-     * read buffer: no copy and no re-encoding. Only a mutated message is written
-     * from its replacement, which is the invariant that keeps transparent
-     * forwarding byte exact (rule 2.10).</p>
-     */
     private static void write(OutputStream outputStream, WireMessage received, TrafficDecision decision)
             throws IOException {
         WireMessage outgoing = decision.message();
@@ -327,11 +287,6 @@ public class DuplexRelay {
         outputStream.flush();
     }
 
-    /**
-     * Rejects a message the gateway could not assemble in time. The client gets a
-     * protocol-native error rather than the unmasked bytes, because forwarding them
-     * would silently skip the rewrite the deployment asked for (rule 8.2).
-     */
     private void rejectUnassembled(String direction, Socket clientSocket, MessageHoldBuffer holdBuffer) {
         log.warn("Relay {} held a partial message for {} ms for session {}; rejecting it instead of "
                         + "forwarding it unrewritten",
@@ -339,9 +294,6 @@ public class DuplexRelay {
         sendGatewayError(clientSocket, GatewayErrorMapping.RESOURCE_EXHAUSTED);
     }
 
-    /**
-     * Answers the client with a protocol-native gateway error.
-     */
     private void sendGatewayError(Socket clientSocket, GatewayErrorMapping mapping) {
         if (errorResponder == null) {
             log.warn("No protocol error responder configured for session {}; closing without response", sessionId);
@@ -360,6 +312,22 @@ public class DuplexRelay {
             future.get(500, TimeUnit.MILLISECONDS);
         } catch (Exception ignored) {
             future.cancel(true);
+        }
+    }
+
+
+    private static ExecutorService newRelayExecutor(String sessionId) {
+        try {
+            ThreadFactory virtualFactory = Thread.ofVirtual()
+                    .name("duplex-relay-" + sessionId + "-", 0)
+                    .factory();
+            return Executors.newThreadPerTaskExecutor(virtualFactory);
+        } catch (Throwable unsupported) {
+            return Executors.newFixedThreadPool(2, runnable -> {
+                Thread thread = new Thread(runnable, "duplex-relay-" + sessionId);
+                thread.setDaemon(true);
+                return thread;
+            });
         }
     }
 
