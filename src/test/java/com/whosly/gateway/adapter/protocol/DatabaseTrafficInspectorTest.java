@@ -108,6 +108,47 @@ class DatabaseTrafficInspectorTest {
         assertThat(decision.action()).isEqualTo(TrafficAction.DENY);
     }
 
+
+    @Test
+    void deniesOpaqueTunnelWhenCleartextInspectionIsRequired() {
+        GatewayRuntimeMetrics metrics = new GatewayRuntimeMetrics();
+        DatabaseTrafficInspector inspector = new DatabaseTrafficInspector(
+                (direction, bytes, offset, length) -> List.of(),
+                DatabaseTrafficObserver.noop(),
+                DatabaseRiskPolicy.allowAll(),
+                null,
+                null,
+                () -> true,
+                true,
+                metrics);
+
+        TrafficDecision decision = inspector.intercept(message(TrafficDirection.CLIENT_TO_TARGET));
+
+        assertThat(decision.action()).isEqualTo(TrafficAction.DENY);
+        assertThat(metrics.opaqueTunnelsEntered()).isEqualTo(1);
+        assertThat(metrics.opaqueTunnelsDenied()).isEqualTo(1);
+    }
+
+    @Test
+    void forwardsOpaqueTunnelWhenCleartextInspectionIsNotRequired() {
+        GatewayRuntimeMetrics metrics = new GatewayRuntimeMetrics();
+        DatabaseTrafficInspector inspector = new DatabaseTrafficInspector(
+                (direction, bytes, offset, length) -> List.of(),
+                DatabaseTrafficObserver.noop(),
+                DatabaseRiskPolicy.allowAll(),
+                null,
+                null,
+                () -> true,
+                false,
+                metrics);
+
+        TrafficDecision decision = inspector.intercept(message(TrafficDirection.CLIENT_TO_TARGET));
+
+        assertThat(decision.action()).isEqualTo(TrafficAction.FORWARD);
+        assertThat(metrics.opaqueTunnelsEntered()).isEqualTo(1);
+        assertThat(metrics.opaqueTunnelsDenied()).isZero();
+    }
+
     private static WireMessage message(TrafficDirection direction) {
         return RawBackedMessage.of(direction, new byte[]{1, 2, 3}, 0, 3);
     }

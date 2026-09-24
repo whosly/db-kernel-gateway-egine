@@ -80,12 +80,19 @@ class MySQLBinaryValuesTest {
         assertThatThrownBy(() -> MySQLBinaryValues.encode(column("price", "decimal"), text("0")))
                 .isInstanceOf(MaskingException.class)
                 .hasMessageContaining("Packed decimal");
-        for (String typeName : new String[]{"datetime", "timestamp", "date", "time", "bit", "geometry"}) {
+        for (String typeName : new String[]{"datetime", "timestamp", "date", "time", "geometry"}) {
             assertThatThrownBy(() -> MySQLBinaryValues.encode(column("column", typeName), text("0")))
                     .as("binary %s", typeName)
                     .isInstanceOf(MaskingException.class)
                     .hasMessageContaining("cannot carry a non-null masked value");
         }
+    }
+
+    @Test
+    void writesBitValuesAsLengthEncodedBytes() {
+        assertThat(MySQLBinaryValues.encode(column("flags", "bit"), MaskedValue.of(new byte[]{0x01})))
+                .containsExactly(0x01, 0x01);
+        assertThat(MySQLBinaryValues.valueLength("bit", new byte[]{0x01, 0x01}, 0, 2)).contains(2);
     }
 
     @Test
@@ -110,7 +117,7 @@ class MySQLBinaryValuesTest {
         assertThat(length("varchar", longValue)).contains(303);
         assertThat(length("datetime", new byte[]{7, 1, 2, 3, 4, 5, 6, 7})).contains(8);
         // Unknown layouts report nothing, which is what makes the row unparseable.
-        assertThat(length("bit", new byte[]{1})).isEmpty();
+        assertThat(length("bit", new byte[]{0x01, 0x7F})).contains(2);
         assertThat(length("geometry", new byte[]{1})).isEmpty();
     }
 

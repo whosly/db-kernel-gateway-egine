@@ -72,7 +72,7 @@ public class MySqlProtocolAdapter extends AbstractProtocolAdapter {
                     databaseRiskPolicy,
                     session,
                     new StatementClassifier(sqlParser),
-                    null,
+                    extractor::isOpaqueTunnel,
                     isRequireCleartextInspection(),
                     getRuntimeMetrics());
             MessagePipeline pipeline = maskingEngine.isActive()

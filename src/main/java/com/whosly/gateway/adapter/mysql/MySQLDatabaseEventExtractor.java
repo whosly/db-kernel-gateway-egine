@@ -9,7 +9,9 @@ import com.whosly.gateway.masking.ColumnMetadata;
 import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicLong;
@@ -24,7 +26,8 @@ import org.slf4j.LoggerFactory;
  * tracks the two directions independently:</p>
  * <ul>
  *   <li>client to target: connection phase (handshake response), then command
- *       phase (COM_QUERY / COM_STMT_PREPARE SQL and COM_INIT_DB database);</li>
+ *       phase (COM_QUERY / COM_STMT_PREPARE SQL, COM_STMT_EXECUTE statement id /
+ *       bound-param metadata when known, and COM_INIT_DB database);</li>
  *   <li>target to client: the authentication OK that ends the connection phase,
  *       then the response packets needed to keep transaction state real.</li>
  * </ul>
@@ -148,6 +151,12 @@ public class MySQLDatabaseEventExtractor {
     private MySQLPreparePhase preparePhase = MySQLPreparePhase.HEADER;
     /** Parameter types of the previous COM_QUERY, reused when new_params_bound_flag is 0. */
     private int[] lastQueryAttributeTypes = new int[0];
+    /** Parameter counts from COM_STMT_PREPARE OK, keyed by statement id. */
+    private final Map<Integer, Integer> preparedStatementParamCounts = new HashMap<>();
+    /** Last bound parameter types per statement id (when new_params_bound_flag was 1). */
+    private final Map<Integer, int[]> preparedStatementParamTypes = new HashMap<>();
+    /** Statement id announced by the prepare-ok currently being consumed. */
+    private int preparingStatementId = -1;
     /** Count of sequence/malformed anomalies; forwarding is never affected by them. */
     private final AtomicLong protocolAnomalies = new AtomicLong();
     private final AtomicBoolean protocolAnomalyLogged = new AtomicBoolean();
@@ -466,6 +475,9 @@ public class MySQLDatabaseEventExtractor {
 
         // COM_RESET_CONNECTION clears session state without re-authenticating.
         if (command == MySQLCommandType.COM_RESET_CONNECTION) {
+            preparedStatementParamCounts.clear();
+            preparedStatementParamTypes.clear();
+            preparingStatementId = -1;
             if (session != null) {
                 session.resetObservedState();
             }
@@ -479,6 +491,7 @@ public class MySQLDatabaseEventExtractor {
         }
         // COM_STMT_CLOSE drops one prepared statement and draws no response.
         if (command == MySQLCommandType.COM_STMT_CLOSE) {
+            forgetPreparedStatement(packet, payloadOffset + 1, payloadOffset + payloadLength);
             if (session != null) {
                 session.markPreparedStatementClosed();
             }
@@ -490,7 +503,12 @@ public class MySQLDatabaseEventExtractor {
             return Optional.empty();
         }
 
-        // Only text SQL and prepared-statement SQL are audited for now.
+        if (command == MySQLCommandType.COM_STMT_EXECUTE) {
+            return observeStmtExecute(packet, payloadOffset + 1, payloadOffset + payloadLength);
+        }
+
+        // Text SQL and prepared-statement SQL are audited; other response-bearing
+        // commands contribute only to session/response observation.
         if (!expectsResponse
                 || (command != MySQLCommandType.COM_QUERY && command != MySQLCommandType.COM_STMT_PREPARE)) {
             return Optional.empty();
@@ -882,10 +900,13 @@ public class MySQLDatabaseEventExtractor {
                     return;
                 }
                 // status (1), statement_id (4), num_columns (2), num_params (2), reserved (1), ...
+                preparingStatementId = safeLongToInt(
+                        readLittleEndian(packet, payloadOffset + 1, 4, payloadOffset + payloadLength));
                 prepareColumnDefinitions = safeLongToInt(
                         readLittleEndian(packet, payloadOffset + 5, 2, payloadOffset + payloadLength));
                 prepareParamDefinitions = safeLongToInt(
                         readLittleEndian(packet, payloadOffset + 7, 2, payloadOffset + payloadLength));
+                preparedStatementParamCounts.put(preparingStatementId, prepareParamDefinitions);
                 if (session != null) {
                     // The statement now exists server-side until it is closed.
                     session.markPreparedStatementOpened();
@@ -1216,6 +1237,127 @@ public class MySQLDatabaseEventExtractor {
                 session.putAttribute("client.database", database.value());
             }
         }
+    }
+
+
+    /**
+     * Observes {@code COM_STMT_EXECUTE} without mutating bytes.
+     *
+     * <p>Always records the statement id when the header is present. Bound
+     * parameter <em>types</em> are summarised when the prepare-ok param count is
+     * known and the binary layout parses; raw parameter values are never copied
+     * into the statement text (they may be credentials or PII). Forwarding is
+     * unchanged whether or not observation succeeds.</p>
+     */
+    private Optional<DatabaseTrafficEvent> observeStmtExecute(byte[] packet, int offset, int endExclusive) {
+        if (offset + 9 > endExclusive) {
+            return Optional.empty();
+        }
+        int statementId = safeLongToInt(readLittleEndian(packet, offset, 4, endExclusive));
+        int flags = packet[offset + 4] & 0xFF;
+        int cursor = offset + 9;
+        Integer paramCount = preparedStatementParamCounts.get(statementId);
+
+        DatabaseTrafficEvent.Builder builder = DatabaseTrafficEvent.builder(
+                        protocolName, sessionId, MySQLCommandType.COM_STMT_EXECUTE.name(),
+                        "EXECUTE statement_id=" + statementId)
+                .attribute("statement_id", Integer.toString(statementId))
+                .attribute("flags", Integer.toString(flags));
+
+        if (paramCount == null) {
+            // Prepare was not observed on this session; still report the statement id.
+            builder.attribute("param_count", "unknown");
+            return Optional.of(builder.build());
+        }
+
+        builder.attribute("param_count", Integer.toString(paramCount));
+        if (paramCount <= 0) {
+            return Optional.of(builder.build());
+        }
+
+        int nullBitmapLength = (paramCount + 7) / 8;
+        if (cursor + nullBitmapLength + 1 > endExclusive) {
+            return Optional.of(builder.build());
+        }
+        cursor += nullBitmapLength;
+        int newParamsBoundFlag = packet[cursor++] & 0xFF;
+        builder.attribute("new_params_bound", Integer.toString(newParamsBoundFlag));
+
+        int[] parameterTypes;
+        if (newParamsBoundFlag != 0) {
+            parameterTypes = new int[paramCount];
+            for (int index = 0; index < paramCount; index++) {
+                if (cursor + 2 > endExclusive) {
+                    return Optional.of(builder.build());
+                }
+                parameterTypes[index] = packet[cursor] & 0xFF;
+                cursor += 2;
+            }
+            preparedStatementParamTypes.put(statementId, parameterTypes.clone());
+        } else {
+            parameterTypes = preparedStatementParamTypes.get(statementId);
+            if (parameterTypes == null || parameterTypes.length != paramCount) {
+                return Optional.of(builder.build());
+            }
+        }
+
+        StringBuilder typeSummary = new StringBuilder();
+        for (int index = 0; index < parameterTypes.length; index++) {
+            if (index > 0) {
+                typeSummary.append(',');
+            }
+            typeSummary.append(mysqlTypeLabel(parameterTypes[index]));
+        }
+        builder.attribute("param_types", typeSummary.toString());
+
+        // Walk binary values only to prove the layout is coherent; do not capture them.
+        int nullBitmapOffset = offset + 9;
+        for (int parameterIndex = 0; parameterIndex < paramCount; parameterIndex++) {
+            if (isNullParameter(packet, nullBitmapOffset, parameterIndex)) {
+                continue;
+            }
+            cursor = skipBinaryProtocolValue(packet, cursor, endExclusive, parameterTypes[parameterIndex]);
+            if (cursor > endExclusive) {
+                break;
+            }
+        }
+        return Optional.of(builder.build());
+    }
+
+    private void forgetPreparedStatement(byte[] packet, int offset, int endExclusive) {
+        if (offset + 4 > endExclusive) {
+            return;
+        }
+        int statementId = safeLongToInt(readLittleEndian(packet, offset, 4, endExclusive));
+        preparedStatementParamCounts.remove(statementId);
+        preparedStatementParamTypes.remove(statementId);
+    }
+
+    private static String mysqlTypeLabel(int type) {
+        return switch (type) {
+            case MYSQL_TYPE_DECIMAL -> "decimal";
+            case MYSQL_TYPE_TINY -> "tinyint";
+            case MYSQL_TYPE_SHORT -> "smallint";
+            case MYSQL_TYPE_LONG -> "int";
+            case MYSQL_TYPE_FLOAT -> "float";
+            case MYSQL_TYPE_DOUBLE -> "double";
+            case MYSQL_TYPE_NULL -> "null";
+            case MYSQL_TYPE_TIMESTAMP -> "timestamp";
+            case MYSQL_TYPE_LONGLONG -> "bigint";
+            case MYSQL_TYPE_INT24 -> "mediumint";
+            case MYSQL_TYPE_DATE -> "date";
+            case MYSQL_TYPE_TIME -> "time";
+            case MYSQL_TYPE_DATETIME -> "datetime";
+            case MYSQL_TYPE_YEAR -> "year";
+            case MYSQL_TYPE_VARCHAR -> "varchar";
+            case MYSQL_TYPE_BIT -> "bit";
+            case MYSQL_TYPE_JSON -> "json";
+            case MYSQL_TYPE_NEWDECIMAL -> "decimal";
+            case MYSQL_TYPE_BLOB -> "blob";
+            case MYSQL_TYPE_VAR_STRING -> "var_string";
+            case MYSQL_TYPE_STRING -> "string";
+            default -> "type_" + type;
+        };
     }
 
     private void observeInitDb(byte[] packet, int offset, int endExclusive) {

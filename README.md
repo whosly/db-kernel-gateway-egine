@@ -55,7 +55,7 @@
 | 大包重组 / 流式识别 | **已实现** | MySQL 大包；`LOAD DATA LOCAL` / PG `COPY` 期间不解析命令 |
 | PG `COPY` 流转发 | **已实现** | 集成 live-proven |
 | 结果集脱敏（happy path） | **已接线·默认关** | 无 `MaskingRule` 时逐字节透明；有规则时 fail-closed 改写；文本/常见二进制 happy path 集成 live-proven |
-| 结果集脱敏（类型边界） | **部分** | decimal/时间/`bit`/`geometry`/未知类型等非空改写常拒绝；见下文边界摘要 |
+| 结果集脱敏（类型边界） | **部分** | decimal/时间/`geometry`/未知类型等非空改写常拒绝；MySQL `bit` 与 PG 整数/bool/浮点二进制可改写；见 STATUS §4.2 |
 | 审计 spool / JDBC 搬运 | **已接线·默认关** | fail-closed；**专用单元/验收测试仍缺**（STATUS P0-3）——勿假定存在 `AuditTrailAcceptanceTest` |
 | 连接上限 / CIDR / idle | **已实现** | `max-connections`、`allowed-client-cidrs`、`idle-timeout-seconds` |
 | 后端 failover 列表 | **部分** | `backend-endpoints` **仅顺序 failover**；无按库/用户/权重路由 |
@@ -71,8 +71,8 @@
 ### 结果集脱敏边界（摘要）
 
 - **一列一规则**；未命中列保持原值；元数据不全或无法表示改写值 → **拒绝结果集**。
-- MySQL：文本行 + 预处理二进制行（长度前缀类型与常见整数/浮点）；`decimal`/时间/`bit`/`geometry`/未知类型的非空改写拒绝。
-- PostgreSQL：文本格式 + 可复现二进制（如 `text`/`bytea`/`jsonb` 等）；定长数值/时间/`uuid`/未知 OID 的非空改写拒绝；置 NULL 对任意类型可用。
+- MySQL：文本行 + 预处理二进制行（长度前缀类型、常见整数/浮点、`bit`）；`decimal`/时间/`geometry`/未知类型的非空改写拒绝。
+- PostgreSQL：文本格式 + 可复现二进制（`text`/`bytea`/`json(b)`、`int2/4/8`、`bool`、`float4/8`）；`numeric`/时间/`uuid`/未知 OID 的非空改写拒绝；置 NULL 对任意类型可用。
 - `NullingRule` **只匹配可空列**：MySQL 字面量列常为 `NOT NULL`，置 NULL 规则不会生效——需固定值/哈希/加密等。
 
 细节以代码为准；排期缺口见 STATUS（P1-5）。

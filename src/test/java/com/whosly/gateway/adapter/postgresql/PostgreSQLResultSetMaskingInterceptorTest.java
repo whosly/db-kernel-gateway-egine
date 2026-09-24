@@ -183,7 +183,7 @@ class PostgreSQLResultSetMaskingInterceptorTest {
         PostgreSQLDatabaseEventExtractor extractor = extractor();
         PostgreSQLResultSetMaskingInterceptor interceptor = interceptor(extractor, numericRule());
         observe(extractor, rowDescription(
-                new PostgreSQLColumnMetadata.Field("age", 0, PostgreSQLTypeOid.INT4.getOid(), 1)));
+                new PostgreSQLColumnMetadata.Field("age", 0, PostgreSQLTypeOid.NUMERIC.getOid(), 1)));
 
         byte[] row = dataRow(bytes("42"));
         observe(extractor, row);
@@ -191,7 +191,7 @@ class PostgreSQLResultSetMaskingInterceptorTest {
         TrafficDecision decision = interceptor.intercept(
                 RawBackedMessage.of(TrafficDirection.TARGET_TO_CLIENT, row, 0, row.length));
 
-        // The rule can produce a NUMERIC value, but an int4's binary layout is not
+        // The rule can produce a text mask, but numeric's binary layout is not
         // reproduced here, so the row is refused rather than sent as garbage.
         assertThat(decision.action()).isEqualTo(TrafficAction.DENY);
     }

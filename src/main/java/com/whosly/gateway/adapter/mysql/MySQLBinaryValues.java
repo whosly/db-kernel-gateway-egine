@@ -49,12 +49,14 @@ public final class MySQLBinaryValues {
      *
      * <p>{@code decimal} is here because a packed-decimal value is length-prefixed like
      * a string; its contents are not reproducible, so it can be read but not rewritten.
-     * The row parser still verifies that it consumed the payload exactly, which is what
-     * keeps this reading of the layout checkable rather than assumed.</p>
+     * {@code bit} is length-prefixed like a blob and <em>can</em> be rewritten as raw
+     * length-encoded bytes. The row parser still verifies that it consumed the payload
+     * exactly, which is what keeps this reading of the layout checkable rather than
+     * assumed.</p>
      */
     private static final Set<String> LENGTH_ENCODED_TYPES = Set.of(
             "varchar", "varbinary_or_varchar", "binary_or_char", "tinyblob", "mediumblob",
-            "longblob", "blob", "json", "enum", "set", "decimal");
+            "longblob", "blob", "json", "enum", "set", "decimal", "bit");
 
     /** Types prefixed by one byte giving the length of what follows. */
     private static final Set<String> LENGTH_BYTE_PREFIXED_TYPES = Set.of(
