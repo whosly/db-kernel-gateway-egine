@@ -35,6 +35,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import com.whosly.gateway.console.SupportedDatabaseCatalog;
+import com.whosly.gateway.console.persist.ConsoleInstanceStore;
 import com.whosly.gateway.runtime.GatewayListenerRuntime;
 import org.springframework.context.annotation.Primary;
 import org.springframework.context.annotation.Configuration;
@@ -327,8 +328,10 @@ public class GatewayConfig implements DisposableBean {
     public GatewayListenerRuntime gatewayListenerRuntime(
             ProtocolAdapterRegistry protocolAdapterRegistry,
             GatewayInstanceProperties instanceProperties,
-            SupportedDatabaseCatalog catalog) {
-        return new GatewayListenerRuntime(this, protocolAdapterRegistry, instanceProperties, catalog);
+            SupportedDatabaseCatalog catalog,
+            ConsoleInstanceStore consoleInstanceStore) {
+        return new GatewayListenerRuntime(
+                this, protocolAdapterRegistry, instanceProperties, catalog, consoleInstanceStore);
     }
 
     /**

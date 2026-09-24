@@ -6,9 +6,8 @@ target/
 .classpath
 .project
 
-# Node (tooling only)
-package-lock.json
-node_modules
+# Node (root tooling only; console-ui keeps its lockfile)
+/node_modules/
 
 # IDE
 .settings/
@@ -66,3 +65,12 @@ replay_pid*
 # NOTE: docs/ is intentionally NOT ignored.
 # docs/rules/*.md are project governance rules and docs/PROTOCOL_REFERENCE_TABLES.md
 # is the mirrored reference table index; all of them must stay version controlled.
+
+# Console UI (Vue / Vite)
+console-ui/node_modules/
+console-ui/dist/
+# frontend-maven-plugin downloaded Node
+target/frontend/
+
+# Console control-plane H2 files (may contain lab passwords)
+/data/

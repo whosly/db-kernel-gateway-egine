@@ -23,6 +23,10 @@
         <mockito.version>5.3.1</mockito.version>
         <mysql.version>8.0.33</mysql.version>
         <postgresql.version>42.6.2</postgresql.version>
+        <nodejs.version>v20.18.1</nodejs.version>
+        <npm.version>10.8.2</npm.version>
+        <skip.frontend>false</skip.frontend>
+        <console.ui.dir>${project.basedir}/console-ui</console.ui.dir>
     </properties>
 
     <dependencyManagement>
@@ -54,6 +58,12 @@
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
+
+        <!-- Console control-plane DB (H2 file) for runtime-created instances -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-jdbc</artifactId>
         </dependency>
 
         <!-- Alibaba Druid SQL Parser -->
@@ -123,11 +133,12 @@
             <scope>test</scope>
         </dependency>
 
-        <!-- H2 lets the JDBC audit sink be exercised against real SQL, without a service -->
+        <!-- H2: console control-plane persistence (file mode in app; mem in unit tests).
+             Also used by JDBC audit sink tests. NOT the proxied business database. -->
         <dependency>
             <groupId>com.h2database</groupId>
             <artifactId>h2</artifactId>
-            <scope>test</scope>
+            <scope>runtime</scope>
         </dependency>
         <dependency>
             <groupId>org.mockito</groupId>
@@ -173,6 +184,48 @@
                         <exclude>**/*IntegrationTest.java</exclude>
                     </excludes>
                 </configuration>
+            </plugin>
+
+            <!-- Build Vue console-ui into target/classes/static/console (package only) -->
+            <plugin>
+                <groupId>com.github.eirslett</groupId>
+                <artifactId>frontend-maven-plugin</artifactId>
+                <version>1.15.1</version>
+                <configuration>
+                    <workingDirectory>${console.ui.dir}</workingDirectory>
+                    <installDirectory>${project.build.directory}/frontend</installDirectory>
+                    <skip>${skip.frontend}</skip>
+                </configuration>
+                <executions>
+                    <execution>
+                        <id>install-node-and-npm</id>
+                        <goals><goal>install-node-and-npm</goal></goals>
+                        <phase>prepare-package</phase>
+                        <configuration>
+                            <nodeVersion>${nodejs.version}</nodeVersion>
+                            <npmVersion>${npm.version}</npmVersion>
+                        </configuration>
+                    </execution>
+                    <execution>
+                        <id>npm-ci</id>
+                        <goals><goal>npm</goal></goals>
+                        <phase>prepare-package</phase>
+                        <configuration>
+                            <arguments>ci</arguments>
+                        </configuration>
+                    </execution>
+                    <execution>
+                        <id>npm-build</id>
+                        <goals><goal>npm</goal></goals>
+                        <phase>prepare-package</phase>
+                        <configuration>
+                            <arguments>run build</arguments>
+                            <environmentVariables>
+                                <CONSOLE_OUT_DIR>${project.build.outputDirectory}/static/console</CONSOLE_OUT_DIR>
+                            </environmentVariables>
+                        </configuration>
+                    </execution>
+                </executions>
             </plugin>
         </plugins>
     </build>

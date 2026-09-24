@@ -7,12 +7,15 @@ import com.whosly.gateway.config.GatewayConfig;
 import com.whosly.gateway.console.GatewayInstance;
 import com.whosly.gateway.console.GatewayInstanceRegistry;
 import com.whosly.gateway.console.SupportedDatabaseCatalog;
+import com.whosly.gateway.runtime.GatewayListenerRuntime.CreateInstanceRequest;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
@@ -96,6 +99,49 @@ public class ConsoleApiController {
         return instanceRegistry.stop(id);
     }
 
+    /**
+     * Create a console-managed instance: persist to H2, bind ProtocolAdapter, optionally auto-start.
+     * Password is accepted but never echoed.
+     */
+    @PostMapping("/instances")
+    @ResponseStatus(HttpStatus.CREATED)
+    public GatewayInstance createInstance(@RequestBody CreateInstanceBody body) {
+        if (body == null || body.dbType() == null || body.dbType().isBlank()) {
+            throw new IllegalArgumentException("dbType is required");
+        }
+        if (body.listenPort() == null) {
+            throw new IllegalArgumentException("listenPort is required");
+        }
+        if (body.targetHost() == null || body.targetHost().isBlank()) {
+            throw new IllegalArgumentException("targetHost is required");
+        }
+        if (body.targetPort() == null) {
+            throw new IllegalArgumentException("targetPort is required");
+        }
+        CreateInstanceRequest request = new CreateInstanceRequest(
+                body.id(),
+                body.name(),
+                body.dbType(),
+                body.listenHost(),
+                body.listenPort(),
+                body.targetHost(),
+                body.targetPort(),
+                body.targetDatabase(),
+                body.targetUsername(),
+                body.targetPassword(),
+                body.enabled());
+        return instanceRegistry.create(request);
+    }
+
+    @DeleteMapping("/instances/{id}")
+    public Map<String, Object> deleteInstance(@PathVariable("id") String id) {
+        Map<String, Object> result = instanceRegistry.remove(id);
+        if (Boolean.FALSE.equals(result.get("ok"))) {
+            throw new IllegalArgumentException(String.valueOf(result.get("message")));
+        }
+        return result;
+    }
+
     @GetMapping("/health")
     public Map<String, Object> health() {
         List<GatewayInstance> instances = instanceRegistry.listInstances();
@@ -137,6 +183,7 @@ public class ConsoleApiController {
             row.put("listenPort", i.listenPort());
             row.put("status", i.status().name());
             row.put("bound", i.bound());
+            row.put("source", i.source());
             row.put("passwordConfigured", i.passwordConfigured());
             return row;
         }).toList());
@@ -162,16 +209,33 @@ public class ConsoleApiController {
         body.put("health", health());
         body.put("instances", instances);
         body.put("databases", catalog.listAll());
-        body.put("metrics", runtimeMetrics.snapshot());
+        body.put("metrics", aggregateInstanceMetrics(instances));
+        body.put("metricsScope", "all-instances");
+        body.put("legacyMetrics", runtimeMetrics.snapshot());
         body.put("config", configSummary());
         body.put("byStatus", instances.stream()
                 .collect(Collectors.groupingBy(i -> i.status().name(), Collectors.counting())));
         return body;
     }
 
+    /** Sum per-instance metric maps for control-plane KPIs. */
+    static Map<String, Long> aggregateInstanceMetrics(List<GatewayInstance> instances) {
+        Map<String, Long> summed = new LinkedHashMap<>();
+        for (GatewayInstance instance : instances) {
+            Map<String, Long> metrics = instance.metrics();
+            if (metrics == null || metrics.isEmpty()) {
+                continue;
+            }
+            for (Map.Entry<String, Long> entry : metrics.entrySet()) {
+                summed.merge(entry.getKey(), entry.getValue() != null ? entry.getValue() : 0L, Long::sum);
+            }
+        }
+        return Map.copyOf(summed);
+    }
+
     @ExceptionHandler(IllegalArgumentException.class)
-    @ResponseStatus(HttpStatus.NOT_FOUND)
-    public Map<String, Object> notFound(IllegalArgumentException ex) {
+    @ResponseStatus(HttpStatus.BAD_REQUEST)
+    public Map<String, Object> badRequest(IllegalArgumentException ex) {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("ok", false);
         body.put("message", ex.getMessage());
@@ -184,5 +248,23 @@ public class ConsoleApiController {
 
     private static String blankToNull(String value) {
         return hasText(value) ? value : null;
+    }
+
+    /**
+     * JSON body for POST /instances. Password accepted, never returned on GatewayInstance.
+     */
+    public record CreateInstanceBody(
+            String id,
+            String name,
+            String dbType,
+            String listenHost,
+            Integer listenPort,
+            String targetHost,
+            Integer targetPort,
+            String targetDatabase,
+            String targetUsername,
+            String targetPassword,
+            Boolean enabled
+    ) {
     }
 }

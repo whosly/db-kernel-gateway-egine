@@ -2,6 +2,7 @@ package com.whosly.gateway.console;
 
 import com.whosly.gateway.console.GatewayInstance.InstanceStatus;
 import com.whosly.gateway.runtime.GatewayListenerRuntime;
+import com.whosly.gateway.runtime.GatewayListenerRuntime.CreateInstanceRequest;
 import com.whosly.gateway.runtime.GatewayListenerRuntime.ManagedListener;
 import org.springframework.stereotype.Service;
 
@@ -49,6 +50,14 @@ public class GatewayInstanceRegistry {
 
     public Map<String, Object> stop(String id) {
         return listenerRuntime.stop(id);
+    }
+
+    public GatewayInstance create(CreateInstanceRequest request) {
+        return toInstance(listenerRuntime.addInstance(request));
+    }
+
+    public Map<String, Object> remove(String id) {
+        return listenerRuntime.removeInstance(id);
     }
 
     public Map<String, Object> statusOf(String id) {
@@ -136,7 +145,8 @@ public class GatewayInstanceRegistry {
                 activeConnections,
                 maxConnections,
                 metrics,
-                message
+                message,
+                listener.source()
         );
     }
 }

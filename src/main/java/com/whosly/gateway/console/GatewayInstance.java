@@ -26,7 +26,8 @@ public record GatewayInstance(
         Integer activeConnections,
         Integer maxConnections,
         Map<String, Long> metrics,
-        String message
+        String message,
+        String source
 ) {
     public enum InstanceStatus {
         RUNNING,
@@ -44,5 +45,6 @@ public record GatewayInstance(
         Objects.requireNonNull(status, "status");
         metrics = metrics != null ? Map.copyOf(metrics) : Map.of();
         message = message != null ? message : "";
+        source = (source != null && !source.isBlank()) ? source : "config";
     }
 }

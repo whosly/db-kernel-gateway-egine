@@ -144,6 +144,6 @@ class GatewayInstanceRegistryTest {
         return new ManagedListener(
                 id, name, dbType, "0.0.0.0", port, enabled, creatable,
                 true, "127.0.0.1", 3306, "db", "user",
-                adapter, new GatewayRuntimeMetrics());
+                adapter, new GatewayRuntimeMetrics(), "config");
     }
 }

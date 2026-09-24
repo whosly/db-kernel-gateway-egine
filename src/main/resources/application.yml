@@ -4,10 +4,25 @@ server:
 spring:
   application:
     name: db-kernel-gateway
+  # Console control-plane DB (NOT the proxied business database).
+  # File mode persists console-created instances across restarts.
+  # Passwords stored in clear for lab MVP — encrypt / secret-manager in Phase B.
+  datasource:
+    url: jdbc:h2:file:${gateway.console.db-path:./data/gateway-console};MODE=PostgreSQL;AUTO_SERVER=FALSE;DB_CLOSE_DELAY=-1
+    driver-class-name: org.h2.Driver
+    username: sa
+    password:
+  h2:
+    console:
+      enabled: ${GATEWAY_H2_CONSOLE:false}
+      path: /h2-console
 
 # Gateway proxy configuration — keys MUST match GatewayConfig @Value bindings.
 # Prefer copying application-*-template.yml to application-dev.yml for local runs.
 gateway:
+  # Control-plane H2 file path (console-managed instances). Relative to process cwd.
+  console:
+    db-path: ${GATEWAY_CONSOLE_DB_PATH:./data/gateway-console}
   # Proxy listen port (protocol-specific adapter binds here)
   proxy-port: ${GATEWAY_PROXY_PORT:3307}
   proxy-db-type: ${GATEWAY_PROXY_DB_TYPE:mysql}

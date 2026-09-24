@@ -8,6 +8,8 @@ import com.whosly.gateway.config.GatewayConfig;
 import com.whosly.gateway.config.GatewayInstanceProperties;
 import com.whosly.gateway.console.SupportedDatabaseCatalog;
 import com.whosly.gateway.console.SupportedDatabaseInfo;
+import com.whosly.gateway.console.persist.ConsoleInstanceRecord;
+import com.whosly.gateway.console.persist.ConsoleInstanceStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.DisposableBean;
@@ -17,6 +19,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.time.Instant;
 import java.util.Optional;
 
 /**
@@ -33,44 +36,97 @@ public class GatewayListenerRuntime implements DisposableBean {
 
     private static final Logger log = LoggerFactory.getLogger(GatewayListenerRuntime.class);
 
+    public static final String SOURCE_CONFIG = "config";
+    public static final String SOURCE_CONSOLE = "console";
+
     private final Map<String, ManagedListener> listeners = new LinkedHashMap<>();
     private final String legacyId;
+    private final GatewayConfig gatewayConfig;
+    private final ProtocolAdapterRegistry adapterRegistry;
+    private final SupportedDatabaseCatalog catalog;
+    private final ConsoleInstanceStore consoleStore; // nullable in map-only test ctor
+    private final Object mute = new Object();
 
     public GatewayListenerRuntime(GatewayConfig gatewayConfig,
                                   ProtocolAdapterRegistry adapterRegistry,
                                   GatewayInstanceProperties instanceProperties,
                                   SupportedDatabaseCatalog catalog) {
+        this(gatewayConfig, adapterRegistry, instanceProperties, catalog, null);
+    }
+
+    public GatewayListenerRuntime(GatewayConfig gatewayConfig,
+                                  ProtocolAdapterRegistry adapterRegistry,
+                                  GatewayInstanceProperties instanceProperties,
+                                  SupportedDatabaseCatalog catalog,
+                                  ConsoleInstanceStore consoleStore) {
         Objects.requireNonNull(gatewayConfig, "gatewayConfig");
         Objects.requireNonNull(adapterRegistry, "adapterRegistry");
         Objects.requireNonNull(instanceProperties, "instanceProperties");
         Objects.requireNonNull(catalog, "catalog");
 
-        List<GatewayInstanceProperties.InstanceEntry> entries = resolveEntries(gatewayConfig, instanceProperties);
-        failFastOnDuplicatePorts(entries, gatewayConfig.getProxyPort());
+        this.gatewayConfig = gatewayConfig;
+        this.adapterRegistry = adapterRegistry;
+        this.catalog = catalog;
+        this.consoleStore = consoleStore;
 
-        for (GatewayInstanceProperties.InstanceEntry entry : entries) {
-            ManagedListener managed = createManaged(gatewayConfig, adapterRegistry, catalog, entry);
+        List<GatewayInstanceProperties.InstanceEntry> yamlEntries =
+                resolveEntries(gatewayConfig, instanceProperties);
+        failFastOnDuplicatePorts(yamlEntries, gatewayConfig.getProxyPort());
+
+        for (GatewayInstanceProperties.InstanceEntry entry : yamlEntries) {
+            ManagedListener managed = createManaged(
+                    gatewayConfig, adapterRegistry, catalog, entry, SOURCE_CONFIG);
             if (listeners.put(managed.id(), managed) != null) {
                 throw new IllegalStateException(
                         "Duplicate gateway.instances id: '" + managed.id() + "'");
             }
         }
+
+        // Merge console-managed rows from H2 (union; duplicate id/port → fail fast).
+        if (consoleStore != null) {
+            for (ConsoleInstanceRecord row : consoleStore.findAll()) {
+                if (listeners.containsKey(row.id())) {
+                    throw new IllegalStateException(
+                            "Duplicate instance id between YAML and H2 console store: '"
+                                    + row.id() + "'");
+                }
+                for (ManagedListener existing : listeners.values()) {
+                    if (existing.enabled() && row.enabled()
+                            && existing.listenPort() == row.listenPort()) {
+                        throw new IllegalStateException(
+                                "Duplicate listenPort " + row.listenPort()
+                                        + " between YAML '" + existing.id()
+                                        + "' and H2 console '" + row.id() + "'");
+                    }
+                }
+                GatewayInstanceProperties.InstanceEntry entry = toEntry(row);
+                ManagedListener managed = createManaged(
+                        gatewayConfig, adapterRegistry, catalog, entry, SOURCE_CONSOLE);
+                listeners.put(managed.id(), managed);
+            }
+        }
+
         if (listeners.isEmpty()) {
             throw new IllegalStateException("No gateway instances resolved (internal error)");
         }
         this.legacyId = resolveLegacyId(gatewayConfig, listeners);
-        log.info("GatewayListenerRuntime ready: {} instance(s), legacyId={}",
-                listeners.size(), legacyId);
+        log.info("GatewayListenerRuntime ready: {} instance(s), legacyId={} (consoleStore={})",
+                listeners.size(), legacyId, consoleStore != null);
     }
 
     /**
      * Test / programmatic constructor: wrap a pre-built listener map (order preserved).
+     * Dynamic add/remove is unavailable (no GatewayConfig wiring).
      */
     public GatewayListenerRuntime(Map<String, ManagedListener> listeners, String legacyId) {
         Objects.requireNonNull(listeners, "listeners");
         if (listeners.isEmpty()) {
             throw new IllegalArgumentException("listeners must not be empty");
         }
+        this.gatewayConfig = null;
+        this.adapterRegistry = null;
+        this.catalog = null;
+        this.consoleStore = null;
         this.listeners.putAll(listeners);
         this.legacyId = legacyId != null && listeners.containsKey(legacyId)
                 ? legacyId
@@ -219,6 +275,144 @@ public class GatewayListenerRuntime implements DisposableBean {
         }
     }
 
+    /**
+     * Runtime-register a new instance (console create). Password stays in-memory on the adapter only.
+     * Optionally auto-starts when {@code enabled=true}.
+     */
+    public ManagedListener addInstance(CreateInstanceRequest request) {
+        Objects.requireNonNull(request, "request");
+        if (gatewayConfig == null || adapterRegistry == null || catalog == null) {
+            throw new IllegalStateException("Runtime add requires full GatewayListenerRuntime wiring");
+        }
+        synchronized (mute) {
+            String id = resolveNewId(request.id());
+            if (listeners.containsKey(id)) {
+                throw new IllegalArgumentException("Instance id already exists: " + id);
+            }
+            String dbType = normalizeDbType(request.dbType());
+            Optional<SupportedDatabaseInfo> typeInfo = catalog.findById(dbType);
+            boolean creatable = typeInfo.map(SupportedDatabaseInfo::creatable).orElse(false);
+            if (!creatable) {
+                throw new IllegalArgumentException("数据库类型不可创建：" + dbType);
+            }
+            int listenPort = request.listenPort() != null ? request.listenPort() : gatewayConfig.getProxyPort();
+            if (listenPort <= 0 || listenPort > 65535) {
+                throw new IllegalArgumentException("Invalid listenPort: " + listenPort);
+            }
+            ensurePortFree(listenPort, id);
+
+            GatewayInstanceProperties.InstanceEntry entry = new GatewayInstanceProperties.InstanceEntry();
+            entry.setId(id);
+            entry.setName(hasText(request.name()) ? request.name().trim() : id);
+            entry.setDbType(dbType);
+            entry.setListenHost(hasText(request.listenHost()) ? request.listenHost().trim() : "0.0.0.0");
+            entry.setListenPort(listenPort);
+            entry.setEnabled(request.enabled() == null || request.enabled());
+            entry.setTargetHost(request.targetHost());
+            entry.setTargetPort(request.targetPort());
+            entry.setTargetDatabase(request.targetDatabase());
+            entry.setTargetUsername(request.targetUsername());
+            entry.setTargetPassword(request.targetPassword());
+
+            ManagedListener managed = createManaged(
+                    gatewayConfig, adapterRegistry, catalog, entry, SOURCE_CONSOLE);
+            if (!managed.bound()) {
+                throw new IllegalArgumentException("Failed to bind adapter for type: " + dbType);
+            }
+            if (consoleStore != null) {
+                Instant now = Instant.now();
+                consoleStore.upsert(new ConsoleInstanceRecord(
+                        id,
+                        managed.name(),
+                        managed.dbType(),
+                        managed.listenHost(),
+                        managed.listenPort(),
+                        managed.enabled(),
+                        managed.targetHost(),
+                        managed.targetPort(),
+                        managed.targetDatabase(),
+                        managed.targetUsername(),
+                        entry.getTargetPassword(),
+                        now,
+                        now));
+            }
+            listeners.put(id, managed);
+            log.info("Console-registered gateway instance '{}' ({}) on port {} (source=console, persisted={})",
+                    id, dbType, listenPort, consoleStore != null);
+
+            if (managed.enabled()) {
+                try {
+                    startAdapter(managed);
+                    log.info("Auto-started console instance '{}' on port {}", id, listenPort);
+                } catch (RuntimeException e) {
+                    log.warn("Console instance '{}' registered but auto-start failed: {}",
+                            id, e.getMessage());
+                }
+            }
+            return managed;
+        }
+    }
+
+    /**
+     * Stop and remove a <em>runtime-created</em> instance. Config-file instances cannot be deleted.
+     */
+    public Map<String, Object> removeInstance(String id) {
+        synchronized (mute) {
+            ManagedListener listener = require(id);
+            Map<String, Object> body = baseBody(listener);
+            body.put("source", listener.source());
+            if (!SOURCE_CONSOLE.equals(listener.source())) {
+                body.put("ok", false);
+                body.put("message", "YAML/配置实例不可删除（source=config）；仅可停止，或从 application.yml 移除后重启");
+                return body;
+            }
+            if (listener.id().equals(legacyId) && listeners.size() == 1) {
+                body.put("ok", false);
+                body.put("message", "不能删除唯一遗留实例");
+                return body;
+            }
+            try {
+                if (listener.adapter() != null && listener.adapter().isRunning()) {
+                    listener.adapter().stop();
+                }
+            } catch (RuntimeException e) {
+                log.warn("Error stopping console instance '{}' before remove: {}", id, e.getMessage());
+            }
+            if (consoleStore != null) {
+                consoleStore.deleteById(listener.id());
+            }
+            listeners.remove(listener.id());
+            body.put("ok", true);
+            body.put("message", "管控台实例已删除（H2 + 运行时）");
+            body.put("removed", true);
+            log.info("Removed console gateway instance '{}' (H2+runtime)", listener.id());
+            return body;
+        }
+    }
+
+    private String resolveNewId(String requested) {
+        if (hasText(requested)) {
+            return requested.trim();
+        }
+        String base = "rt-" + Long.toHexString(System.currentTimeMillis());
+        String candidate = base;
+        int n = 0;
+        while (listeners.containsKey(candidate)) {
+            candidate = base + "-" + (++n);
+        }
+        return candidate;
+    }
+
+    private void ensurePortFree(int listenPort, String forId) {
+        for (ManagedListener existing : listeners.values()) {
+            if (existing.enabled() && existing.listenPort() == listenPort) {
+                throw new IllegalArgumentException(
+                        "listenPort " + listenPort + " already used by instance '" + existing.id()
+                                + "' (requested for '" + forId + "')");
+            }
+        }
+    }
+
     @Override
     public void destroy() {
         for (ManagedListener listener : listeners.values()) {
@@ -255,10 +449,28 @@ public class GatewayListenerRuntime implements DisposableBean {
         return body;
     }
 
+
+    private static GatewayInstanceProperties.InstanceEntry toEntry(ConsoleInstanceRecord row) {
+        GatewayInstanceProperties.InstanceEntry entry = new GatewayInstanceProperties.InstanceEntry();
+        entry.setId(row.id());
+        entry.setName(row.name());
+        entry.setDbType(row.dbType());
+        entry.setListenHost(row.listenHost());
+        entry.setListenPort(row.listenPort());
+        entry.setEnabled(row.enabled());
+        entry.setTargetHost(row.targetHost());
+        entry.setTargetPort(row.targetPort());
+        entry.setTargetDatabase(row.targetDatabase());
+        entry.setTargetUsername(row.targetUsername());
+        entry.setTargetPassword(row.targetPassword());
+        return entry;
+    }
+
     private static ManagedListener createManaged(GatewayConfig gatewayConfig,
                                                  ProtocolAdapterRegistry adapterRegistry,
                                                  SupportedDatabaseCatalog catalog,
-                                                 GatewayInstanceProperties.InstanceEntry entry) {
+                                                 GatewayInstanceProperties.InstanceEntry entry,
+                                                 String source) {
         String id = hasText(entry.getId()) ? entry.getId().trim() : "unnamed";
         String dbType = normalizeDbType(hasText(entry.getDbType())
                 ? entry.getDbType()
@@ -313,7 +525,8 @@ public class GatewayListenerRuntime implements DisposableBean {
                 targetDatabase,
                 targetUsername,
                 adapter,
-                metrics
+                metrics,
+                source != null ? source : SOURCE_CONFIG
         );
     }
 
@@ -406,6 +619,25 @@ public class GatewayListenerRuntime implements DisposableBean {
         return hasText(preferred) ? preferred.trim() : (fallback != null ? fallback : "");
     }
 
+
+    /**
+     * Console create payload (password never echoed back on responses).
+     */
+    public record CreateInstanceRequest(
+            String id,
+            String name,
+            String dbType,
+            String listenHost,
+            Integer listenPort,
+            String targetHost,
+            Integer targetPort,
+            String targetDatabase,
+            String targetUsername,
+            String targetPassword,
+            Boolean enabled
+    ) {
+    }
+
     /**
      * One configured (or synthetic) listener slot and its optional bound adapter.
      */
@@ -423,7 +655,8 @@ public class GatewayListenerRuntime implements DisposableBean {
             String targetDatabase,
             String targetUsername,
             ProtocolAdapter adapter,
-            GatewayRuntimeMetrics metrics
+            GatewayRuntimeMetrics metrics,
+            String source
     ) {
         public ManagedListener {
             Objects.requireNonNull(id, "id");
@@ -434,6 +667,12 @@ public class GatewayListenerRuntime implements DisposableBean {
             targetHost = targetHost != null ? targetHost : "";
             targetDatabase = targetDatabase != null ? targetDatabase : "";
             targetUsername = targetUsername != null ? targetUsername : "";
+            source = (source != null && !source.isBlank()) ? source : SOURCE_CONFIG;
+        }
+
+        /** True when created via console POST and persisted in H2 (not from application.yml). */
+        public boolean consoleCreated() {
+            return SOURCE_CONSOLE.equals(source);
         }
 
         public boolean bound() {

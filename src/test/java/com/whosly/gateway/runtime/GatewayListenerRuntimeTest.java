@@ -7,12 +7,17 @@ import com.whosly.gateway.config.GatewayCatalogProperties;
 import com.whosly.gateway.config.GatewayConfig;
 import com.whosly.gateway.config.GatewayInstanceProperties;
 import com.whosly.gateway.console.SupportedDatabaseCatalog;
+import com.whosly.gateway.console.persist.ConsoleInstanceStore;
+import com.whosly.gateway.runtime.GatewayListenerRuntime.CreateInstanceRequest;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import com.whosly.gateway.runtime.GatewayListenerRuntime.ManagedListener;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import java.io.IOException;
+import java.time.Instant;
 import java.net.ServerSocket;
 import java.util.List;
 import java.util.Map;
@@ -186,6 +191,68 @@ class GatewayListenerRuntimeTest {
         GatewayListenerRuntime runtime = newRuntime();
         assertThat(runtime.getLegacyId()).isEqualTo("gw-mysql");
         assertThat(runtime.getLegacyAdapter().getProtocolName()).isEqualTo("MySQL");
+    }
+
+
+    @Test
+    void addInstancePersistsToH2AndCanBeRemoved() throws Exception {
+        int port = freePort();
+        ConsoleInstanceStore store = memStore("rt-crud");
+        GatewayListenerRuntime runtime = new GatewayListenerRuntime(
+                gatewayConfig, adapterRegistry, instanceProperties, catalog, store);
+        try {
+            CreateInstanceRequest req = new CreateInstanceRequest(
+                    "rt-mysql", "联调实例", "mysql", "127.0.0.1", port,
+                    "127.0.0.1", 3306, "mysql", "root", "lab-pass", true);
+            var managed = runtime.addInstance(req);
+            assertThat(managed.source()).isEqualTo(GatewayListenerRuntime.SOURCE_CONSOLE);
+            assertThat(managed.bound()).isTrue();
+            assertThat(managed.adapter().isRunning()).isTrue();
+            assertThat(store.findById("rt-mysql")).isPresent();
+            assertThat(store.findById("rt-mysql").orElseThrow().targetPassword()).isEqualTo("lab-pass");
+
+            // YAML/default cannot be deleted
+            var deny = runtime.removeInstance("default");
+            assertThat(deny.get("ok")).isEqualTo(false);
+
+            var removed = runtime.removeInstance("rt-mysql");
+            assertThat(removed.get("ok")).isEqualTo(true);
+            assertThat(store.findById("rt-mysql")).isEmpty();
+            assertThat(runtime.find("rt-mysql")).isEmpty();
+        } finally {
+            runtime.destroy();
+        }
+    }
+
+    @Test
+    void bootMergesH2ConsoleInstances() throws Exception {
+        int port = freePort();
+        ConsoleInstanceStore store = memStore("rt-boot");
+        Instant now = Instant.now();
+        store.upsert(new com.whosly.gateway.console.persist.ConsoleInstanceRecord(
+                "from-h2", "已持久化", "postgresql", "0.0.0.0", port, true,
+                "127.0.0.1", 5432, "postgres", "pg", "pw", now, now));
+
+        GatewayListenerRuntime runtime = new GatewayListenerRuntime(
+                gatewayConfig, adapterRegistry, instanceProperties, catalog, store);
+        try {
+            assertThat(runtime.find("default")).isPresent();
+            assertThat(runtime.find("from-h2")).isPresent();
+            assertThat(runtime.find("from-h2").orElseThrow().source())
+                    .isEqualTo(GatewayListenerRuntime.SOURCE_CONSOLE);
+            assertThat(runtime.find("from-h2").orElseThrow().dbType()).isEqualTo("postgresql");
+        } finally {
+            runtime.destroy();
+        }
+    }
+
+    private static ConsoleInstanceStore memStore(String name) {
+        DriverManagerDataSource ds = new DriverManagerDataSource();
+        ds.setDriverClassName("org.h2.Driver");
+        ds.setUrl("jdbc:h2:mem:" + name + ";MODE=PostgreSQL;DB_CLOSE_DELAY=-1");
+        ds.setUsername("sa");
+        ds.setPassword("");
+        return new ConsoleInstanceStore(new JdbcTemplate(ds));
     }
 
     private GatewayListenerRuntime newRuntime() {
