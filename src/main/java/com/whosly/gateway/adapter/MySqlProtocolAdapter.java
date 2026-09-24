@@ -47,7 +47,7 @@ public class MySqlProtocolAdapter extends AbstractProtocolAdapter {
         MySQLSession session = new MySQLSession(sessionId);
         registerSession(session);
 
-        BackendProvider backendProvider = createBackendProvider();
+        BackendProvider backendProvider = backendProvider();
         Socket targetSocket;
         try {
             targetSocket = backendProvider.acquire();
@@ -87,7 +87,7 @@ public class MySqlProtocolAdapter extends AbstractProtocolAdapter {
             session.close();
             databaseTrafficObserver.onSessionClosed(sessionId);
             unregisterSession(session);
-            backendProvider.release(targetSocket);
+            releaseBackend(backendProvider, targetSocket, session);
             closeQuietly(clientSocket);
         }
     }

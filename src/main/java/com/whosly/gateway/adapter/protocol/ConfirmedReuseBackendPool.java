@@ -11,11 +11,11 @@ import java.util.concurrent.ConcurrentLinkedQueue;
  * proves it is safe: {@link SessionSnapshot#isReusableWithoutReset()} must be true
  * ({@code CONFIRMED}, not in a transaction, dirtiness clean).
  *
- * <p>This helper is intentionally <strong>not</strong> wired into
- * {@code AbstractProtocolAdapter} yet: adapters still open one dedicated backend
- * socket per client session. Callers that adopt pooling must pass the session
- * snapshot on release and must still apply an explicit reset strategy before
- * handing a reused socket to a different client identity.</p>
+ * <p>Wired through {@link PooledBackendProvider} when {@code gateway.pool.enabled}
+ * is true. The pool is protocol-agnostic (shared by every {@code ProtocolAdapter}).
+ * Reuse requires {@link SessionSnapshot#isReusableWithoutReset()}; otherwise the
+ * socket is closed. Optional {@link BackendSessionReset} hooks may run after that
+ * check — the default is close-if-unsafe with no wire reset.</p>
  */
 public final class ConfirmedReuseBackendPool {
 

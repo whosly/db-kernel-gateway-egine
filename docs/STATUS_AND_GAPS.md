@@ -8,12 +8,12 @@
 
 | 项 | 现状 | 证据 |
 |---|---|---|
-| 非集成 `@Test`/`@ParameterizedTest` 注解数 | **357**（351 + P2 新增约 6） | `mvn test` Results；排除 `*IntegrationTest` |
+| 非集成 `@Test`/`@ParameterizedTest` 注解数 | **368** | `mvn test` Results；排除 `*IntegrationTest` | **368**（357 + pool/TLS ~11） | `mvn test` Results；排除 `*IntegrationTest` |
 | 集成测试 | 14 条注解；默认 surefire **排除** `*IntegrationTest`；无 local props 时 `-Pintegration-test` **assumeTrue 跳过**；本机有库时可 14/14 绿 | `pom.xml` excludes；跳过策略见 `docs/OPS.md` / `integration-test.properties` |
-| 本环境 `mvn test`（`JAVA_HOME`=JDK 17） | **BUILD SUCCESS：Tests run 357, Failures 0, Errors 0, Skipped 0** | 日志 `/workspace/gap-fix-p2/mvn-test.log`；VT 经反射，JDK 17 回退固定池 |
+| 本环境 `mvn test`（`JAVA_HOME`=JDK 17） | **BUILD SUCCESS：Tests run 368, Failures 0, Errors 0, Skipped 0** | 日志 `/workspace/gap-fix-p2/mvn-test.log`；VT 经反射，JDK 17 回退固定池 |
 | `pom.xml` 编译目标 | `maven.compiler.source/target=17` | **保持 17**；不升到 21 |
 
-**结论**：编译目标保持 17；VT 仅在 JDK 21+ 运行期启用。当前 `mvn test` 为 **357** 全绿（P1 基线 351 + P2 增量）。见 P0 / P1 / P2。
+**结论**：编译目标保持 17；VT 仅在 JDK 21+ 运行期启用。当前 `mvn test` 为 **368** 全绿（P2 基线 357 + pool/TLS 增量）。见 P0 / P1 / P2。
 
 ## 2. 能力总览（按主题）
 
@@ -27,7 +27,7 @@
 | 连接治理 | **partial** | `max-connections`、CIDR、idle timeout 有；配置键见 §3 |
 | 多后端 | **partial** | 有序 failover + 失败端点冷却跳过；**无按库/用户/权重路由** |
 | Cancel | **done（设计如此）** | PG：识别+键索引关联，**不代发**（透明转发 CancelRequest）；MySQL：`COM_PROCESS_KILL` 透传 |
-| TLS 终止 / 明文强制 | **partial** | opaque tunnel 或 `require-cleartext-inspection` 拒绝；**无 TLS 终止** |
+| TLS 终止 / 明文强制 | **partial（improved）** | 可选 `gateway.tls.*` 客户端 TLS 终止（共享基础设施）；未启用时仍 opaque / `require-cleartext-inspection` |
 | NIO / 事件驱动 | **missing（刻意）** | 阻塞流 + 每连接线程/VT；**不以 NIO 重写为当前方向**（见 P2-1） |
 | JDBC 旁路路径 | **legacy（已标注）** | `DatabaseConnectionService` `@Deprecated`；wire 路径未使用 |
 | 运维产品化 | **partial（improved）** | 非交互默认启动；`/gateway/*` + `/actuator/gateway` 暴露内存计数器；交互 CLI 默认关 |
@@ -70,12 +70,12 @@ Spring 实际读取的键（`@Value`）与默认 `application.yml`、模板一�
 
 | ID | 项 | 状态 | 证据 | 建议下一步 |
 |---|---|---|---|---|
-| P1-1 | TLS/压缩可观测性 | **partial（improved）** | extractor `opaqueTunnel`；MySQL/PG 均把 `isOpaqueTunnel` 交给 inspector；`require-cleartext-inspection` 拒绝路径有单测；**产品策略见 §4.1** | TLS 终止（网关持证解密）仍未做；压缩后仍 opaque |
+| P1-1 | TLS/压缩可观测性 | **partial（improved）** | extractor `opaqueTunnel`；`require-cleartext-inspection`；**可选 TLS 终止**（`ClientTlsTerminator` + `gateway.tls.*`，协议无关 accept 路径）；单测用测试 keystore | 压缩后仍 opaque；协议内建 SSL 协商（MySQL capability / PG SSLRequest）仍非终止路径；后端 mTLS 未做 |
 | P1-2 | MySQL `COM_STMT_EXECUTE` 参数观测 | **partial（improved）** | PREPARE 登记 `statement_id→param_count`；EXECUTE 发出事件（statement id + 可解析时的 param types）；**不**把绑定值写入 statement 文本；单测覆盖 | 可选：审计侧对 string 类型参数做脱敏摘要；仍无改写 EXECUTE |
 | P1-3 | PG Cancel 只关联不代发 | **done（设计如此）** | `PostgreSQLCancelKeyRegistry` 仅索引；adapter / 单测明确「associate-only」；CancelRequest 仍由客户端短连接透明转发 | 若需网关代发 cancel，需 session→backend socket 映射，另开设计 |
 | P1-4 | 多后端仅 failover | **partial（improved）** | `FailoverBackendProvider` 顺序尝试 + **失败端点冷却跳过**（默认 30s，可测）；单测覆盖 | 仍无按库名/用户/权重路由；半开熔断可再增强 |
 | P1-5 | 结果集脱敏类型边界 | **partial（improved）** | MySQL：`bit` 按长度前缀可读可改写；PG：`int2/4/8`、`bool`、`float4/8` 二进制改写；decimal/时间/uuid/geometry 等仍 fail-closed；边界表见 §4.2 | decimal/时间编码若要做需独立设计 |
-| P1-6 | 连接池化 | **partial（helper only）** | `ConfirmedReuseBackendPool`：仅 `CONFIRMED`+非脏+非事务入池；**未**接入 `AbstractProtocolAdapter` | 接线需在 `release` 传 `SessionSnapshot`，并明确 reset 策略后再上线 |
+| P1-6 | 连接池化 | **partial（wired, default off）** | `PooledBackendProvider` 装饰器 + `gateway.pool.enabled`（默认 false）；共享 `backendProvider()`；仅 `CONFIRMED`+clean+非事务入池；不安全则关闭；可选 `BackendSessionReset` SPI（默认 none） | 未实现 COM_RESET_CONNECTION / DISCARD ALL 等协议 reset（故意：close-if-unsafe）；按身份/库名分池未做 |
 
 ### P2（并发模型 / 产品化 / 测试覆盖）
 
@@ -92,15 +92,16 @@ Spring 实际读取的键（`@Value`）与默认 `application.yml`、模板一�
 
 ### 4.1 TLS / 明文强制（产品策略，P1-1）
 
-当前实现是 **透明代理**，不是 TLS 终止代理：
+池化与 TLS 终止均为 **协议无关共享基础设施**（`AbstractProtocolAdapter` / `BackendProvider` 装饰器）。新库（Oracle / SQL Server）只需新增 `ProtocolAdapter` + 可选 `BackendSessionReset`，不必重做池/TLS。
 
 | 模式 | 行为 |
 |---|---|
-| 默认（`require-cleartext-inspection=false`） | 客户端协商 SSL/压缩后，观测进入 **opaque tunnel**：字节继续转发，不再解析明文 |
-| `require-cleartext-inspection=true`（未显式设置时跟随 `audit.enabled`） | 一旦进入 opaque tunnel，**拒绝该会话**（DENY），避免在不可审计通道上放行 |
-| TLS 终止 | **未实现**：网关不持有服务端证书，不解密后再连后端 |
+| 默认（`gateway.tls.enabled=false`） | 透明代理：客户端协商 SSL/压缩后进入 **opaque tunnel**（字节转发，不解析） |
+| `gateway.require-cleartext-inspection=true`（未显式设置时跟随 `audit.enabled`） | opaque tunnel → **拒绝会话**（DENY） |
+| `gateway.tls.enabled=true` + keystore | **stunnel 式客户端 TLS 终止**：accept 后 `SSLSocket` 服务端握手，之后走既有明文 framing/inspection；opaque-tunnel-from-client-SSL **不再适用**于客户端腿 |
+| 后端 TLS | 仍走既有 `BackendProvider`（通常明文连本地 Docker）；后端 mTLS **未做** |
 
-因此：需要审计/风控时请强制明文或在客户端/后端侧终止 TLS；本网关不会「解密再观察」。
+**安全注意**：无证书则终止保持关闭；勿把生产 keystore 密码写入仓库（用环境变量）；测试 keystore 仅在 `src/test/resources/tls/`。
 
 ### 4.2 结果集脱敏类型边界（P1-5）
 
@@ -123,7 +124,7 @@ Spring 实际读取的键（`@Value`）与默认 `application.yml`、模板一�
 | 虚拟线程回退路径 | `VirtualThreadExecutors` + 固定池回退 | `VirtualThreadExecutorsTest` 在 JDK 17 验证不抛并执行任务 |
 | `require-cleartext-inspection` 拒绝路径 | `DatabaseTrafficInspector` | 有（P1-1） |
 | MySQL `COM_STMT_EXECUTE` 观测 | extractor | 有（P1-2） |
-| `ConfirmedReuseBackendPool` | helper | 有单测；未接线 |
+| `ConfirmedReuseBackendPool` / `PooledBackendProvider` / `ClientTlsTerminator` | 已接线（默认关） | 有单测；`GatewayConfigTest` 装配 |
 | 真库集成 + 脱敏 | 有 | 需 `-Pintegration-test` + 本地库；无 props 则 assumeTrue 跳过（P2-6） |
 | `/gateway/*` + `/actuator/gateway` | 有 | `GatewayOpsSurfaceTest` + `CommandLineInterfaceTest`（非交互） |
 

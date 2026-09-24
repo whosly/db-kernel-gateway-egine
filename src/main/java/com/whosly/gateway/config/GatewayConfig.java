@@ -9,6 +9,7 @@ import com.whosly.gateway.adapter.protocol.CidrClientAddressPolicy;
 import com.whosly.gateway.adapter.protocol.DatabaseRiskPolicy;
 import com.whosly.gateway.adapter.protocol.DenyListDatabaseRiskPolicy;
 import com.whosly.gateway.adapter.protocol.GatewayRuntimeMetrics;
+import com.whosly.gateway.adapter.protocol.ClientTlsTerminator;
 import com.whosly.gateway.adapter.protocol.DatabaseTrafficObserver;
 import com.whosly.gateway.adapter.protocol.RewriteLimits;
 import com.whosly.gateway.audit.AuditDestination;
@@ -32,7 +33,9 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
 import java.io.IOException;
+import java.security.GeneralSecurityException;
 import java.nio.file.Path;
+import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -100,6 +103,35 @@ public class GatewayConfig implements DisposableBean {
 
     @Value("${gateway.require-cleartext-inspection:#{null}}")
     private Boolean requireCleartextInspection;
+
+    /** Protocol-agnostic backend pool (default off — backward-safe). */
+    @Value("${gateway.pool.enabled:false}")
+    private boolean poolEnabled;
+
+    @Value("${gateway.pool.max-idle:8}")
+    private int poolMaxIdle;
+
+    /**
+     * Stunnel-style client TLS terminate. Off unless enabled <em>and</em> a keystore path is set.
+     * Shared by every proxy-db-type (mysql / postgresql / future oracle / sqlserver).
+     */
+    @Value("${gateway.tls.enabled:false}")
+    private boolean tlsEnabled;
+
+    @Value("${gateway.tls.keystore-path:}")
+    private String tlsKeystorePath;
+
+    @Value("${gateway.tls.keystore-password:}")
+    private String tlsKeystorePassword;
+
+    /** PKCS12 or JKS; blank uses {@code KeyStore.getDefaultType()}. */
+    @Value("${gateway.tls.keystore-type:}")
+    private String tlsKeystoreType;
+
+    /** Optional; unused by the default KeyManager init (whole-store password). Reserved for docs. */
+    @Value("${gateway.tls.key-alias:}")
+    private String tlsKeyAlias;
+
 
     @Value("${gateway.rewrite.max-message-bytes:1048576}")
     private int rewriteMaxMessageBytes;
@@ -250,13 +282,21 @@ public class GatewayConfig implements DisposableBean {
 
     @Bean
     public ProtocolAdapter protocolAdapter() {
-        switch (proxyDbType.toLowerCase()) {
+        // Extension point: add "oracle" / "sqlserver" cases when those ProtocolAdapters exist.
+        // Pool + TLS terminate live on AbstractProtocolAdapter — new DBs inherit them automatically.
+        switch (proxyDbType.toLowerCase(Locale.ROOT).trim()) {
             case "mysql":
                 return createMySqlProtocolAdapter();
-            case "postgresql":
+            case "postgresql", "postgres":
                 return createPostgreSQLProtocolAdapter();
+            case "oracle", "sqlserver", "mssql":
+                throw new IllegalArgumentException(
+                        "gateway.proxy-db-type='" + proxyDbType + "' is reserved but not implemented yet; "
+                                + "supported today: mysql, postgresql");
             default:
-                throw new IllegalArgumentException("Unsupported gateway proxy database protocol: " + proxyDbType);
+                throw new IllegalArgumentException(
+                        "Unsupported gateway.proxy-db-type: " + proxyDbType
+                                + " (supported: mysql, postgresql; reserved: oracle, sqlserver)");
         }
     }
 
@@ -294,11 +334,40 @@ public class GatewayConfig implements DisposableBean {
         adapter.setVirtualThreadsEnabled(virtualThreads);
         adapter.setBackendEndpoints(parseBackendEndpoints());
         adapter.setRequireCleartextInspection(resolveRequireCleartextInspection());
+        adapter.setPoolEnabled(poolEnabled);
+        adapter.setPoolMaxIdle(poolMaxIdle);
+        adapter.setClientTlsTerminator(buildClientTlsTerminator());
         adapter.setRuntimeMetrics(gatewayRuntimeMetrics());
         try {
             adapter.setDatabaseTrafficObserver(databaseTrafficObserver());
         } catch (IOException e) {
             throw new IllegalStateException("Audit spool could not be opened", e);
+        }
+    }
+
+
+    /**
+     * Shared client-leg TLS terminator for every {@code gateway.proxy-db-type}.
+     * Disabled when {@code gateway.tls.enabled=false}; requires a keystore path when enabled.
+     */
+    private ClientTlsTerminator buildClientTlsTerminator() {
+        if (!tlsEnabled) {
+            return ClientTlsTerminator.disabled();
+        }
+        if (tlsKeystorePath == null || tlsKeystorePath.isBlank()) {
+            throw new IllegalStateException(
+                    "gateway.tls.enabled=true requires gateway.tls.keystore-path "
+                            + "(TLS terminate stays off without certificates)");
+        }
+        Path path = Path.of(tlsKeystorePath);
+        if (!Files.isRegularFile(path)) {
+            throw new IllegalStateException("gateway.tls.keystore-path is not a readable file: " + path);
+        }
+        char[] password = tlsKeystorePassword != null ? tlsKeystorePassword.toCharArray() : new char[0];
+        try {
+            return ClientTlsTerminator.fromKeyStore(path, password, tlsKeystoreType);
+        } catch (GeneralSecurityException | IOException e) {
+            throw new IllegalStateException("Failed to load gateway TLS keystore: " + path, e);
         }
     }
 

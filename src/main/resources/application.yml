@@ -22,6 +22,21 @@ gateway:
   # When set, appended after gateway.target for BackendProvider (deduped).
   backend-endpoints: ${GATEWAY_BACKEND_ENDPOINTS:}
   virtual-threads: ${GATEWAY_VIRTUAL_THREADS:true}
+
+  # Backend connection pool (protocol-agnostic; default off). Safe reuse only when
+  # SessionSnapshot is CONFIRMED + clean + not in a transaction; otherwise close.
+  # Optional BackendSessionReset SPI may be registered by adapters later.
+  pool:
+    enabled: ${GATEWAY_POOL_ENABLED:false}
+    max-idle: ${GATEWAY_POOL_MAX_IDLE:8}
+  # Client-leg TLS terminate (stunnel-style; shared by every proxy-db-type).
+  # Off unless enabled AND keystore-path is set. Never commit real keystore passwords.
+  # tls:
+  #   enabled: false
+  #   keystore-path: /path/to/gateway.p12
+  #   keystore-password: ${GATEWAY_TLS_KEYSTORE_PASSWORD:}
+  #   keystore-type: PKCS12
+  #   key-alias: gateway
   # require-cleartext-inspection: true
   # When true, TLS/opaque tunnel sessions are denied (fail-closed for audit).
   # Default unset: follows gateway.audit.enabled.

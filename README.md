@@ -23,7 +23,7 @@
 
 | 项 | 本分支（`future/database-wire-protocol-foundation` / `a725050`） |
 |---|---|
-| 默认单元测试 | **357** 条全绿（JDK 17；`pom` 排除 `*IntegrationTest`；以 STATUS §1 为准） |
+| 默认单元测试 | **368** 条全绿（JDK 17；`pom` 排除 `*IntegrationTest`；以 STATUS §1 为准） |
 | 真库集成 `-Pintegration-test` | **14 / 14** 全绿（2026-09-24，本地 Docker MySQL `:13308` + PostgreSQL `:5432`） |
 | JDK / 编译 | `pom` 目标 **17**；虚拟线程经 `VirtualThreadExecutors` **反射**在 JDK 21+ 启用，JDK 17 回退平台线程池（STATUS P0-1） |
 | 核心数据路径 | 透明代理、查询/结果、预处理、错误透传、脱敏 happy path、PG `COPY` — **已在集成中 live-proven** |
@@ -61,9 +61,9 @@
 | 后端 failover 列表 | **部分** | `backend-endpoints` **仅顺序 failover**；无按库/用户/权重路由 |
 | PG Cancel | **部分** | `CancelRequest` 与 `BackendKeyData` **仅关联索引**；**不代发** cancel；MySQL `COM_PROCESS_KILL` 透传 |
 | 风控策略 | **部分** | `DenyListDatabaseRiskPolicy` 可配置拒绝清单；空配置默认 `allowAll()` |
-| TLS / 压缩 | **部分** | 接受后变 opaque tunnel；可选 `require-cleartext-inspection` 拒绝；**未做 TLS 终止 / 产品化** |
+| TLS / 压缩 | **部分** | 默认 opaque / 可选拒绝；**可选 TLS 终止**（`gateway.tls.*`，协议无关）；压缩后仍 opaque |
 | NIO 事件驱动 | **未实现** | 阻塞 socket + 每连接线程（可选虚拟线程） |
-| 连接池化 | **部分（helper）** | `ConfirmedReuseBackendPool` 有单测，**未**接入 adapter |
+| 连接池化 | **已接线·默认关** | `gateway.pool.enabled`；仅 CONFIRMED+clean+非事务复用，否则关闭；可选 reset SPI |
 | Actuator / HTTP 指标出口 | **已接线·内存计数** | `/gateway/metrics` + `/actuator/gateway`；无远程 Micrometer |
 | 非交互启动 | **已实现** | `Application` 自动 start；`gateway.cli.interactive` 默认 false |
 
@@ -99,7 +99,7 @@
 |---|---|
 | `server.port` | Spring HTTP（Web / 预留管控） |
 | `gateway.proxy-port` | 数据库协议代理端口（客户端连这里） |
-| `gateway.proxy-db-type` | `mysql` \| `postgresql` |
+| `gateway.proxy-db-type` | `mysql` \| `postgresql`（`oracle`/`sqlserver` 预留，未实现） |
 | `gateway.target.host` / `port` / `username` / `password` / `database` | 主后端（**嵌套**） |
 | `gateway.backend-endpoints` | 可选 `host:port,host:port` failover |
 | `gateway.max-connections` | 并发连接上限（代码默认 200） |

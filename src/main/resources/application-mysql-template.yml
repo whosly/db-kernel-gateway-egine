@@ -24,3 +24,13 @@ gateway:
   # risk:
   #   denied-operations:           # e.g. COM_PROCESS_KILL
   #   denied-statement-keywords:   # e.g. drop table,truncate
+
+  # Shared infrastructure (any proxy-db-type):
+  # pool:
+  #   enabled: false
+  #   max-idle: 8
+  # tls:
+  #   enabled: false
+  #   keystore-path: /path/to/gateway.p12
+  #   keystore-password: change-me-in-env-not-in-git
+  #   keystore-type: PKCS12

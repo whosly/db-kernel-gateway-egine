@@ -2,6 +2,10 @@ package com.whosly.gateway.adapter;
 
 import com.whosly.gateway.adapter.protocol.BackendEndpoint;
 import com.whosly.gateway.adapter.protocol.BackendProvider;
+import com.whosly.gateway.adapter.protocol.SessionSnapshot;
+import com.whosly.gateway.adapter.protocol.PooledBackendProvider;
+import com.whosly.gateway.adapter.protocol.ClientTlsTerminator;
+import com.whosly.gateway.adapter.protocol.BackendSessionReset;
 import com.whosly.gateway.adapter.protocol.ClientAddressPolicy;
 import com.whosly.gateway.adapter.protocol.DatabaseRiskPolicy;
 import com.whosly.gateway.adapter.protocol.DatabaseTrafficObserver;
@@ -75,6 +79,14 @@ public abstract class AbstractProtocolAdapter implements ProtocolAdapter {
     private boolean requireCleartextInspection = false;
     private GatewayRuntimeMetrics runtimeMetrics = new GatewayRuntimeMetrics();
     private List<BackendEndpoint> backendEndpoints = List.of();
+    /** When true, {@link #backendProvider()} wraps the factory in {@link PooledBackendProvider}. */
+    private boolean poolEnabled = false;
+    private int poolMaxIdle = 8;
+    private BackendSessionReset backendSessionReset = BackendSessionReset.none();
+    private ClientTlsTerminator clientTlsTerminator = ClientTlsTerminator.disabled();
+    /** Shared across client sessions so pooling actually reuses sockets. */
+    private volatile BackendProvider sharedBackendProvider;
+
 
     protected String targetHost = "localhost";
     protected int targetPort = 3306;
@@ -151,6 +163,26 @@ public abstract class AbstractProtocolAdapter implements ProtocolAdapter {
     }
     public List<BackendEndpoint> getBackendEndpoints() { return backendEndpoints; }
 
+    public void setPoolEnabled(boolean poolEnabled) { this.poolEnabled = poolEnabled; }
+    public boolean isPoolEnabled() { return poolEnabled; }
+    public void setPoolMaxIdle(int poolMaxIdle) {
+        if (poolMaxIdle < 0) {
+            throw new IllegalArgumentException("poolMaxIdle must not be negative");
+        }
+        this.poolMaxIdle = poolMaxIdle;
+    }
+    public int getPoolMaxIdle() { return poolMaxIdle; }
+    public void setBackendSessionReset(BackendSessionReset backendSessionReset) {
+        this.backendSessionReset = backendSessionReset != null ? backendSessionReset : BackendSessionReset.none();
+    }
+    public BackendSessionReset getBackendSessionReset() { return backendSessionReset; }
+    public void setClientTlsTerminator(ClientTlsTerminator clientTlsTerminator) {
+        this.clientTlsTerminator = clientTlsTerminator != null ? clientTlsTerminator : ClientTlsTerminator.disabled();
+    }
+    public ClientTlsTerminator getClientTlsTerminator() { return clientTlsTerminator; }
+    public boolean isClientTlsTerminateEnabled() { return clientTlsTerminator.isEnabled(); }
+
+
     @Override public String getProtocolName() { return protocolName; }
     @Override public int getDefaultPort() { return port; }
 
@@ -170,8 +202,9 @@ public abstract class AbstractProtocolAdapter implements ProtocolAdapter {
             acceptorExecutor = Executors.newSingleThreadExecutor(
                     namedThreadFactory("db-gateway-" + protocolName + "-accept-"));
             running = true;
-            log.info("Starting {} protocol adapter on port {} (max connections {}, virtualThreads={}, backends={})",
-                    protocolName, port, maxConnections, virtualThreadsEnabled,
+            log.info("Starting {} protocol adapter on port {} (max connections {}, virtualThreads={}, pool={}, tlsTerminate={}, backends={})",
+                    protocolName, port, maxConnections, virtualThreadsEnabled, poolEnabled,
+                    clientTlsTerminator.isEnabled(),
                     backendEndpoints.isEmpty() ? targetHost + ":" + targetPort : backendEndpoints);
             acceptorExecutor.submit(this::acceptConnections);
             log.info("{} protocol adapter started successfully", protocolName);
@@ -195,6 +228,7 @@ public abstract class AbstractProtocolAdapter implements ProtocolAdapter {
         activeClientSockets.clear();
         activeSessions.values().forEach(ProtocolSession::close);
         activeSessions.clear();
+        closeSharedBackendProvider();
         shutdownExecutor(executorService);
         log.info("{} protocol adapter stopped successfully", protocolName);
     }
@@ -243,13 +277,25 @@ public abstract class AbstractProtocolAdapter implements ProtocolAdapter {
     }
 
     private void handleSafely(Socket clientSocket) {
+        Socket streamSocket = clientSocket;
         try {
-            handleClientConnection(clientSocket);
+            streamSocket = clientTlsTerminator.wrapAcceptedClient(clientSocket);
+            if (streamSocket != clientSocket) {
+                activeClientSockets.add(streamSocket);
+            }
+            handleClientConnection(streamSocket);
+        } catch (IOException e) {
+            log.warn("Client TLS handshake / wrap failed for {}: {}",
+                    clientSocket.getRemoteSocketAddress(), e.getMessage());
+            closeQuietly(streamSocket);
         } catch (RuntimeException e) {
             log.error("Unexpected error handling client connection {}",
                     clientSocket.getRemoteSocketAddress(), e);
         } finally {
             activeClientSockets.remove(clientSocket);
+            if (streamSocket != clientSocket) {
+                activeClientSockets.remove(streamSocket);
+            }
             connectionPermits.release();
         }
     }
@@ -307,13 +353,71 @@ public abstract class AbstractProtocolAdapter implements ProtocolAdapter {
         try { socket.close(); } catch (IOException ignored) {}
     }
 
+    /**
+     * Shared backend provider for all client sessions of this adapter.
+     * Pooling only works when the same provider instance is reused.
+     */
+    protected BackendProvider backendProvider() {
+        BackendProvider existing = sharedBackendProvider;
+        if (existing != null) {
+            return existing;
+        }
+        synchronized (this) {
+            if (sharedBackendProvider == null) {
+                sharedBackendProvider = buildBackendProvider();
+            }
+            return sharedBackendProvider;
+        }
+    }
+
+    /**
+     * @deprecated Prefer {@link #backendProvider()} so pooling can share idle sockets.
+     *             Retained for subclasses/tests that still call the old name; now
+     *             delegates to the shared instance.
+     */
     protected BackendProvider createBackendProvider() {
+        return backendProvider();
+    }
+
+    private BackendProvider buildBackendProvider() {
+        BackendProvider factory = createUnpooledBackendProvider();
+        if (!poolEnabled) {
+            return factory;
+        }
+        log.info("{} backend pool enabled (maxIdle={}, reset={})",
+                protocolName, poolMaxIdle,
+                backendSessionReset == BackendSessionReset.none() ? "none/close-if-unsafe" : "custom");
+        return new PooledBackendProvider(factory, poolMaxIdle, backendSessionReset);
+    }
+
+    /** Direct or failover factory without pooling — used as the pool's opener. */
+    protected BackendProvider createUnpooledBackendProvider() {
         List<BackendEndpoint> endpoints = resolveBackendEndpoints();
         if (endpoints.size() == 1) {
             BackendEndpoint only = endpoints.get(0);
             return new DirectBackendProvider(only.host(), only.port(), TARGET_CONNECT_TIMEOUT_MILLIS);
         }
         return new FailoverBackendProvider(endpoints, TARGET_CONNECT_TIMEOUT_MILLIS, runtimeMetrics);
+    }
+
+    private void closeSharedBackendProvider() {
+        BackendProvider provider = sharedBackendProvider;
+        sharedBackendProvider = null;
+        if (provider instanceof PooledBackendProvider pooled) {
+            pooled.close();
+        }
+    }
+
+    /**
+     * Releases a backend socket with session observation so a pooled provider can
+     * decide reuse. Snapshot should be taken <em>before</em> {@link ProtocolSession#close()}.
+     */
+    protected void releaseBackend(BackendProvider provider, Socket connection, ProtocolSession session) {
+        if (provider == null) {
+            return;
+        }
+        SessionSnapshot snapshot = session != null ? session.snapshot() : null;
+        provider.release(connection, snapshot);
     }
 
     private List<BackendEndpoint> resolveBackendEndpoints() {

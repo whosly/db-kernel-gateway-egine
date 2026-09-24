@@ -66,7 +66,7 @@ public class PostgreSQLProtocolAdapter extends AbstractProtocolAdapter {
         PostgreSQLSession session = new PostgreSQLSession(sessionId);
         registerSession(session);
 
-        BackendProvider backendProvider = createBackendProvider();
+        BackendProvider backendProvider = backendProvider();
         Socket targetSocket;
         try {
             targetSocket = backendProvider.acquire();
@@ -117,7 +117,7 @@ public class PostgreSQLProtocolAdapter extends AbstractProtocolAdapter {
             // Let the audit sink release the sequence counter of this session.
             databaseTrafficObserver.onSessionClosed(sessionId);
             unregisterSession(session);
-            backendProvider.release(targetSocket);
+            releaseBackend(backendProvider, targetSocket, session);
             closeQuietly(clientSocket);
         }
     }

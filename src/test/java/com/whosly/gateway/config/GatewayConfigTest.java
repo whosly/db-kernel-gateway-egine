@@ -30,11 +30,11 @@ class GatewayConfigTest {
     @Test
     void rejectsUnsupportedProtocolInsteadOfFallingBackToMysql() {
         GatewayConfig config = new GatewayConfig();
-        ReflectionTestUtils.setField(config, "proxyDbType", "oracle");
+        ReflectionTestUtils.setField(config, "proxyDbType", "db2");
 
         assertThatThrownBy(config::protocolAdapter)
             .isInstanceOf(IllegalArgumentException.class)
-            .hasMessageContaining("Unsupported gateway proxy database protocol");
+            .hasMessageContaining("Unsupported gateway.proxy-db-type");
     }
 
     @Test
@@ -183,5 +183,79 @@ class GatewayConfigTest {
             records.add(record.get());
         }
         return records;
+    }
+
+    @Test
+    void wiresPoolSettingsOntoProtocolAdapterWhenEnabled() {
+        GatewayConfig config = new GatewayConfig();
+        applyMinimalAdapterFields(config);
+        ReflectionTestUtils.setField(config, "poolEnabled", true);
+        ReflectionTestUtils.setField(config, "poolMaxIdle", 5);
+        ReflectionTestUtils.setField(config, "tlsEnabled", false);
+
+        AbstractProtocolAdapter adapter = (AbstractProtocolAdapter) config.protocolAdapter();
+        assertThat(adapter.isPoolEnabled()).isTrue();
+        assertThat(adapter.getPoolMaxIdle()).isEqualTo(5);
+        assertThat(adapter.isClientTlsTerminateEnabled()).isFalse();
+        config.destroy();
+    }
+
+    @Test
+    void wiresTlsTerminatorFromTestKeystoreWhenEnabled() {
+        GatewayConfig config = new GatewayConfig();
+        applyMinimalAdapterFields(config);
+        ReflectionTestUtils.setField(config, "tlsEnabled", true);
+        ReflectionTestUtils.setField(config, "tlsKeystorePath", "src/test/resources/tls/gateway-test.p12");
+        ReflectionTestUtils.setField(config, "tlsKeystorePassword", "changeit");
+        ReflectionTestUtils.setField(config, "tlsKeystoreType", "PKCS12");
+
+        AbstractProtocolAdapter adapter = (AbstractProtocolAdapter) config.protocolAdapter();
+        assertThat(adapter.isClientTlsTerminateEnabled()).isTrue();
+        config.destroy();
+    }
+
+    @Test
+    void rejectsTlsEnabledWithoutKeystorePath() {
+        GatewayConfig config = new GatewayConfig();
+        applyMinimalAdapterFields(config);
+        ReflectionTestUtils.setField(config, "tlsEnabled", true);
+        ReflectionTestUtils.setField(config, "tlsKeystorePath", "");
+
+        assertThatThrownBy(config::protocolAdapter)
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("keystore-path");
+    }
+
+    @Test
+    void rejectsReservedButUnimplementedProxyDbTypesWithClearError() {
+        GatewayConfig config = new GatewayConfig();
+        applyMinimalAdapterFields(config);
+        ReflectionTestUtils.setField(config, "proxyDbType", "oracle");
+
+        assertThatThrownBy(config::protocolAdapter)
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("oracle");
+    }
+
+    private static void applyMinimalAdapterFields(GatewayConfig config) {
+        ReflectionTestUtils.setField(config, "proxyDbType", "mysql");
+        ReflectionTestUtils.setField(config, "proxyPort", 3307);
+        ReflectionTestUtils.setField(config, "targetHost", "127.0.0.1");
+        ReflectionTestUtils.setField(config, "targetPort", 3306);
+        ReflectionTestUtils.setField(config, "maxConnections", 200);
+        ReflectionTestUtils.setField(config, "idleTimeoutSeconds", 0L);
+        ReflectionTestUtils.setField(config, "auditEnabled", false);
+        ReflectionTestUtils.setField(config, "virtualThreads", false);
+        ReflectionTestUtils.setField(config, "rewriteMaxMessageBytes", 1048576);
+        ReflectionTestUtils.setField(config, "rewriteMaxHoldMillis", 1000L);
+        ReflectionTestUtils.setField(config, "riskDeniedOperations", "");
+        ReflectionTestUtils.setField(config, "riskDeniedStatementKeywords", "");
+        ReflectionTestUtils.setField(config, "poolEnabled", false);
+        ReflectionTestUtils.setField(config, "poolMaxIdle", 8);
+        ReflectionTestUtils.setField(config, "tlsEnabled", false);
+        ReflectionTestUtils.setField(config, "tlsKeystorePath", "");
+        ReflectionTestUtils.setField(config, "tlsKeystorePassword", "");
+        ReflectionTestUtils.setField(config, "tlsKeystoreType", "");
+        ReflectionTestUtils.setField(config, "tlsKeyAlias", "");
     }
 }

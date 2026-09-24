@@ -13,6 +13,8 @@
 | 4 | 确认代理在听 | 日志含 protocol adapter started；或 `GET /gateway/status` |
 | 5 | （可选）审计 | `gateway.audit.enabled=true`；生产建议独立盘与 `destination` |
 | 6 | （可选）明文强制 | 需审计时设 `gateway.require-cleartext-inspection=true`（或随审计默认） |
+| 6b | （可选）TLS 终止 | `gateway.tls.enabled=true` + `keystore-path`（PKCS12/JKS）；客户端从首字节 TLS；密码用环境变量 |
+| 6c | （可选）后端连接池 | `gateway.pool.enabled=true`；仅安全会话复用，脏/事务连接关闭 |
 | 7 | （可选）风控拒绝清单 | `gateway.risk.denied-operations` / `denied-statement-keywords` |
 | 8 | （可选）交互 CLI | 仅调试：`gateway.cli.interactive=true`（会读 `System.in`） |
 
