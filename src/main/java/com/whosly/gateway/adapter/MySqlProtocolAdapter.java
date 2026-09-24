@@ -6,6 +6,7 @@ import com.whosly.gateway.adapter.mysql.MySQLResultSetMaskingInterceptor;
 import com.whosly.gateway.adapter.mysql.MySQLSession;
 import com.whosly.gateway.adapter.mysql.MySqlGatewayErrorMapper;
 import com.whosly.gateway.adapter.protocol.BackendProvider;
+import com.whosly.gateway.adapter.protocol.ProbedHandshake;
 import com.whosly.gateway.adapter.protocol.RoutingContext;
 import com.whosly.gateway.adapter.protocol.DatabaseTrafficInspector;
 import com.whosly.gateway.adapter.protocol.DuplexRelay;
@@ -23,6 +24,20 @@ import java.io.IOException;
 import java.net.Socket;
 import java.util.UUID;
 
+/**
+ * MySQL transparent protocol proxy adapter.
+ *
+ * <p><b>Routing identity (P1-4):</b> MySQL is server-first — the backend must send
+ * the Initial Handshake before the client Handshake Response carries username /
+ * database. Forging a greeting to delay {@link BackendProvider#acquire} would
+ * violate the transparency rule (never forge handshake / auth). Therefore this
+ * adapter acquires with {@link RoutingContext#empty()} and uses the fallback /
+ * default endpoint list for the initial connect. {@code match-database} /
+ * {@code match-username} rules do <em>not</em> select the first backend for MySQL.
+ * Identity is still observed later from Handshake Response (see
+ * {@link com.whosly.gateway.adapter.mysql.MySqlHandshakeResponseRouting}) for
+ * session attributes / pool release snapshots.</p>
+ */
 public class MySqlProtocolAdapter extends AbstractProtocolAdapter {
 
     private static final Logger log = LoggerFactory.getLogger(MySqlProtocolAdapter.class);
@@ -42,6 +57,15 @@ public class MySqlProtocolAdapter extends AbstractProtocolAdapter {
         return new DruidSqlParser();
     }
 
+    /**
+     * Server-first: no client bytes are available before backend greeting without
+     * forging. Always {@link ProbedHandshake#empty()}.
+     */
+    @Override
+    protected ProbedHandshake probeClientForRouting(Socket clientSocket) {
+        return ProbedHandshake.empty();
+    }
+
     @Override
     protected void handleClientConnection(Socket clientSocket) {
         String sessionId = "mysql-" + UUID.randomUUID();
@@ -49,9 +73,11 @@ public class MySqlProtocolAdapter extends AbstractProtocolAdapter {
         registerSession(session);
 
         BackendProvider backendProvider = backendProvider();
+        ProbedHandshake probed = probeClientForRouting(clientSocket);
         Socket targetSocket;
         try {
-            targetSocket = backendProvider.acquire(RoutingContext.empty());
+            // Intentionally empty context — see class javadoc (server-first limitation).
+            targetSocket = backendProvider.acquire(probed.context());
         } catch (IOException e) {
             log.warn("MySQL proxy session {} could not reach target {}:{}: {}",
                     sessionId, targetHost, targetPort, e.getMessage());
@@ -63,8 +89,8 @@ public class MySqlProtocolAdapter extends AbstractProtocolAdapter {
         }
 
         try {
-            log.info("MySQL proxy session {} connected {} to target {}:{}",
-                    sessionId, clientSocket.getRemoteSocketAddress(), targetHost, targetPort);
+            log.info("MySQL proxy session {} connected {} to target {}:{} (routing={})",
+                    sessionId, clientSocket.getRemoteSocketAddress(), targetHost, targetPort, probed.context());
             MySQLDatabaseEventExtractor extractor =
                     new MySQLDatabaseEventExtractor(PROTOCOL_NAME, sessionId, false, session);
             DatabaseTrafficInspector trafficInspector = new DatabaseTrafficInspector(
@@ -81,7 +107,7 @@ public class MySqlProtocolAdapter extends AbstractProtocolAdapter {
                             new MySQLResultSetMaskingInterceptor(extractor, maskingEngine))
                     : MessagePipeline.of(trafficInspector);
             new DuplexRelay(sessionId, pipeline, GATEWAY_ERROR_RESPONDER, rewriteLimits)
-                    .relay(clientSocket, targetSocket);
+                    .relay(clientSocket, targetSocket, probed.replayToBackend());
         } catch (IOException e) {
             log.warn("MySQL proxy session {} closed: {}", sessionId, e.getMessage());
         } finally {

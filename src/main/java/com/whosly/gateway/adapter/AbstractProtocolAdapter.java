@@ -14,7 +14,9 @@ import com.whosly.gateway.adapter.protocol.FailoverBackendProvider;
 import com.whosly.gateway.adapter.protocol.GatewayRuntimeMetrics;
 import com.whosly.gateway.adapter.protocol.ProtocolSession;
 import com.whosly.gateway.adapter.protocol.RewriteLimits;
+import com.whosly.gateway.adapter.protocol.ProbedHandshake;
 import com.whosly.gateway.adapter.protocol.RoutingBackendProvider;
+import com.whosly.gateway.adapter.protocol.RoutingHandshakeProbe;
 import com.whosly.gateway.adapter.protocol.RoutingRule;
 import com.whosly.gateway.adapter.protocol.VirtualThreadExecutors;
 import com.whosly.gateway.adapter.protocol.WeightedEndpoint;
@@ -489,6 +491,20 @@ public abstract class AbstractProtocolAdapter implements ProtocolAdapter {
     private List<BackendEndpoint> resolveBackendEndpoints() {
         if (!backendEndpoints.isEmpty()) return backendEndpoints;
         return List.of(new BackendEndpoint(targetHost, targetPort));
+    }
+
+
+    /**
+     * Optional early client peek that fills {@link com.whosly.gateway.adapter.protocol.RoutingContext}
+     * before {@link BackendProvider#acquire}. Default does not read the client
+     * (empty context). PostgreSQL overrides to parse StartupMessage; MySQL keeps
+     * the default because the server must greet first without forging a handshake.
+     *
+     * <p>Oracle / SQL Server adapters should override with their login/connect
+     * packet parsers and return consumed bytes for transparent replay.</p>
+     */
+    protected ProbedHandshake probeClientForRouting(Socket clientSocket) throws IOException {
+        return RoutingHandshakeProbe.NONE.probe(clientSocket);
     }
 
     protected abstract void handleClientConnection(java.net.Socket clientSocket);

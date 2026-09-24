@@ -3,9 +3,11 @@ package com.whosly.gateway.adapter.protocol;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.io.SequenceInputStream;
 import java.net.Socket;
 import java.net.SocketException;
 import java.net.SocketTimeoutException;
@@ -94,8 +96,20 @@ public class DuplexRelay {
     }
 
     public void relay(Socket clientSocket, Socket targetSocket) throws IOException {
+        relay(clientSocket, targetSocket, null);
+    }
+
+    /**
+     * Relays both directions. When {@code clientInputPrefix} is non-empty, those
+     * exact bytes are observed and forwarded on client→target <em>before</em>
+     * reading further from the client socket — used after an early handshake
+     * peek for routing so transparency is preserved.
+     */
+    public void relay(Socket clientSocket, Socket targetSocket, byte[] clientInputPrefix) throws IOException {
         Objects.requireNonNull(clientSocket, "clientSocket must not be null");
         Objects.requireNonNull(targetSocket, "targetSocket must not be null");
+        byte[] prefix = clientInputPrefix == null || clientInputPrefix.length == 0
+                ? null : clientInputPrefix;
 
         CountDownLatch firstDirectionDone = new CountDownLatch(1);
         AtomicReference<IOException> failure = new AtomicReference<>();
@@ -103,10 +117,10 @@ public class DuplexRelay {
 
         Future<?> clientToTarget = executorService.submit(() ->
                 copy(TrafficDirection.CLIENT_TO_TARGET, "client->target", clientSocket, targetSocket,
-                        clientSocket, firstDirectionDone, failure));
+                        clientSocket, firstDirectionDone, failure, prefix));
         Future<?> targetToClient = executorService.submit(() ->
                 copy(TrafficDirection.TARGET_TO_CLIENT, "target->client", targetSocket, clientSocket,
-                        clientSocket, firstDirectionDone, failure));
+                        clientSocket, firstDirectionDone, failure, null));
 
         try {
             firstDirectionDone.await();
@@ -128,9 +142,13 @@ public class DuplexRelay {
     }
 
     private void copy(TrafficDirection trafficDirection, String direction, Socket source, Socket destination,
-                      Socket clientSocket, CountDownLatch firstDirectionDone, AtomicReference<IOException> failure) {
+                      Socket clientSocket, CountDownLatch firstDirectionDone, AtomicReference<IOException> failure,
+                      byte[] inputPrefix) {
         try {
             InputStream inputStream = source.getInputStream();
+            if (inputPrefix != null && inputPrefix.length > 0) {
+                inputStream = new SequenceInputStream(new ByteArrayInputStream(inputPrefix), inputStream);
+            }
             OutputStream outputStream = destination.getOutputStream();
             MessageBounder messageBounder = rewriteLimits == null
                     ? null

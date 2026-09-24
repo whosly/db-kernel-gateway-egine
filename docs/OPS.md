@@ -15,7 +15,7 @@
 | 6 | （可选）明文强制 | 需审计时设 `gateway.require-cleartext-inspection=true`（或随审计默认） |
 | 6b | （可选）TLS 终止 | `gateway.tls.enabled=true` + `keystore-path`（PKCS12/JKS）；客户端从首字节 TLS；密码用环境变量 |
 | 6c | （可选）后端连接池 | `gateway.pool.enabled=true`；可选 `gateway.pool.reset-mode=protocol`（MySQL COM_RESET_CONNECTION / PG DISCARD ALL）；默认 `none` |
-| 6d | （可选）按库/用户路由 | `gateway.routing.enabled=true` + `rules`（`match-database` / `match-username` + `endpoints`）；未命中回退 `target`/`backend-endpoints`；默认关 |
+| 6d | （可选）按库/用户路由 | `gateway.routing.enabled=true` + `rules`（`match-database` / `match-username` + `endpoints`）；**PG** cleartext Startup 首连生效；**MySQL** 首连仍 fallback（server-first）；未命中回退 `target`/`backend-endpoints`；默认关 |
 | 7 | （可选）风控拒绝清单 | `gateway.risk.denied-operations` / `denied-statement-keywords` |
 | 8 | （可选）交互 CLI | 仅调试：`gateway.cli.interactive=true`（会读 `System.in`） |
 

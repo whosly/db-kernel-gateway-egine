@@ -1,6 +1,7 @@
 package com.whosly.gateway.adapter.mysql;
 
 import com.whosly.gateway.adapter.protocol.DatabaseTrafficEvent;
+import com.whosly.gateway.adapter.protocol.RoutingContext;
 import com.whosly.gateway.adapter.protocol.MessageBounder;
 import com.whosly.gateway.adapter.protocol.ProtocolConnectionState;
 import com.whosly.gateway.adapter.protocol.TrafficDirection;
@@ -1210,33 +1211,22 @@ public class MySQLDatabaseEventExtractor {
         if (session == null) {
             return;
         }
-
         int payloadOffset = MySQLFrameCodec.HEADER_LENGTH;
-        int payloadEnd = payloadOffset + payloadLength;
-        int cursor = payloadOffset + 32;
-        if (cursor > payloadEnd) {
+        if (payloadOffset + payloadLength > buffered.length) {
             return;
         }
-
-        CursorResult username = readNullTerminated(buffered, cursor, payloadEnd);
-        if (username == null) {
+        byte[] payload = new byte[payloadLength];
+        System.arraycopy(buffered, payloadOffset, payload, 0, payloadLength);
+        // Shared RoutingContext fill (capabilityFlags already validated by caller).
+        RoutingContext identity = MySqlHandshakeResponseRouting.fromHandshakeResponsePayload(payload);
+        if ((capabilityFlags & MySQLCapability.CLIENT_PROTOCOL_41.getFlag()) == 0 && identity.isEmpty()) {
             return;
         }
-        session.putAttribute("client.user", username.value());
-        cursor = username.nextOffset();
-
-        cursor = skipAuthResponse(buffered, cursor, payloadEnd, capabilityFlags);
-        if (cursor < 0) {
-            return;
-        }
-
-        if ((capabilityFlags & MySQLCapability.CLIENT_CONNECT_WITH_DB.getFlag()) != 0) {
-            CursorResult database = readNullTerminated(buffered, cursor, payloadEnd);
-            if (database != null && !database.value().isEmpty()) {
-                session.setCurrentDatabase(database.value());
-                session.putAttribute("client.database", database.value());
-            }
-        }
+        identity.username().ifPresent(user -> session.putAttribute("client.user", user));
+        identity.database().ifPresent(database -> {
+            session.setCurrentDatabase(database);
+            session.putAttribute("client.database", database);
+        });
     }
 
 

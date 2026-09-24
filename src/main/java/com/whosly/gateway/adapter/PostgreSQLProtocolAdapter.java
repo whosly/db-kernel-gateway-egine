@@ -6,21 +6,23 @@ import com.whosly.gateway.adapter.postgresql.PostgreSQLResultSetMaskingIntercept
 import com.whosly.gateway.adapter.postgresql.PostgreSQLFrameCodec;
 import com.whosly.gateway.adapter.postgresql.PostgreSQLProtocolErrorMapper;
 import com.whosly.gateway.adapter.postgresql.PostgreSQLSession;
+import com.whosly.gateway.adapter.postgresql.PostgreSQLStartupRouting;
 import com.whosly.gateway.adapter.protocol.BackendProvider;
-import com.whosly.gateway.adapter.protocol.RoutingContext;
+import com.whosly.gateway.adapter.protocol.ProbedHandshake;
+import com.whosly.gateway.adapter.protocol.ProtocolMessage;
 import com.whosly.gateway.adapter.protocol.DatabaseTrafficInspector;
 import com.whosly.gateway.adapter.protocol.DuplexRelay;
 import com.whosly.gateway.adapter.protocol.GatewayErrorMapping;
 import com.whosly.gateway.adapter.protocol.GatewayException;
 import com.whosly.gateway.adapter.protocol.MessagePipeline;
 import com.whosly.gateway.adapter.protocol.ProtocolErrorResponder;
-import com.whosly.gateway.adapter.protocol.ProtocolMessage;
 import com.whosly.gateway.parser.DruidSqlParser;
 import com.whosly.gateway.parser.SqlParser;
 import com.whosly.gateway.parser.StatementClassifier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.net.Socket;
 import java.util.UUID;
@@ -28,10 +30,12 @@ import java.util.UUID;
 /**
  * PostgreSQL transparent protocol proxy adapter.
  *
- * <p>Accepts a client connection, opens the target connection and relays bytes
- * in both directions while a per-connection {@link PostgreSQLSession} records
- * observed protocol state. When the target cannot be reached the client gets a
- * PostgreSQL-native {@code ErrorResponse} instead of a bare TCP reset.</p>
+ * <p>Accepts a client connection, peeks the first startup-family message to fill
+ * a {@link com.whosly.gateway.adapter.protocol.RoutingContext}, opens the target
+ * with that context, then relays bytes in both directions while a per-connection
+ * {@link PostgreSQLSession} records observed protocol state. When the target
+ * cannot be reached the client gets a PostgreSQL-native {@code ErrorResponse}
+ * instead of a bare TCP reset.</p>
  *
  * @author yueny09@163.com codealy
  * @since 2026-07-02
@@ -46,6 +50,8 @@ public class PostgreSQLProtocolAdapter extends AbstractProtocolAdapter {
     private static final PostgreSQLProtocolErrorMapper GATEWAY_ERROR_MAPPER = new PostgreSQLProtocolErrorMapper();
     private static final ProtocolErrorResponder GATEWAY_ERROR_RESPONDER =
             new ProtocolErrorResponder(FRAME_CODEC, GATEWAY_ERROR_MAPPER);
+    private static final PostgreSQLStartupRouting STARTUP_ROUTING =
+            new PostgreSQLStartupRouting(FIRST_CLIENT_MESSAGE_TIMEOUT_MS);
     /**
      * Correlates CancelRequest keys with the sessions of this adapter, so an
      * observed cancel request can be attributed to the session it targets.
@@ -62,19 +68,37 @@ public class PostgreSQLProtocolAdapter extends AbstractProtocolAdapter {
     }
 
     @Override
+    protected ProbedHandshake probeClientForRouting(Socket clientSocket) throws IOException {
+        return STARTUP_ROUTING.probe(clientSocket);
+    }
+
+    @Override
     protected void handleClientConnection(Socket clientSocket) {
         String sessionId = "postgresql-" + UUID.randomUUID();
         PostgreSQLSession session = new PostgreSQLSession(sessionId);
         registerSession(session);
 
         BackendProvider backendProvider = backendProvider();
+        ProbedHandshake probed;
+        try {
+            probed = probeClientForRouting(clientSocket);
+        } catch (IOException e) {
+            log.warn("PostgreSQL proxy session {} failed early client peek: {}", sessionId, e.getMessage());
+            sendStartupError(clientSocket, e, ProbedHandshake.empty());
+            session.close();
+            cancelKeyRegistry.unregister(sessionId);
+            unregisterSession(session);
+            closeQuietly(clientSocket);
+            return;
+        }
+
         Socket targetSocket;
         try {
-            targetSocket = backendProvider.acquire(RoutingContext.empty());
+            targetSocket = backendProvider.acquire(probed.context());
         } catch (IOException e) {
             log.warn("PostgreSQL proxy session {} could not reach target {}:{}: {}",
                     sessionId, targetHost, targetPort, e.getMessage());
-            sendStartupError(clientSocket, e);
+            sendStartupError(clientSocket, e, probed);
             session.close();
             cancelKeyRegistry.unregister(sessionId);
             unregisterSession(session);
@@ -83,8 +107,8 @@ public class PostgreSQLProtocolAdapter extends AbstractProtocolAdapter {
         }
 
         try {
-            log.info("PostgreSQL proxy session {} connected {} to target {}:{}",
-                    sessionId, clientSocket.getRemoteSocketAddress(), targetHost, targetPort);
+            log.info("PostgreSQL proxy session {} connected {} to target {}:{} ({})",
+                    sessionId, clientSocket.getRemoteSocketAddress(), targetHost, targetPort, probed.context());
             PostgreSQLDatabaseEventExtractor extractor = new PostgreSQLDatabaseEventExtractor(
                     PROTOCOL_NAME, sessionId, false, session, cancelKeyRegistry);
             DatabaseTrafficInspector trafficInspector = new DatabaseTrafficInspector(
@@ -107,7 +131,7 @@ public class PostgreSQLProtocolAdapter extends AbstractProtocolAdapter {
                             new PostgreSQLResultSetMaskingInterceptor(extractor, maskingEngine))
                     : MessagePipeline.of(trafficInspector);
             new DuplexRelay(sessionId, pipeline, GATEWAY_ERROR_RESPONDER, rewriteLimits)
-                    .relay(clientSocket, targetSocket);
+                    .relay(clientSocket, targetSocket, probed.replayToBackend());
         } catch (IOException e) {
             log.warn("PostgreSQL proxy session {} closed: {}", sessionId, e.getMessage());
         } finally {
@@ -140,15 +164,21 @@ public class PostgreSQLProtocolAdapter extends AbstractProtocolAdapter {
     @Override
     protected void rejectClientConnection(Socket clientSocket) {
         log.warn("Rejecting PostgreSQL client connection from {}", clientSocket.getRemoteSocketAddress());
-        sendStartupError(clientSocket, new GatewayException(GatewayErrorMapping.RESOURCE_EXHAUSTED));
+        sendStartupError(clientSocket, new GatewayException(GatewayErrorMapping.RESOURCE_EXHAUSTED),
+                ProbedHandshake.empty());
         closeQuietly(clientSocket);
     }
 
-    private static void sendStartupError(Socket clientSocket, Throwable cause) {
+    private static void sendStartupError(Socket clientSocket, Throwable cause, ProbedHandshake probed) {
         try {
             clientSocket.setSoTimeout(FIRST_CLIENT_MESSAGE_TIMEOUT_MS);
-            ProtocolMessage first = FRAME_CODEC.readStartupMessage(clientSocket.getInputStream());
-            int requestCode = requestCode(first);
+            ProtocolMessage first;
+            if (probed.hasReplay()) {
+                first = FRAME_CODEC.readStartupMessage(new ByteArrayInputStream(probed.replayToBackend()));
+            } else {
+                first = FRAME_CODEC.readStartupMessage(clientSocket.getInputStream());
+            }
+            int requestCode = PostgreSQLStartupRouting.requestCode(first);
 
             if (requestCode == PostgreSQLFrameCodec.CANCEL_REQUEST_CODE) {
                 return;
@@ -158,7 +188,7 @@ public class PostgreSQLProtocolAdapter extends AbstractProtocolAdapter {
                 clientSocket.getOutputStream().write('N');
                 clientSocket.getOutputStream().flush();
                 first = FRAME_CODEC.readStartupMessage(clientSocket.getInputStream());
-                requestCode = requestCode(first);
+                requestCode = PostgreSQLStartupRouting.requestCode(first);
             }
             if (requestCode == PostgreSQLFrameCodec.CANCEL_REQUEST_CODE) {
                 return;
@@ -176,11 +206,6 @@ public class PostgreSQLProtocolAdapter extends AbstractProtocolAdapter {
      */
     public PostgreSQLCancelKeyRegistry getCancelKeyRegistry() {
         return cancelKeyRegistry;
-    }
-
-    private static int requestCode(ProtocolMessage startupFamilyMessage) {
-        byte[] payload = startupFamilyMessage.payload();
-        return PostgreSQLFrameCodec.readInt4(payload, 0, payload.length);
     }
 
     private static void closeQuietly(Socket socket) {

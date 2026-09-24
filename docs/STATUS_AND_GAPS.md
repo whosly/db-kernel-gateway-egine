@@ -8,12 +8,12 @@
 
 | 项 | 现状 | 证据 |
 |---|---|---|
-| 非集成 `@Test`/`@ParameterizedTest` 注解数 | **398** | `mvn test` Results；排除 `*IntegrationTest` |
+| 非集成 `@Test`/`@ParameterizedTest` 注解数 | **409** | `mvn test` Results；排除 `*IntegrationTest` |
 | 集成测试 | 14 条注解；默认 surefire **排除** `*IntegrationTest`；无 local props 时 `-Pintegration-test` **assumeTrue 跳过**；本机有库时可 14/14 绿 | `pom.xml` excludes；跳过策略见 `docs/OPS.md` / `integration-test.properties` |
-| 本环境 `mvn test`（`JAVA_HOME`=JDK 17） | **BUILD SUCCESS：Tests run 398, Failures 0, Errors 0, Skipped 0** | surefire；含 P1-4 routing |
+| 本环境 `mvn test`（`JAVA_HOME`=JDK 17） | **BUILD SUCCESS：Tests run 409, Failures 0, Errors 0, Skipped 0** | surefire；含 P1-4 handshake RoutingContext |
 | `pom.xml` 编译目标 | `maven.compiler.source/target=17` | **保持 17**；不升到 21 |
 
-**结论**：编译目标保持 17；VT 仅在 JDK 21+ 运行期启用。当前 `mvn test` 为 **398** 全绿（含 P1-4 routing）。见 P0 / P1 / P2。
+**结论**：编译目标保持 17；VT 仅在 JDK 21+ 运行期启用。当前 `mvn test` 为 **409** 全绿（含 P1-4 handshake RoutingContext）。见 P0 / P1 / P2。
 
 ## 2. 能力总览（按主题）
 
@@ -79,7 +79,7 @@ Spring 实际读取的键（`@Value`）与默认 `application.yml`、模板一�
 | P1-1 | TLS/压缩可观测性 | **partial（improved）** | extractor `opaqueTunnel`；`require-cleartext-inspection`；**可选 TLS 终止**（`ClientTlsTerminator` + `gateway.tls.*`，协议无关 accept 路径）；单测用测试 keystore | 压缩后仍 opaque；协议内建 SSL 协商（MySQL capability / PG SSLRequest）仍非终止路径；后端 mTLS 未做 |
 | P1-2 | MySQL `COM_STMT_EXECUTE` 参数观测 | **partial（improved）** | PREPARE 登记 `statement_id→param_count`；EXECUTE 发出事件（statement id + 可解析时的 param types）；**不**把绑定值写入 statement 文本；单测覆盖 | 可选：审计侧对 string 类型参数做脱敏摘要；仍无改写 EXECUTE |
 | P1-3 | PG Cancel 只关联不代发 | **done（设计如此）** | `PostgreSQLCancelKeyRegistry` 仅索引；adapter / 单测明确「associate-only」；CancelRequest 仍由客户端短连接透明转发 | 若需网关代发 cancel，需 session→backend socket 映射，另开设计 |
-| P1-4 | 多后端仅 failover | **partial（improved）** | failover + 冷却；**`RoutingBackendProvider`**（`gateway.routing.enabled`，默认 false）按 `match-database` / `match-username` / 权重选路；组合 **Routing → Pool → Failover/Fixed**；未命中回退默认列表；`RoutingContext` 协议无关（Oracle/SQL Server 可复用）；单测覆盖 match/weight/fallback/disabled | 半开熔断可再增强；MySQL/PG 仍在握手前 `acquire(empty)`——身份感知需 adapter 填充 `RoutingContext`（如 PG StartupMessage peek） |
+| P1-4 | 多后端仅 failover | **partial（improved）** | failover + 冷却；**`RoutingBackendProvider`** + **`RoutingHandshakeProbe` / `ProbedHandshake`**：PG 在 `acquire` 前 peek StartupMessage 填充 `RoutingContext`（user/database）并透明 replay；MySQL **server-first** 仍 `acquire(empty)`（禁止伪造 greeting）；`MySqlHandshakeResponseRouting` 解析身份供观测/日后扩展；Oracle/SQL Server 复用同一 SPI | 半开熔断可再增强；MySQL 身份路由需终结认证或延后选路（见 §4.3） |
 | P1-5 | 结果集脱敏类型边界 | **partial（improved）** | MySQL：`bit` 按长度前缀可读可改写；PG：`int2/4/8`、`bool`、`float4/8` 二进制改写；decimal/时间/uuid/geometry 等仍 fail-closed；边界表见 §4.2 | decimal/时间编码若要做需独立设计 |
 | P1-6 | 连接池化 | **partial（improved）** | `PooledBackendProvider` + `gateway.pool.enabled`（默认 false）；`gateway.pool.reset-mode=none\|protocol`（默认 none）；`protocol` 时经 registry SPI：MySQL `MySqlBackendSessionReset`（`COM_RESET_CONNECTION`）、PG `PostgreSQLBackendSessionReset`（`DISCARD ALL`）；失败/拒绝关闭 socket；单测覆盖成功/失败 | 按身份/库名分池未做；reset 仍仅在已确认可复用 socket 上执行 |
 
@@ -109,6 +109,17 @@ Spring 实际读取的键（`@Value`）与默认 `application.yml`、模板一�
 
 **安全注意**：无证书则终止保持关闭；勿把生产 keystore 密码写入仓库（用环境变量）；测试 keystore 仅在 `src/test/resources/tls/`。
 
+
+### 4.3 握手身份与路由（P1-4 follow-up）
+
+| 协议 | `acquire(RoutingContext)` 时身份 | 行为 | 原因 |
+|---|---|---|---|
+| **PostgreSQL** | **有**（cleartext StartupMessage 的 `user` / `database`） | `PostgreSQLStartupRouting` peek 首包 → `acquire(context)` → `DuplexRelay` 前缀 replay 原字节 | 客户端先发；SSLRequest/CancelRequest 无身份 → empty + replay |
+| **MySQL** | **无**（恒 `RoutingContext.empty()`） | 先连 fallback/默认后端发 greeting，再中继；Handshake Response 仅观测（`MySqlHandshakeResponseRouting`） | server-first；伪造 Initial Handshake 违反透明规则；延后重连会破坏基于 scramble 的认证 |
+| **Oracle / SQL Server** | 未实现 wire | stub；应实现同一 `RoutingHandshakeProbe` | 扩展点已预留 |
+
+**配置含义**：`gateway.routing.rules` 的 `match-database` / `match-username` 对 **PostgreSQL cleartext startup** 在首连时生效；对 **MySQL** 首连仍走 fallback（规则不参与初始选路）。SSL/加密协商后的 PG opaque 路径同样看不到 StartupMessage 参数，走 fallback。
+
 ### 4.2 结果集脱敏类型边界（P1-5）
 
 | 协议 | 可非空改写（二进制） | 可读但非空改写拒绝 / 未知则整行不脱敏 |
@@ -134,6 +145,7 @@ Spring 实际读取的键（`@Value`）与默认 `application.yml`、模板一�
 | `MySqlBackendSessionReset` / `PostgreSQLBackendSessionReset` | `reset-mode=protocol` | 有单测（OK/ERR、池关闭） |
 | `ProtocolAdapterRegistry` | 内置 + stub | `ProtocolAdapterRegistryTest` |
 | `RoutingBackendProvider` / `WeightedEndpointSelector` | `gateway.routing.*`（默认关） | `RoutingBackendProviderTest` + `GatewayConfigTest` 装配 |
+| 握手填充 `RoutingContext` | PG peek；MySQL empty + parser | `PostgreSQLStartupRoutingTest` / `PostgreSQLProtocolAdapterRoutingTest`；`MySqlHandshakeResponseRoutingTest` / `MySqlProtocolAdapterRoutingTest` |
 | 真库集成 + 脱敏 | 有 | 需 `-Pintegration-test` + 本地库；无 props 则 assumeTrue 跳过（P2-6） |
 | `/gateway/*` + `/actuator/gateway` | 有 | `GatewayOpsSurfaceTest` + `CommandLineInterfaceTest`（非交互） |
 
