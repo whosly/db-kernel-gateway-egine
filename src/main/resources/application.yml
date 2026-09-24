@@ -32,6 +32,11 @@ gateway:
     secret-key-base64: ${GATEWAY_CONSOLE_SECRET_KEY_BASE64:}
     # Optional API token for /console/api/** (Bearer or X-Console-Token). Blank = open (lab).
     api-token: ${GATEWAY_CONSOLE_API_TOKEN:}
+    # Optional read-only token (GET/HEAD only). Writes still need api-token when set.
+    read-token: ${GATEWAY_CONSOLE_READ_TOKEN:}
+    metrics-history:
+      interval-seconds: ${GATEWAY_CONSOLE_METRICS_INTERVAL:5}
+      capacity: ${GATEWAY_CONSOLE_METRICS_CAPACITY:120}
   # Result-set encrypt strategy key (console masking-rules strategy=encrypt).
   # Or set via 管控台「安全」UI (stored encrypted when secret-key-base64 is set).
   # Never commit real keys.

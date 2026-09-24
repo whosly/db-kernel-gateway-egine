@@ -380,10 +380,14 @@ mvn -Pintegration-test test
 | 最近语句 | `GET …/instances/{id}/recent-statements`（内存环，重启丢失） |
 | 脱敏规则 API | `GET/POST/PUT/DELETE /console/api/instances/{id}/masking-rules`（协议无关） |
 | 列提示 | `GET /console/api/instances/{id}/schema/columns?table=`（JDBC metadata；失败 502） |
-| 安全 | `GET/PUT/DELETE /console/api/security/masking-key`；`GET /console/api/audit` |
+| 安全 | `GET/PUT/DELETE /console/api/security/masking-key`；`GET /console/api/audit`（`action`/`limit`） |
+| 审计状态 | `GET /console/api/audit/status`（非密钥：enabled/destination/spoolDir/…） |
+| 指标时序 | `GET /console/api/metrics/history?instanceId=&limit=`（进程内环；总览火花图） |
+| 风控 | `GET/PUT /console/api/risk-policy`（H2 覆盖 + 热挂；空=allow-all） |
+| 连接池 | 实例 `metrics`/`status` 含 `pool.{enabled,idleCount,maxIdle}` |
 | 控制面加密 | `gateway.console.secret-key-base64`（32 字节 AES Base64）→ 密码/密钥 `enc:v1:`；缺省实验室明文 |
-| 可选 API Token | `gateway.console.api-token`；`Authorization: Bearer` 或 `X-Console-Token`（仅 `/console/api/**`） |
-| 设计 | [`docs/CONSOLE_ARCHITECTURE.md`](docs/CONSOLE_ARCHITECTURE.md) §11–§13 · [`CONSOLE_DESIGN.md`](docs/CONSOLE_DESIGN.md) |
+| 可选 API Token | `gateway.console.api-token`（读写）；`gateway.console.read-token`（仅 GET）；`Authorization: Bearer` 或 `X-Console-Token` |
+| 设计 | [`docs/CONSOLE_ARCHITECTURE.md`](docs/CONSOLE_ARCHITECTURE.md) §11–§14 · [`CONSOLE_DESIGN.md`](docs/CONSOLE_DESIGN.md) |
 
 一等实体是 **网关实例**（监听端口 + `dbType` 标签），不是按 MySQL/PG 分拆的控制台。  
 类型目录（`gateway.catalog`）与实例注册表（`gateway.instances`）分离。  

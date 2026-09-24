@@ -93,6 +93,20 @@ public final class RoutingBackendProvider implements BackendProvider, AutoClosea
         return rules;
     }
 
+    /** Sum of idle sockets across pooled fallback + rule providers (0 if none pooled). */
+    public int idleCountHint() {
+        int n = 0;
+        if (fallback instanceof PooledBackendProvider pooled) {
+            n += pooled.idleCount();
+        }
+        for (BoundRule bound : rules) {
+            if (bound.provider() instanceof PooledBackendProvider pooled) {
+                n += pooled.idleCount();
+            }
+        }
+        return n;
+    }
+
     @Override
     public void close() {
         closeQuietly(fallback);

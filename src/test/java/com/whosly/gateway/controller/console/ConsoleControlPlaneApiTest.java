@@ -12,6 +12,7 @@ import com.whosly.gateway.config.GatewayConfig;
 import com.whosly.gateway.console.GatewayInstanceRegistry;
 import com.whosly.gateway.console.InstanceBackendHealthService;
 import com.whosly.gateway.console.SupportedDatabaseCatalog;
+import com.whosly.gateway.console.observe.MetricsHistorySampler;
 import com.whosly.gateway.console.observe.RecentTrafficRing;
 import com.whosly.gateway.adapter.protocol.DatabaseTrafficEvent;
 import com.whosly.gateway.runtime.GatewayListenerRuntime;
@@ -101,9 +102,13 @@ class ConsoleControlPlaneApiTest {
         InstanceBackendHealthService health =
                 new InstanceBackendHealthService(runtime, Optional.empty(), gatewayConfig, 200);
 
+        ReflectionTestUtils.setField(gatewayConfig, "auditSpoolDir", "./audit");
+        MetricsHistorySampler sampler = new MetricsHistorySampler(registry, runtime, 5, 20);
+        // do not start scheduler in unit test — call sampleNow manually when needed
+
         console = new ConsoleApiController(
                 catalog, registry, runningAdapter, new GatewayRuntimeMetrics(), gatewayConfig,
-                null, null, null, health, ring, runtime);
+                null, null, null, health, ring, runtime, null, sampler);
     }
 
     @Test
@@ -192,5 +197,46 @@ class ConsoleControlPlaneApiTest {
         assertThat(body.get("ok")).isEqualTo(false);
         assertThat(body.get("targetPort")).isEqualTo(65530);
         assertThat(((Number) body.get("latencyMs")).longValue()).isLessThan(5000L);
+    }
+
+    @Test
+    void auditStatusExposesNonSecretFields() {
+        Map<String, Object> body = console.auditStatus();
+        assertThat(body.get("enabled")).isEqualTo(true);
+        assertThat(body.get("destination")).isEqualTo("spool");
+        assertThat(body.get("spoolDir")).isEqualTo("./audit");
+        assertThat(body.get("maskStatements")).isEqualTo(true);
+        assertThat(body.toString()).doesNotContain("s3cret");
+        assertThat(body).containsKeys("shipperRunning", "recordsPendingHint", "consoleAuditCount", "help");
+    }
+
+    @Test
+    void metricsHistoryReturnsOverviewPoints() {
+        // trigger one sample via reflection on sampler field
+        MetricsHistorySampler sampler = (MetricsHistorySampler) ReflectionTestUtils.getField(console, "metricsHistorySampler");
+        assertThat(sampler).isNotNull();
+        sampler.sampleNow();
+        Map<String, Object> body = console.metricsHistory(null, 50);
+        assertThat(body.get("scope")).isEqualTo("overview");
+        assertThat(body.get("intervalSeconds")).isEqualTo(5);
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> points = (List<Map<String, Object>>) body.get("points");
+        assertThat(points).isNotEmpty();
+        assertThat(points.get(0)).containsKeys("t", "connectionsAccepted", "activeConnections");
+    }
+
+    @Test
+    void metricsHistoryUnknownInstanceFails() {
+        assertThatThrownBy(() -> console.metricsHistory("no-such", 10))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void instanceMetricsIncludesPoolBlock() {
+        Map<String, Object> body = console.instanceMetrics("gw-run");
+        assertThat(body).containsKey("pool");
+        @SuppressWarnings("unchecked")
+        Map<String, Object> pool = (Map<String, Object>) body.get("pool");
+        assertThat(pool).containsKeys("enabled", "idleCount", "maxIdle");
     }
 }

@@ -33,6 +33,7 @@ import java.net.ServerSocket;
 import java.net.Socket;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -183,6 +184,37 @@ public abstract class AbstractProtocolAdapter implements ProtocolAdapter {
         this.poolMaxIdle = poolMaxIdle;
     }
     public int getPoolMaxIdle() { return poolMaxIdle; }
+
+    /**
+     * Idle sockets currently held by the shared pooled provider(s).
+     * {@code null} when pooling is disabled; {@code 0} when enabled but provider not built yet.
+     */
+    public Integer getPoolIdleCount() {
+        if (!poolEnabled) {
+            return null;
+        }
+        BackendProvider provider = sharedBackendProvider;
+        if (provider == null) {
+            return 0;
+        }
+        if (provider instanceof PooledBackendProvider pooled) {
+            return pooled.idleCount();
+        }
+        if (provider instanceof RoutingBackendProvider routing) {
+            return routing.idleCountHint();
+        }
+        return 0;
+    }
+
+    /** Non-secret pool snapshot for console status/metrics. */
+    public Map<String, Object> getPoolStats() {
+        Map<String, Object> pool = new LinkedHashMap<>();
+        pool.put("enabled", poolEnabled);
+        pool.put("maxIdle", poolMaxIdle);
+        Integer idle = getPoolIdleCount();
+        pool.put("idleCount", idle != null ? idle : 0);
+        return pool;
+    }
     public void setBackendSessionReset(BackendSessionReset backendSessionReset) {
         this.backendSessionReset = backendSessionReset != null ? backendSessionReset : BackendSessionReset.none();
     }

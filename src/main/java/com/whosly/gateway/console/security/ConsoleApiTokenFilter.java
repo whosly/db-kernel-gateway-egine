@@ -16,7 +16,11 @@ import java.nio.charset.StandardCharsets;
 
 /**
  * Optional Bearer / X-Console-Token gate for {@code /console/api/**}.
- * Blank {@code gateway.console.api-token} → open (lab default).
+ * <ul>
+ *   <li>Blank {@code gateway.console.api-token} and {@code read-token} → open (lab default).</li>
+ *   <li>{@code api-token}: read + write.</li>
+ *   <li>{@code read-token}: GET/HEAD only; writes still require {@code api-token} when configured.</li>
+ * </ul>
  * Does not protect static SPA assets under {@code /console}.
  */
 @Component
@@ -24,15 +28,18 @@ import java.nio.charset.StandardCharsets;
 public class ConsoleApiTokenFilter extends OncePerRequestFilter {
 
     private final String apiToken;
+    private final String readToken;
 
     public ConsoleApiTokenFilter(
-            @Value("${gateway.console.api-token:}") String apiToken) {
+            @Value("${gateway.console.api-token:}") String apiToken,
+            @Value("${gateway.console.read-token:}") String readToken) {
         this.apiToken = apiToken != null ? apiToken.trim() : "";
+        this.readToken = readToken != null ? readToken.trim() : "";
     }
 
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
-        if (apiToken.isEmpty()) {
+        if (apiToken.isEmpty() && readToken.isEmpty()) {
             return true;
         }
         String path = request.getRequestURI();
@@ -43,14 +50,38 @@ public class ConsoleApiTokenFilter extends OncePerRequestFilter {
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response,
                                     FilterChain filterChain) throws ServletException, IOException {
         String provided = extractToken(request);
-        if (provided == null || !constantTimeEquals(apiToken, provided)) {
+        String method = request.getMethod() != null ? request.getMethod().toUpperCase() : "GET";
+        boolean readOnly = "GET".equals(method) || "HEAD".equals(method);
+
+        boolean ok;
+        if (readOnly) {
+            ok = matches(apiToken, provided) || matches(readToken, provided);
+            // If only read-token is configured (api blank), still allow GET with read-token
+            if (!ok && apiToken.isEmpty() && matches(readToken, provided)) {
+                ok = true;
+            }
+        } else {
+            // Writes require api-token when it is configured; if only read-token exists, deny writes
+            if (!apiToken.isEmpty()) {
+                ok = matches(apiToken, provided);
+            } else {
+                ok = false;
+            }
+        }
+
+        if (!ok) {
             response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
             response.setCharacterEncoding(StandardCharsets.UTF_8.name());
             response.setContentType(MediaType.APPLICATION_JSON_VALUE);
-            response.getWriter().write("{\"ok\":false,\"message\":\"Unauthorized: missing or invalid console API token\"}");
+            response.getWriter().write(
+                    "{\"ok\":false,\"message\":\"Unauthorized: missing or invalid console API token\"}");
             return;
         }
         filterChain.doFilter(request, response);
+    }
+
+    private static boolean matches(String expected, String actual) {
+        return expected != null && !expected.isEmpty() && constantTimeEquals(expected, actual);
     }
 
     private static String extractToken(HttpServletRequest request) {

@@ -11,7 +11,7 @@ class ConsoleApiTokenFilterTest {
 
     @Test
     void blankTokenAllowsAll() throws Exception {
-        ConsoleApiTokenFilter filter = new ConsoleApiTokenFilter("");
+        ConsoleApiTokenFilter filter = new ConsoleApiTokenFilter("", "");
         MockHttpServletRequest req = new MockHttpServletRequest("GET", "/console/api/overview");
         MockHttpServletResponse res = new MockHttpServletResponse();
         filter.doFilter(req, res, new MockFilterChain());
@@ -20,7 +20,7 @@ class ConsoleApiTokenFilterTest {
 
     @Test
     void missingTokenReturns401() throws Exception {
-        ConsoleApiTokenFilter filter = new ConsoleApiTokenFilter("secret-token");
+        ConsoleApiTokenFilter filter = new ConsoleApiTokenFilter("secret-token", "");
         MockHttpServletRequest req = new MockHttpServletRequest("GET", "/console/api/overview");
         MockHttpServletResponse res = new MockHttpServletResponse();
         filter.doFilter(req, res, new MockFilterChain());
@@ -30,7 +30,7 @@ class ConsoleApiTokenFilterTest {
 
     @Test
     void bearerAndHeaderAccepted() throws Exception {
-        ConsoleApiTokenFilter filter = new ConsoleApiTokenFilter("secret-token");
+        ConsoleApiTokenFilter filter = new ConsoleApiTokenFilter("secret-token", "");
 
         MockHttpServletRequest bearer = new MockHttpServletRequest("GET", "/console/api/health");
         bearer.addHeader("Authorization", "Bearer secret-token");
@@ -46,11 +46,32 @@ class ConsoleApiTokenFilterTest {
     }
 
     @Test
+    void readTokenAllowsGetButNotWrite() throws Exception {
+        ConsoleApiTokenFilter filter = new ConsoleApiTokenFilter("write-token", "read-only");
+
+        MockHttpServletRequest get = new MockHttpServletRequest("GET", "/console/api/overview");
+        get.addHeader("X-Console-Token", "read-only");
+        MockHttpServletResponse getRes = new MockHttpServletResponse();
+        filter.doFilter(get, getRes, new MockFilterChain());
+        assertThat(getRes.getStatus()).isEqualTo(200);
+
+        MockHttpServletRequest put = new MockHttpServletRequest("PUT", "/console/api/risk-policy");
+        put.addHeader("X-Console-Token", "read-only");
+        MockHttpServletResponse putRes = new MockHttpServletResponse();
+        filter.doFilter(put, putRes, new MockFilterChain());
+        assertThat(putRes.getStatus()).isEqualTo(401);
+
+        MockHttpServletRequest putOk = new MockHttpServletRequest("PUT", "/console/api/risk-policy");
+        putOk.addHeader("X-Console-Token", "write-token");
+        MockHttpServletResponse putOkRes = new MockHttpServletResponse();
+        filter.doFilter(putOk, putOkRes, new MockFilterChain());
+        assertThat(putOkRes.getStatus()).isEqualTo(200);
+    }
+
+    @Test
     void staticConsoleNotFiltered() throws Exception {
-        ConsoleApiTokenFilter filter = new ConsoleApiTokenFilter("secret-token");
+        ConsoleApiTokenFilter filter = new ConsoleApiTokenFilter("secret-token", "");
         MockHttpServletRequest req = new MockHttpServletRequest("GET", "/console/");
-        MockHttpServletResponse res = new MockHttpServletResponse();
-        // shouldNotFilter → chain proceeds without auth check when path not /console/api
         assertThat(filter.shouldNotFilter(req)).isTrue();
     }
 }

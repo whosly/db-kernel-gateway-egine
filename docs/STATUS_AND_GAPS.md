@@ -4,7 +4,7 @@
 > **更新原则**：只写有代码/测试/配置证据的结论；「规划中」不得写成「已实现」。  
 > **导航**：见 [README.md](README.md)。
 >
-> **近况**：Vue console Phase A/A+/B — SPA + H2 实例 CRUD + 脱敏规则 + **密码信封加密 / 审计 / 脱敏密钥 UI / schema 列提示 / 可选 api-token**.
+> **近况**：Vue console Phase A/A+/B/B+ + **C partial / E lite** — 审计状态 · 进程内 metrics history · 风控规则热挂 · 连接池徽章 · 可选 read-token。
 
 ## 1. 构建与测试基线
 
@@ -12,10 +12,10 @@
 |---|---|---|
 | 非集成 `@Test`/`@ParameterizedTest` 注解数 | **458** | `mvn test` Results；排除 `*IntegrationTest` |
 | 集成测试 | 14 条注解；默认 surefire **排除** `*IntegrationTest`；无 local props 时 `-Pintegration-test` **assumeTrue 跳过**；本机有库时可 14/14 绿 | `pom.xml` excludes；跳过策略见 `docs/OPS.md` / `integration-test.properties` |
-| 本环境 `mvn test`（`JAVA_HOME`=JDK 17） | **BUILD SUCCESS：Tests run 476, Failures 0, Errors 0, Skipped 0** | surefire；含 SQL Server P0 + 管控台 Phase A/A+/B/B+ |
+| 本环境 `mvn test`（`JAVA_HOME`=JDK 17） | **BUILD SUCCESS：Tests run 488, Failures 0, Errors 0, Skipped 0** | surefire；含 SQL Server P0 + 管控台 Phase A–E lite |
 | `pom.xml` 编译目标 | `maven.compiler.source/target=17` | **保持 17**；不升到 21 |
 
-**结论**：编译目标保持 17；VT 仅在 JDK 21+ 运行期启用。管控台已完成 Phase B + B+（会话/健康/导出/最近语句/Compose）；完整 SSO 仍规划。见 P0 / P1 / P2。
+**结论**：编译目标保持 17；VT 仅在 JDK 21+ 运行期启用。管控台已完成 Phase B/B+ 与 **C partial / E lite**（审计可见性、进程内时序、风控、连接池）；完整 SSO / 外部 Grafana 仍规划。见 P0 / P1 / P2。
 
 ## 2. 能力总览（按主题）
 
@@ -95,8 +95,8 @@ Spring 实际读取的键（`@Value`）与默认 `application.yml`、模板一�
 |---|---|---|---|---|
 | P2-1 | NIO / 少线程模型 | **missing（deferred）** | 仍 `ServerSocket.accept` + 阻塞读；并发模型选定为 **每连接线程 / 可选 VT**（`VirtualThreadExecutors`） | **不做 NIO 重写**；若 JDK 21+ VT 不足再开专项 |
 | P2-2 | JDBC vs 协议代理分裂 | **partial（improved）** | `DatabaseConnectionService` / adapter 字段 `@Deprecated` + javadoc；STATUS §6；wire 仍走 `BackendProvider` | 无调用方后可删类；勿接入 DuplexRelay |
-| P2-3 | HTTP 管控面 / 管控台 | **partial（improved）** | Vue3+TS+Vite；H2 CRUD；脱敏热挂；Phase B 安全；**B+**：`GET …/sessions` + Kill（关客户端腿）、`POST …/health-check`、`…/export`、内存 `RecentTrafficRing`（重启丢失，非 spool 替代）、Compose 一键启。设计 [`CONSOLE_ARCHITECTURE.md`](CONSOLE_ARCHITECTURE.md) §11–§13 | 完整 SSO/HTTPS/审计进 spool UI 未做 | 完整鉴权/HTTPS 仍规划；Compose 仅 lab |
-| P2-4 | Metrics 出口 | **partial（improved）** | 每 listener 独立 metrics；overview `metrics` 全实例求和 + `legacyMetrics`；`/gateway/metrics` 仍 legacy | 未接 Micrometer | 未接 Micrometer 远程；告警阈值见 `docs/OPS.md` |
+| P2-3 | HTTP 管控面 / 管控台 | **partial（improved）** | Vue3+TS+Vite；H2 CRUD；脱敏热挂；B/B+；**C partial**：`GET …/audit/status`、audit `action` 过滤、可选 `read-token`；**风控**：`GET/PUT …/risk-policy` + H2 热挂；连接池 `pool` 字段 + 抽屉徽章。设计 [`CONSOLE_ARCHITECTURE.md`](CONSOLE_ARCHITECTURE.md) §11–§14 | 完整 SSO/HTTPS/审计 spool 内容 UI 未做 | 完整鉴权/HTTPS 仍规划；Compose 仅 lab |
+| P2-4 | Metrics 出口 | **partial（improved）** | 每 listener 独立 metrics；overview 求和 + `legacyMetrics`；**E lite**：`MetricsHistorySampler` + `GET …/metrics/history` + Overview SVG 火花图（内存环） | 外部 Prometheus/Grafana 非必需 | 可选后续接 Micrometer；告警阈值见 `docs/OPS.md` |
 | P2-5 | 审计测试与运维手册 | **partial（improved）** | P0-3 单测已有；**`docs/OPS.md`** 开启清单 / 告警清单；README 运维段改为索引 | JDBC 审计真库验收仍缺 |
 | P2-6 | 集成测试在 CI 可复现 | **partial（improved）** | 跳过策略写入 `integration-test.properties` + OPS；`-Pintegration-test` 无 props → `assumeTrue` skip；`-Pintegration-testcontainers` **stub only** | 真 Testcontainers 接线另开；默认 `mvn test` 仍不需 Docker |
 | P2-7 | 多库扩展点 / Oracle·SQL Server | **in-progress / partial（SQL Server P0）** | 第三库定为 **SQL Server TDS**（非 Oracle）。`SqlServerProtocolAdapter` + `sqlserver`/`mssql` 注册 + TDS framing + 透明 `DuplexRelay`；模板 `application-sqlserver-template.yml`（31433→1433）；计划见 [`SQLSERVER_TDS_PLAN.md`](SQLSERVER_TDS_PLAN.md)。Oracle 仍 stub。P0 **无** Login7 观测/脱敏/协议 reset | P1 观测与 Docker 冒烟；P2 深消息/脱敏/cancel；Oracle 另开 |

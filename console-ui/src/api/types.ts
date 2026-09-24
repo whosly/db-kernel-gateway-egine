@@ -184,3 +184,53 @@ export interface RecentStatement {
   statement?: string
   observedAt?: string | null
 }
+
+export interface PoolStats {
+  enabled: boolean
+  idleCount: number
+  maxIdle: number
+}
+
+export interface AuditStatus {
+  enabled: boolean
+  destination?: string
+  spoolDir?: string
+  maskStatements?: boolean
+  shipperRunning?: boolean
+  recordsPendingHint?: number | null
+  consoleAuditCount?: number
+  help?: string
+}
+
+export interface MetricsHistoryPoint {
+  t: number
+  connectionsAccepted?: number
+  policyDenials?: number
+  activeConnections?: number
+  [key: string]: number | undefined
+}
+
+export interface MetricsHistoryResponse {
+  intervalSeconds: number
+  instanceId?: string | null
+  scope: string
+  points: MetricsHistoryPoint[]
+  count: number
+  capacity?: number
+  note?: string
+}
+
+export interface RiskPolicy {
+  enabled: boolean
+  deniedOperations: string[]
+  deniedStatementKeywords: string[]
+  source: string
+  updatedAt?: string | null
+  yamlDefaults?: {
+    deniedOperations: string[]
+    deniedStatementKeywords: string[]
+  }
+  note?: string
+  ok?: boolean
+  message?: string
+}

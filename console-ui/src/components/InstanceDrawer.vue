@@ -8,6 +8,7 @@ import type {
   MaskingStrategy,
   RecentStatement,
   SchemaColumn,
+  PoolStats,
   SessionRow,
 } from '../api/types'
 import {
@@ -29,6 +30,7 @@ defineEmits<{ close: []; delete: [] }>()
 const toast = inject<(m: string) => void>('toast', () => {})
 const tab = ref<'info' | 'masking' | 'sessions' | 'recent'>('info')
 const metrics = ref<Record<string, number>>({})
+const pool = ref<PoolStats | null>(null)
 const rules = ref<MaskingRule[]>([])
 const rulesError = ref<string | null>(null)
 const rulesLoading = ref(false)
@@ -77,8 +79,10 @@ async function loadMetrics() {
   try {
     const body = await getInstanceMetrics(props.instance.id)
     metrics.value = body.metrics || {}
+    pool.value = body.pool || null
   } catch {
     metrics.value = props.instance.metrics || {}
+    pool.value = null
   }
 }
 
@@ -308,6 +312,12 @@ watch(tab, (v) => {
           <p>
             <span class="badge" :class="'status-' + instance.status">{{ instance.status }}</span>
             <span class="badge">{{ instance.source === 'console' ? '管控台(H2)' : 'YAML' }}</span>
+            <span
+              v-if="pool"
+              class="badge"
+              :class="pool.enabled ? 'ok' : ''"
+              :title="'maxIdle=' + pool.maxIdle"
+            >连接池 · {{ pool.enabled ? '开' : '关' }}<template v-if="pool.enabled"> · idle={{ pool.idleCount }}</template></span>
           </p>
           <p class="muted">{{ instance.message }}</p>
           <div class="health-row">

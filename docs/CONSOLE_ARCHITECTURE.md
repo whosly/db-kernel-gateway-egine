@@ -184,7 +184,7 @@ com.whosly.gateway
 **列脱敏 / 列加密挂点（Phase A+ 已实现）**
 
 - 挂点：已有 `masking` / traffic observer 管线，按 **实例** 绑定规则（H2 + 热挂 `MaskingEngine`），而不是按 DB 品牌页面。
-- 管控台实例抽屉「脱敏规则」Tab；详见 §11。密钥管理 UI / 表结构 introspect 仍后续。
+- 管控台实例抽屉「脱敏规则」Tab；详见 §11。密钥管理 UI / schema 列提示见 §12（已落地）。
 
 ## 3. 前端架构（Vue 3 + TypeScript + Vite）
 
@@ -318,9 +318,10 @@ build: { outDir: 'dist', emptyOutDir: true }
 | **A** | Vue/TS/Vite SPA；总览聚合；抽屉；**H2 持久化创建/删除 + 启停**；FE↔BE↔代理端口联调 | ✅ 完成 |
 | **A+** | 实例脱敏规则 CRUD + 热挂；**密钥管理 UI** + **schema 列提示** | ✅ 完成（见 §11 / §12） |
 | **B** | 控制面密码信封加密 / 可外置 DB；操作审计 | ✅ 完成（见 §12） |
-| **C** | 完整鉴权 / SSO；审计进 spool（本轮仅可选 `api-token`） | 规划；C-lite 见 §12.7 |
+| **B+** | 会话 / Kill / 健康 / 导出 / 最近语句环 / Compose | ✅ 完成（见 §13） |
+| **C** | 完整鉴权 / SSO | 规划；**C partial** 见 §14（审计可见性 + 可选 read-token） |
 | **D** | 可选独立前端部署（CDN + API 网关）；BFF | 规划 |
-| **E** | 可观测图表（时序）；接 Micrometer | 规划 |
+| **E** | 可观测图表（时序）；接 Micrometer | **E lite** 见 §14（进程内 timeseries；外部 Prometheus 非必需） |
 
 每阶段仍遵守 C1–C6；前端可替换，**API 版本**用文档章节号管理（现为 **契约 v1**）。
 
@@ -389,8 +390,8 @@ build: { outDir: 'dist', emptyOutDir: true }
 | 列选择 | ✅ | `column` 精确名；可选 `table`；可选 `namePattern`（regex） |
 | 管控台 UI | ✅ | 实例抽屉或「安全策略」子页；类型无关表单 |
 | 进程级 Spring `MaskingRule` bean | 兼容 | 仍作为**全局默认**；实例 H2 规则优先合并（实例规则 priority 覆盖同名列） |
-| 密钥管理 UI | 🔜 | `encrypt` 使用 `gateway.masking.key`（或已有 KeyProvider）；控制台不展示明文密钥 |
-| 动态发现表结构 | 🔜 | 本轮手填列名；不连业务库 introspect |
+| 密钥管理 UI | ✅ | 见 §12.5：`GET/PUT/DELETE /console/api/security/masking-key`；永不回传明文 |
+| 动态发现表结构 | ✅ | 见 §12.6：`GET …/schema/columns`（JDBC metadata；失败 502） |
 
 ### 11.2 持久化（控制面 H2）
 
@@ -648,8 +649,8 @@ gateway:
 |---|---|---|
 | **A / A+ / B** | 见 §11–§12 | ✅ |
 | **B+（本轮）** | 会话 / Kill / 健康探测 / 导出 / 最近语句环 / Compose | ✅ 设计 → 实现 |
-| **C** | 完整鉴权 / SSO；审计进 spool UI | 规划 |
-| **D / E** | CDN 前端 / Micrometer | 规划 |
+| **C partial / E lite（本轮）** | 审计可见性 · 进程内指标时序 · 风控规则 · 连接池徽章 | ✅ 见 §14 |
+| **C / D / E 完整** | SSO · CDN · 外部 Micrometer/Grafana | 规划 |
 
 ### 13.8 自检清单（作者）
 
@@ -664,3 +665,97 @@ gateway:
 - [x] `mvn test` 绿；`npm run build` 绿；STATUS / README 更新
 
 **结论：设计可通过 → 进入 §13 实现。**
+
+---
+
+## 14. Phase C partial + E lite · 审计可见性 / 指标时序 / 风控规则
+
+> 作者自检通过后实现。对标行业代理（审计状态、指标趋势、query/risk rules），**不做**完整 SSO/OAuth、MaxGUI 查询编辑器、外部 Grafana 必选路径。
+
+### 14.1 目标总览
+
+| 能力 | 本轮 | 说明 |
+|---|---|---|
+| 流量审计状态 API | ✅ | `GET /console/api/audit/status` — 非密钥字段：enabled / destination / spoolDir / maskStatements / shipperRunning? / recordsPendingHint? / consoleAuditCount? |
+| 管控操作审计列表 | ✅（增强） | 既有 `GET /console/api/audit`；可选 `action` + `limit` 过滤 |
+| 可选只读 Token | ✅（nice-to-have） | `gateway.console.read-token` 仅允许 GET；写操作仍需 `api-token` |
+| 进程内指标时序 | ✅ | `MetricsHistorySampler` 每 N 秒快照（默认 5s，环约 120 点 ≈ 10 min）；`GET /console/api/metrics/history` |
+| Overview 火花图 | ✅ | 轻量 SVG（无 echarts）；不依赖外部 Prometheus |
+| 连接池状态 | ✅ | 实例 metrics/status 暴露 `pool.enabled` / `idleCount` / `maxIdle`；抽屉徽章「连接池」 |
+| 风控规则管控 | ✅ | `GET/PUT /console/api/risk-policy`；H2 覆盖 + YAML 默认；热挂到运行中 adapter |
+| 完整 SSO / Spring Security | ❌ | 仍属 Phase C 完整版 |
+| 外部 Grafana / Micrometer 必选 | ❌ | 可选后续；主路径为进程内 history |
+
+### 14.2 审计可见性（C partial）
+
+```text
+GET /console/api/audit/status
+→ {
+    enabled, destination, spoolDir, maskStatements,
+    shipperRunning?, recordsPendingHint?, consoleAuditCount?,
+    help: "见 docs/OPS.md · gateway.audit.*"
+  }
+```
+
+- 流量审计仍由 `gateway.audit.*` + `AuditSpool` / `AuditShipper` 驱动；本轮只**暴露状态**，不把 spool 内容搬进管控台表格。
+- Ops 页补充启用说明 + 指向 `docs/OPS.md`。
+- `GET /console/api/audit?action=&limit=` 仍仅列**管控操作审计**（H2 `gateway_console_audit`）。
+
+### 14.3 指标时序（E lite）
+
+| 项 | 约定 |
+|---|---|
+| 采样器 | `MetricsHistorySampler`（Spring `@Scheduled` 或自管 scheduler） |
+| 间隔 | `gateway.console.metrics-history.interval-seconds`（默认 5） |
+| 容量 | `gateway.console.metrics-history.capacity`（默认 120） |
+| 点字段 | `t`（epoch ms）、`connectionsAccepted`、`policyDenials`、`activeConnections`、其余 `GatewayRuntimeMetrics.snapshot()` 键 |
+| API | `GET /console/api/metrics/history?instanceId=&limit=` → `{intervalSeconds, points:[…]}`；无 `instanceId` = 总览求和 |
+| UI | Overview 简易 SVG sparkline |
+| 边界 | **内存环，重启丢失**；不替代 Prometheus remote |
+
+外部 Prometheus：若后续加 `micrometer-registry-prometheus`，文档写 scrape 口；**本轮不强制**。
+
+### 14.4 连接池徽章
+
+- `AbstractProtocolAdapter` 暴露 `poolEnabled` + 聚合 `idleCount`（直连 `PooledBackendProvider`；路由时对 fallback/rules 求和）。
+- `GET …/instances/{id}/metrics|status` 增加 `pool: {enabled, idleCount, maxIdle}`。
+- 抽屉 Info Tab 显示「连接池 · 开/关 · idle=n」。
+
+### 14.5 风控规则（ProxySQL-like lite）
+
+| 项 | 约定 |
+|---|---|
+| 持久化 | H2 表 `gateway_risk_policy`（单例 id=`default`）；无行则有效策略 = YAML `gateway.risk.*` |
+| API | `GET /console/api/risk-policy`；`PUT` body `{deniedOperations:[], deniedStatementKeywords:[], enabled:true}` |
+| 语义 | 空列表 + enabled = **allow-all**（与 `DenyListDatabaseRiskPolicy` 一致）；协议无关 |
+| 热挂 | `MutableDatabaseRiskPolicy`（AtomicReference）共享给各 adapter；PUT 后立即对**已有会话**生效（evaluate 走委托） |
+| UI | Ops「风控」区块：编辑列表、保存、空=放行全部 |
+| YAML | 仍为启动默认；控制台覆盖优先生效并持久化到 H2 |
+
+### 14.6 可选 read-token
+
+- `gateway.console.api-token`：读写（既有）。
+- `gateway.console.read-token`：仅 `GET`（及 `HEAD`）；与 api-token 任一匹配即过；**写方法**必须匹配 api-token（若 api-token 已配置）。
+- 二者皆空 → 实验室开放（既有行为）。
+
+### 14.7 演进表更新
+
+| Phase | 内容 | 状态 |
+|---|---|---|
+| **A / A+ / B / B+** | 见 §11–§13 | ✅ |
+| **C partial（本轮）** | 审计状态可见 · 可选 read-token | ✅ |
+| **E lite（本轮）** | 进程内 metrics history + sparkline | ✅ |
+| **风控 lite（本轮）** | risk-policy GET/PUT + 热挂 | ✅ |
+| **C / E 完整** | SSO · 外部 Micrometer/Grafana | 规划 |
+
+### 14.8 自检清单（作者）
+
+- [x] 无品牌 API 路径；风控/审计/指标均挂实例或进程级
+- [x] audit/status 无密钥 / 无 JDBC 密码
+- [x] metrics history 内存环边界写明；UI 不强制 Prometheus
+- [x] pool 字段仅非密钥计数；未启用时 enabled=false
+- [x] risk-policy 空=allow-all；热挂可验证；单测覆盖 GET/PUT + deny 求值
+- [x] read-token 仅 GET；写仍需 api-token（若已配）
+- [x] STATUS P2-3/P2-4 + README 同步；`mvn test` + `npm run build` 绿
+
+**结论：设计可通过 → 进入 §14 实现。**

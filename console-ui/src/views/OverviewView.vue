@@ -3,19 +3,25 @@ import { computed, inject, ref } from 'vue'
 import KpiGrid from '../components/KpiGrid.vue'
 import StatusDonut from '../components/StatusDonut.vue'
 import InstanceCard from '../components/InstanceCard.vue'
-import { getOverview, startInstance, stopInstance } from '../api/consoleApi'
-import type { OverviewResponse } from '../api/types'
+import Sparkline from '../components/Sparkline.vue'
+import { getMetricsHistory, getOverview, startInstance, stopInstance } from '../api/consoleApi'
+import type { MetricsHistoryPoint, OverviewResponse } from '../api/types'
 import { usePolling } from '../composables/usePolling'
 import { useRouter } from 'vue-router'
 
 const toast = inject<(m: string) => void>('toast', () => {})
 const router = useRouter()
 const data = ref<OverviewResponse | null>(null)
+const history = ref<MetricsHistoryPoint[]>([])
+const historyNote = ref<string | null>(null)
 const error = ref<string | null>(null)
 
 async function load() {
   try {
     data.value = await getOverview()
+    const hist = await getMetricsHistory(undefined, 60)
+    history.value = hist.points || []
+    historyNote.value = hist.note || null
     error.value = null
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e)
@@ -40,6 +46,10 @@ const kpis = computed(() => {
     { label: '策略拒绝', value: d.metrics?.policyDenials ?? 0 },
   ]
 })
+
+function series(key: string) {
+  return history.value.map((p) => Number(p[key] ?? 0))
+}
 
 async function onStart(id: string) {
   try {
@@ -71,8 +81,25 @@ async function onStop(id: string) {
         <StatusDonut :by-status="data?.byStatus || {}" />
       </div>
       <div class="panel grow">
-        <h3>指标说明</h3>
-        <p class="muted">
+        <h3>指标趋势（进程内）</h3>
+        <p class="muted tiny">
+          内存环采样 · {{ historyNote || '重启丢失；不替代 Prometheus' }}
+        </p>
+        <div class="sparks">
+          <div>
+            <div class="spark-label">接受连接</div>
+            <Sparkline :values="series('connectionsAccepted')" color="#22c55e" />
+          </div>
+          <div>
+            <div class="spark-label">策略拒绝</div>
+            <Sparkline :values="series('policyDenials')" color="#ef4444" />
+          </div>
+          <div>
+            <div class="spark-label">活跃连接</div>
+            <Sparkline :values="series('activeConnections')" color="#38bdf8" />
+          </div>
+        </div>
+        <p class="muted" style="margin-top: 0.75rem">
           总览 <code>metrics</code> = 全部绑定实例计数求和（metricsScope={{ data?.metricsScope || '—' }}）。
           <code>legacyMetrics</code> 为遗留 /gateway adapter，仅对照用。
         </p>
@@ -105,6 +132,7 @@ async function onStop(id: string) {
 .grow { flex: 1; }
 h3 { margin: 0 0 0.75rem; font-size: 1rem; }
 .muted { color: var(--text-muted); font-size: 0.9rem; }
+.tiny { font-size: 0.75rem; }
 .code {
   background: var(--bg);
   border-radius: 8px;
@@ -113,4 +141,6 @@ h3 { margin: 0 0 0.75rem; font-size: 1rem; }
   overflow: auto;
 }
 .err { color: var(--danger); }
+.sparks { display: grid; gap: 0.65rem; }
+.spark-label { font-size: 0.8rem; color: var(--text-muted); margin-bottom: 0.2rem; }
 </style>

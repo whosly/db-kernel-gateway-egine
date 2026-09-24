@@ -4,13 +4,16 @@ import {
   deleteMaskingKey,
   downloadConfigExport,
   downloadInstancesExport,
+  getAuditStatus,
   getConfigSummary,
   getHealth,
   getMaskingKeyStatus,
+  getRiskPolicy,
   listAudit,
   putMaskingKey,
+  putRiskPolicy,
 } from '../api/consoleApi'
-import type { AuditEntry, MaskingKeyStatus } from '../api/types'
+import type { AuditEntry, AuditStatus, MaskingKeyStatus, RiskPolicy } from '../api/types'
 import { usePolling } from '../composables/usePolling'
 
 const summary = ref<Record<string, unknown> | null>(null)
@@ -22,14 +25,36 @@ const keyBase64 = ref('')
 const keyMsg = ref<string | null>(null)
 const keyBusy = ref(false)
 const audit = ref<AuditEntry[]>([])
+const auditStatus = ref<AuditStatus | null>(null)
+const auditActionFilter = ref('')
+const risk = ref<RiskPolicy | null>(null)
+const riskOpsText = ref('')
+const riskKwText = ref('')
+const riskEnabled = ref(true)
+const riskMsg = ref<string | null>(null)
+const riskBusy = ref(false)
+
+function linesToList(text: string): string[] {
+  return text
+    .split(/[\n,]+/)
+    .map((s) => s.trim())
+    .filter(Boolean)
+}
 
 async function load() {
   try {
     summary.value = await getConfigSummary()
     health.value = await getHealth()
     keyStatus.value = await getMaskingKeyStatus()
-    const auditBody = await listAudit(30)
+    auditStatus.value = await getAuditStatus()
+    const auditBody = await listAudit(30, auditActionFilter.value.trim() || undefined)
     audit.value = auditBody.entries || []
+    risk.value = await getRiskPolicy()
+    if (risk.value) {
+      riskEnabled.value = !!risk.value.enabled
+      riskOpsText.value = (risk.value.deniedOperations || []).join('\n')
+      riskKwText.value = (risk.value.deniedStatementKeywords || []).join('\n')
+    }
     error.value = null
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e)
@@ -68,6 +93,23 @@ async function clearKey() {
   }
 }
 
+async function saveRisk() {
+  riskBusy.value = true
+  riskMsg.value = null
+  try {
+    risk.value = await putRiskPolicy({
+      enabled: riskEnabled.value,
+      deniedOperations: linesToList(riskOpsText.value),
+      deniedStatementKeywords: linesToList(riskKwText.value),
+    })
+    riskMsg.value = risk.value.message || '已保存并热挂'
+  } catch (e) {
+    riskMsg.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    riskBusy.value = false
+  }
+}
+
 function sourceLabel(s?: string) {
   if (s === 'console') return '管控台'
   if (s === 'config') return '配置文件'
@@ -100,11 +142,57 @@ function sourceLabel(s?: string) {
           控制面密码加密：配置 <code>gateway.console.secret-key-base64</code>（32 字节 AES Base64）；缺省为实验室明文 + WARN
         </li>
         <li>
-          可选 API Token：<code>gateway.console.api-token</code>；本地可
-          <code>localStorage.setItem('consoleApiToken','…')</code> 或
-          <code>VITE_CONSOLE_API_TOKEN</code>
+          可选 API Token：<code>gateway.console.api-token</code>（读写）；
+          <code>gateway.console.read-token</code>（仅 GET）；本地可
+          <code>localStorage.setItem('consoleApiToken','…')</code>
         </li>
+        <li>
+          流量审计：配置 <code>gateway.audit.enabled=true</code> 与 spool 目录；详见
+          <code>docs/OPS.md</code>。下方「审计状态」仅展示非密钥字段。
+        </li>
+        <li>指标趋势：进程内环（总览页火花图）；不强制外部 Prometheus。</li>
       </ul>
+    </div>
+
+    <div class="panel">
+      <h3>流量审计状态</h3>
+      <p class="muted tiny">{{ auditStatus?.help || '见 docs/OPS.md · gateway.audit.*' }}</p>
+      <dl v-if="auditStatus" class="kv">
+        <div><dt>enabled</dt><dd>{{ auditStatus.enabled ? '是' : '否' }}</dd></div>
+        <div><dt>destination</dt><dd>{{ auditStatus.destination || '—' }}</dd></div>
+        <div><dt>spoolDir</dt><dd>{{ auditStatus.spoolDir || '—' }}</dd></div>
+        <div><dt>maskStatements</dt><dd>{{ auditStatus.maskStatements ? '是' : '否' }}</dd></div>
+        <div><dt>shipperRunning</dt><dd>{{ auditStatus.shipperRunning ? '是' : '否' }}</dd></div>
+        <div><dt>spoolBytesHint</dt><dd>{{ auditStatus.recordsPendingHint ?? '—' }}</dd></div>
+        <div><dt>consoleAuditCount</dt><dd>{{ auditStatus.consoleAuditCount ?? 0 }}</dd></div>
+      </dl>
+      <p v-else class="muted">加载中…</p>
+    </div>
+
+    <div class="panel">
+      <h3>风控规则</h3>
+      <p class="muted tiny">
+        协议无关拒绝清单（操作名 / 语句关键字子串）。空列表且启用 = <strong>allow-all</strong>。
+        保存后热挂到运行中 adapter（已有会话立即生效）。来源：{{ risk?.source || '—' }}
+        <template v-if="risk?.updatedAt"> · 更新 {{ risk.updatedAt }}</template>
+      </p>
+      <label class="check">
+        <input v-model="riskEnabled" type="checkbox" /> 启用风控
+      </label>
+      <div class="risk-grid">
+        <div class="field">
+          <label>拒绝操作名（每行或逗号分隔）</label>
+          <textarea v-model="riskOpsText" rows="4" placeholder="例如 COM_PROCESS_KILL" />
+        </div>
+        <div class="field">
+          <label>拒绝语句关键字</label>
+          <textarea v-model="riskKwText" rows="4" placeholder="例如 drop table" />
+        </div>
+      </div>
+      <div class="actions">
+        <button type="button" class="primary" :disabled="riskBusy" @click="saveRisk">保存并热挂</button>
+      </div>
+      <p v-if="riskMsg" class="msg">{{ riskMsg }}</p>
     </div>
 
     <div class="panel">
@@ -153,6 +241,10 @@ function sourceLabel(s?: string) {
     <div class="panel">
       <h3>操作审计（最近）</h3>
       <p class="muted tiny">不含密码 / 脱敏密钥。完整鉴权与 SSO 仍为规划项。</p>
+      <div class="row" style="margin-bottom: 0.5rem">
+        <input v-model="auditActionFilter" placeholder="按 action 过滤，如 instance.start" @change="load" />
+        <button type="button" @click="load">刷新</button>
+      </div>
       <table v-if="audit.length" class="audit">
         <thead>
           <tr><th>时间</th><th>动作</th><th>实例</th><th>详情</th></tr>
@@ -187,11 +279,17 @@ pre { font-size: 0.75rem; overflow: auto; max-height: 280px; }
 .tiny { font-size: 0.75rem; }
 .key-form { display: grid; gap: 0.65rem; max-width: 480px; }
 .field label { display: block; font-size: 0.8rem; color: var(--text-muted); margin-bottom: 0.25rem; }
+.field textarea, .field input { width: 100%; box-sizing: border-box; }
 .actions { display: flex; gap: 0.5rem; }
 .msg { margin-top: 0.5rem; }
 .audit { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
 .audit th, .audit td { border-bottom: 1px solid var(--border); padding: 0.4rem 0.35rem; text-align: left; vertical-align: top; }
 code { font-size: 0.85em; }
 .row { display: flex; gap: 0.5rem; flex-wrap: wrap; }
-.muted { color: var(--text-muted); font-size: 0.9rem; }
+.kv { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 0.35rem 1rem; }
+.kv dt { font-size: 0.75rem; color: var(--text-muted); }
+.kv dd { margin: 0; font-size: 0.9rem; }
+.risk-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; }
+@media (max-width: 800px) { .risk-grid { grid-template-columns: 1fr; } }
+.check { display: flex; align-items: center; gap: 0.4rem; margin: 0.5rem 0; font-size: 0.9rem; }
 </style>

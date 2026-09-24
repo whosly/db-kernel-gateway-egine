@@ -8,6 +8,7 @@ import com.whosly.gateway.adapter.protocol.ClientAddressPolicy;
 import com.whosly.gateway.adapter.protocol.CidrClientAddressPolicy;
 import com.whosly.gateway.adapter.protocol.DatabaseRiskPolicy;
 import com.whosly.gateway.adapter.protocol.DenyListDatabaseRiskPolicy;
+import com.whosly.gateway.adapter.protocol.MutableDatabaseRiskPolicy;
 import com.whosly.gateway.adapter.protocol.GatewayRuntimeMetrics;
 import com.whosly.gateway.adapter.protocol.ClientTlsTerminator;
 import com.whosly.gateway.adapter.protocol.DatabaseTrafficObserver;
@@ -258,6 +259,19 @@ public class GatewayConfig implements DisposableBean {
                 : new MaskingRuleRegistry(List.of()));
     }
 
+    /**
+     * Shared hot-swappable risk policy. YAML seeds the initial deny lists;
+     * console {@code PUT /risk-policy} replaces the delegate without restart.
+     */
+    @Bean
+    public MutableDatabaseRiskPolicy mutableDatabaseRiskPolicy() {
+        MutableDatabaseRiskPolicy mutable = new MutableDatabaseRiskPolicy();
+        mutable.replace(DenyListDatabaseRiskPolicy.of(
+                splitCsv(riskDeniedOperations),
+                splitCsv(riskDeniedStatementKeywords)));
+        return mutable;
+    }
+
     @Bean
     public ConsoleSecretCipher consoleSecretCipher() {
         return ConsoleSecretCipher.fromBase64MasterKey(consoleSecretKeyBase64);
@@ -445,7 +459,7 @@ public class GatewayConfig implements DisposableBean {
         adapter.setMaxConnections(maxConnections);
         adapter.setIdleTimeoutSeconds(idleTimeoutSeconds);
         adapter.setClientAddressPolicy(clientAddressPolicy());
-        adapter.setDatabaseRiskPolicy(databaseRiskPolicy());
+        adapter.setDatabaseRiskPolicy(mutableDatabaseRiskPolicy());
         adapter.setRewriteLimits(rewriteLimits());
         adapter.setMaskingEngine(maskingEngine());
         adapter.setVirtualThreadsEnabled(virtualThreads);
@@ -566,12 +580,6 @@ public class GatewayConfig implements DisposableBean {
         return CidrClientAddressPolicy.of(Arrays.asList(allowedClientCidrs.split(",")));
     }
 
-    private DatabaseRiskPolicy databaseRiskPolicy() {
-        return DenyListDatabaseRiskPolicy.of(
-                splitCsv(riskDeniedOperations),
-                splitCsv(riskDeniedStatementKeywords));
-    }
-
     private static List<String> splitCsv(String csv) {
         if (csv == null || csv.isBlank()) {
             return List.of();
@@ -592,4 +600,43 @@ public class GatewayConfig implements DisposableBean {
     }
     public String getProxyDbType() { return proxyDbType; }
     public int getProxyPort() { return proxyPort; }
+
+    public List<String> riskDeniedOperationsList() {
+        return splitCsv(riskDeniedOperations);
+    }
+
+    public List<String> riskDeniedStatementKeywordsList() {
+        return splitCsv(riskDeniedStatementKeywords);
+    }
+
+    public String getAuditSpoolDir() {
+        return auditSpoolDir;
+    }
+
+    public boolean isAuditShipperRunning() {
+        return auditShipper != null && auditShipper.isRunning();
+    }
+
+    /** Best-effort spool file size hint (bytes); null when audit off or unavailable. */
+    public Long getAuditSpoolBytesHint() {
+        if (!auditEnabled || auditSpool == null) {
+            return null;
+        }
+        try {
+            var file = auditSpool.activeFile();
+            if (file != null && java.nio.file.Files.isRegularFile(file)) {
+                return java.nio.file.Files.size(file);
+            }
+        } catch (Exception ignored) {
+        }
+        return null;
+    }
+
+    public boolean isPoolEnabled() {
+        return poolEnabled;
+    }
+
+    public int getPoolMaxIdle() {
+        return poolMaxIdle;
+    }
 }

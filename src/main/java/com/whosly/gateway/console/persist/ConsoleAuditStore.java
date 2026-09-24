@@ -58,12 +58,29 @@ public class ConsoleAuditStore {
     }
 
     public List<ConsoleAuditRecord> listRecent(int limit) {
+        return listRecent(limit, null);
+    }
+
+    public List<ConsoleAuditRecord> listRecent(int limit, String action) {
         int capped = Math.max(1, Math.min(limit, 500));
+        if (action == null || action.isBlank()) {
+            return jdbc.query(
+                    "SELECT id, at, action, instance_id, detail_json, actor FROM gateway_console_audit "
+                            + "ORDER BY at DESC FETCH FIRST ? ROWS ONLY",
+                    ROW_MAPPER,
+                    capped);
+        }
         return jdbc.query(
                 "SELECT id, at, action, instance_id, detail_json, actor FROM gateway_console_audit "
-                        + "ORDER BY at DESC FETCH FIRST ? ROWS ONLY",
+                        + "WHERE action = ? ORDER BY at DESC FETCH FIRST ? ROWS ONLY",
                 ROW_MAPPER,
+                action.trim(),
                 capped);
+    }
+
+    public int count() {
+        Integer n = jdbc.queryForObject("SELECT COUNT(*) FROM gateway_console_audit", Integer.class);
+        return n != null ? n : 0;
     }
 
     private static ConsoleAuditRecord mapRow(ResultSet rs, int rowNum) throws SQLException {

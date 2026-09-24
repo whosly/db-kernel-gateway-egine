@@ -82,6 +82,19 @@ services:
     depends_on:
       - gateway
 
+
+  # Optional lab stub — TDS P0 transparent proxy only; not deep Login7.
+  # Enable: docker compose --profile sqlserver up -d
+  # sqlserver:
+  #   profiles: ["sqlserver"]
+  #   image: mcr.microsoft.com/mssql/server:2022-latest
+  #   environment:
+  #     ACCEPT_EULA: "Y"
+  #     MSSQL_SA_PASSWORD: ${MSSQL_SA_PASSWORD:-Your_strong_Passw0rd}
+  #   ports:
+  #     - "11433:1433"
+  #   # Wire gateway instance listen 31433 → this service after enabling sqlserver profile YAML.
+
 volumes:
   mysql_data:
   pg_data:

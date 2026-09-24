@@ -4,6 +4,7 @@ import com.whosly.gateway.adapter.AbstractProtocolAdapter;
 import org.springframework.web.server.ResponseStatusException;
 import com.whosly.gateway.runtime.GatewayListenerRuntime.ManagedListener;
 import com.whosly.gateway.runtime.GatewayListenerRuntime;
+import com.whosly.gateway.console.observe.MetricsHistorySampler;
 import com.whosly.gateway.console.observe.RecentTrafficRing;
 import com.whosly.gateway.console.InstanceBackendHealthService;
 import com.whosly.gateway.adapter.protocol.SessionSnapshot;
@@ -20,6 +21,7 @@ import com.whosly.gateway.console.schema.InstanceSchemaColumnsService;
 import com.whosly.gateway.console.schema.InstanceSchemaColumnsService.SchemaConnectException;
 import com.whosly.gateway.console.security.ConsoleAuditService;
 import com.whosly.gateway.console.security.ConsoleMaskingKeyService;
+import com.whosly.gateway.console.security.RiskPolicyService;
 import com.whosly.gateway.runtime.GatewayListenerRuntime.CreateInstanceRequest;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
@@ -62,6 +64,8 @@ public class ConsoleApiController {
     private final InstanceBackendHealthService healthService;
     private final RecentTrafficRing recentTrafficRing;
     private final GatewayListenerRuntime listenerRuntime;
+    private final RiskPolicyService riskPolicyService;
+    private final MetricsHistorySampler metricsHistorySampler;
 
     /** Test-friendly constructor (security extras optional). */
     public ConsoleApiController(SupportedDatabaseCatalog catalog,
@@ -70,7 +74,7 @@ public class ConsoleApiController {
                                 GatewayRuntimeMetrics runtimeMetrics,
                                 GatewayConfig gatewayConfig) {
         this(catalog, instanceRegistry, protocolAdapter, runtimeMetrics, gatewayConfig,
-                null, null, null, null, null, null);
+                null, null, null, null, null, null, null, null);
     }
 
     @Autowired
@@ -84,7 +88,9 @@ public class ConsoleApiController {
                                 @Autowired(required = false) InstanceSchemaColumnsService schemaColumnsService,
                                 @Autowired(required = false) InstanceBackendHealthService healthService,
                                 @Autowired(required = false) RecentTrafficRing recentTrafficRing,
-                                @Autowired(required = false) GatewayListenerRuntime listenerRuntime) {
+                                @Autowired(required = false) GatewayListenerRuntime listenerRuntime,
+                                @Autowired(required = false) RiskPolicyService riskPolicyService,
+                                @Autowired(required = false) MetricsHistorySampler metricsHistorySampler) {
         this.catalog = catalog;
         this.instanceRegistry = instanceRegistry;
         this.protocolAdapter = protocolAdapter;
@@ -96,6 +102,8 @@ public class ConsoleApiController {
         this.healthService = healthService;
         this.recentTrafficRing = recentTrafficRing;
         this.listenerRuntime = listenerRuntime;
+        this.riskPolicyService = riskPolicyService;
+        this.metricsHistorySampler = metricsHistorySampler;
     }
 
     @GetMapping("/supported-databases")
@@ -487,14 +495,15 @@ public class ConsoleApiController {
     }
 
     @GetMapping("/audit")
-    public Map<String, Object> listAudit(@RequestParam(value = "limit", defaultValue = "50") int limit) {
+    public Map<String, Object> listAudit(@RequestParam(value = "limit", defaultValue = "50") int limit,
+                                          @RequestParam(value = "action", required = false) String action) {
         if (auditService == null) {
             Map<String, Object> empty = new LinkedHashMap<>();
             empty.put("entries", List.of());
             empty.put("count", 0);
             return empty;
         }
-        List<ConsoleAuditRecord> rows = auditService.list(limit);
+        List<ConsoleAuditRecord> rows = auditService.list(limit, action);
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("entries", rows.stream().map(r -> {
             Map<String, Object> m = new LinkedHashMap<>();
@@ -507,7 +516,71 @@ public class ConsoleApiController {
             return m;
         }).toList());
         body.put("count", rows.size());
+        if (action != null && !action.isBlank()) {
+            body.put("actionFilter", action.trim());
+        }
         return body;
+    }
+
+    @GetMapping("/audit/status")
+    public Map<String, Object> auditStatus() {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("enabled", gatewayConfig.isAuditEnabled());
+        body.put("destination", gatewayConfig.getAuditDestination());
+        body.put("spoolDir", gatewayConfig.getAuditSpoolDir());
+        body.put("maskStatements", gatewayConfig.isAuditMaskStatements());
+        body.put("shipperRunning", gatewayConfig.isAuditShipperRunning());
+        Long bytesHint = gatewayConfig.getAuditSpoolBytesHint();
+        body.put("recordsPendingHint", bytesHint); // bytes in active segment; not exact record count
+        body.put("consoleAuditCount", auditService != null ? auditService.count() : 0);
+        body.put("help", "流量审计见 docs/OPS.md · gateway.audit.*；本接口仅非密钥状态");
+        return body;
+    }
+
+    @GetMapping("/metrics/history")
+    public Map<String, Object> metricsHistory(
+            @RequestParam(value = "instanceId", required = false) String instanceId,
+            @RequestParam(value = "limit", defaultValue = "120") int limit) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        if (metricsHistorySampler == null) {
+            body.put("intervalSeconds", 5);
+            body.put("points", List.of());
+            body.put("count", 0);
+            body.put("note", "采样器未启用");
+            return body;
+        }
+        if (instanceId != null && !instanceId.isBlank()) {
+            instanceRegistry.findById(instanceId.trim())
+                    .orElseThrow(() -> new IllegalArgumentException("Unknown gateway instance id: " + instanceId));
+        }
+        List<Map<String, Object>> points = metricsHistorySampler.history(instanceId, limit);
+        body.put("intervalSeconds", metricsHistorySampler.intervalSeconds());
+        body.put("instanceId", (instanceId == null || instanceId.isBlank()) ? null : instanceId.trim());
+        body.put("scope", (instanceId == null || instanceId.isBlank()) ? "overview" : "instance");
+        body.put("points", points);
+        body.put("count", points.size());
+        body.put("capacity", metricsHistorySampler.capacity());
+        body.put("note", "内存环，重启丢失；不替代 Prometheus");
+        return body;
+    }
+
+    @GetMapping("/risk-policy")
+    public Map<String, Object> getRiskPolicy() {
+        if (riskPolicyService == null) {
+            throw new IllegalStateException("Risk policy service is not available");
+        }
+        return riskPolicyService.getView();
+    }
+
+    @PutMapping("/risk-policy")
+    public Map<String, Object> putRiskPolicy(@RequestBody RiskPolicyBody body) {
+        if (riskPolicyService == null) {
+            throw new IllegalStateException("Risk policy service is not available");
+        }
+        if (body == null) {
+            throw new IllegalArgumentException("request body is required");
+        }
+        return riskPolicyService.put(body.enabled(), body.deniedOperations(), body.deniedStatementKeywords());
     }
 
 
@@ -700,5 +773,12 @@ public class ConsoleApiController {
     }
 
     public record MaskingKeyBody(String keyId, String keyBase64) {
+    }
+
+    public record RiskPolicyBody(
+            Boolean enabled,
+            List<String> deniedOperations,
+            List<String> deniedStatementKeywords
+    ) {
     }
 }

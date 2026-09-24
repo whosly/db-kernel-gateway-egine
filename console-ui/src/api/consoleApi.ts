@@ -24,9 +24,12 @@ export function getInstance(id: string) {
 }
 
 export function getInstanceMetrics(id: string) {
-  return apiGet<{ id: string; metrics: Record<string, number> }>(
-    `/instances/${encodeURIComponent(id)}/metrics`,
-  )
+  return apiGet<{
+    id: string
+    metrics: Record<string, number>
+    pool?: import('./types').PoolStats
+    activeConnections?: number | null
+  }>(`/instances/${encodeURIComponent(id)}/metrics`)
 }
 
 export function startInstance(id: string) {
@@ -106,10 +109,34 @@ export function getSchemaColumns(instanceId: string, table?: string) {
   )
 }
 
-export function listAudit(limit = 50) {
-  return apiGet<{ entries: import('./types').AuditEntry[]; count: number }>(
-    `/audit?limit=${limit}`,
+export function listAudit(limit = 50, action?: string) {
+  const q = new URLSearchParams({ limit: String(limit) })
+  if (action) q.set('action', action)
+  return apiGet<{ entries: import('./types').AuditEntry[]; count: number; actionFilter?: string }>(
+    `/audit?${q.toString()}`,
   )
+}
+
+export function getAuditStatus() {
+  return apiGet<import('./types').AuditStatus>('/audit/status')
+}
+
+export function getMetricsHistory(instanceId?: string, limit = 120) {
+  const q = new URLSearchParams({ limit: String(limit) })
+  if (instanceId) q.set('instanceId', instanceId)
+  return apiGet<import('./types').MetricsHistoryResponse>(`/metrics/history?${q.toString()}`)
+}
+
+export function getRiskPolicy() {
+  return apiGet<import('./types').RiskPolicy>('/risk-policy')
+}
+
+export function putRiskPolicy(payload: {
+  enabled?: boolean
+  deniedOperations?: string[]
+  deniedStatementKeywords?: string[]
+}) {
+  return apiPut<import('./types').RiskPolicy>('/risk-policy', payload)
 }
 
 

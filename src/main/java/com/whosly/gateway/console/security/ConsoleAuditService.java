@@ -33,7 +33,15 @@ public class ConsoleAuditService {
     }
 
     public List<ConsoleAuditRecord> list(int limit) {
-        return store.listRecent(limit);
+        return list(limit, null);
+    }
+
+    public List<ConsoleAuditRecord> list(int limit, String action) {
+        return store.listRecent(limit, action);
+    }
+
+    public int count() {
+        return store.count();
     }
 
     private static String toSafeJson(Map<String, ?> detail) {

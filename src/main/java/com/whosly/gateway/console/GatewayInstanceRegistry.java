@@ -1,5 +1,6 @@
 package com.whosly.gateway.console;
 
+import com.whosly.gateway.adapter.AbstractProtocolAdapter;
 import com.whosly.gateway.adapter.ProtocolAdapter;
 import com.whosly.gateway.adapter.protocol.SessionSnapshot;
 import com.whosly.gateway.console.GatewayInstance.InstanceStatus;
@@ -81,6 +82,7 @@ public class GatewayInstanceRegistry {
         body.put("activeConnections", instance.activeConnections());
         body.put("maxConnections", instance.maxConnections());
         body.put("message", instance.message());
+        body.put("pool", poolStatsOf(id));
         return body;
     }
 
@@ -92,7 +94,22 @@ public class GatewayInstanceRegistry {
         body.put("bound", instance.bound());
         body.put("status", instance.status().name());
         body.put("metrics", instance.metrics());
+        body.put("pool", poolStatsOf(id));
+        body.put("activeConnections", instance.activeConnections());
         return body;
+    }
+
+    private Map<String, Object> poolStatsOf(String id) {
+        return listenerRuntime.getAdapter(id.trim())
+                .filter(a -> a instanceof AbstractProtocolAdapter)
+                .map(a -> ((AbstractProtocolAdapter) a).getPoolStats())
+                .orElseGet(() -> {
+                    Map<String, Object> pool = new LinkedHashMap<>();
+                    pool.put("enabled", false);
+                    pool.put("idleCount", 0);
+                    pool.put("maxIdle", 0);
+                    return pool;
+                });
     }
 
     /** Active session snapshots for an instance (empty when unbound/stopped). */
