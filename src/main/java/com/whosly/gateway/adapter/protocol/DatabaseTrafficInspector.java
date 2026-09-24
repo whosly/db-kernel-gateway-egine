@@ -6,6 +6,7 @@ import org.slf4j.LoggerFactory;
 
 import java.util.List;
 import java.util.Objects;
+import java.util.function.BooleanSupplier;
 
 /**
  * Bridges protocol event extraction, audit observation, and risk policy decisions.
@@ -50,11 +51,14 @@ public class DatabaseTrafficInspector implements MessageInterceptor {
      * extractor reference itself, which is still one monitor per inspector.</p>
      */
     private final Object stateMonitor;
+    private final BooleanSupplier opaqueTunnelState;
+    private final boolean requireCleartextInspection;
+    private final GatewayRuntimeMetrics runtimeMetrics;
 
     public DatabaseTrafficInspector(DatabaseEventExtractor extractor,
                                     DatabaseTrafficObserver observer,
                                     DatabaseRiskPolicy riskPolicy) {
-        this(extractor, observer, riskPolicy, null, null);
+        this(extractor, observer, riskPolicy, null, null, null, false, null);
     }
 
     /**
@@ -68,12 +72,26 @@ public class DatabaseTrafficInspector implements MessageInterceptor {
                                     DatabaseRiskPolicy riskPolicy,
                                     ProtocolSession session,
                                     StatementClassifier statementClassifier) {
+        this(extractor, observer, riskPolicy, session, statementClassifier, null, false, null);
+    }
+
+    public DatabaseTrafficInspector(DatabaseEventExtractor extractor,
+                                    DatabaseTrafficObserver observer,
+                                    DatabaseRiskPolicy riskPolicy,
+                                    ProtocolSession session,
+                                    StatementClassifier statementClassifier,
+                                    BooleanSupplier opaqueTunnelState,
+                                    boolean requireCleartextInspection,
+                                    GatewayRuntimeMetrics runtimeMetrics) {
         this.extractor = Objects.requireNonNull(extractor, "extractor must not be null");
         this.observer = Objects.requireNonNull(observer, "observer must not be null");
         this.riskPolicy = Objects.requireNonNull(riskPolicy, "riskPolicy must not be null");
         this.session = session;
         this.statementClassifier = statementClassifier;
         this.stateMonitor = session != null ? session : extractor;
+        this.opaqueTunnelState = opaqueTunnelState;
+        this.requireCleartextInspection = requireCleartextInspection;
+        this.runtimeMetrics = runtimeMetrics != null ? runtimeMetrics : GatewayRuntimeMetrics.noop();
     }
 
     @Override
@@ -88,6 +106,15 @@ public class DatabaseTrafficInspector implements MessageInterceptor {
         }
 
         List<DatabaseTrafficEvent> events = extractAndRecordState(message);
+        if (opaqueTunnelState != null && opaqueTunnelState.getAsBoolean()) {
+            runtimeMetrics.recordOpaqueTunnelEntered();
+            if (requireCleartextInspection) {
+                runtimeMetrics.recordOpaqueTunnelDenied();
+                log.warn("Denying session {}: opaque tunnel incompatible with required cleartext inspection",
+                        session != null ? session.getConnectionId() : "unknown");
+                return TrafficDecision.deny(message);
+            }
+        }
         /*
          * Audit and risk control deliberately run outside the monitor: the sink may
          * block on a file or a database, and holding the monitor across that I/O
@@ -96,14 +123,6 @@ public class DatabaseTrafficInspector implements MessageInterceptor {
         return dispatch(events, message);
     }
 
-    /**
-     * Drives the extractor and writes the session state it produces.
-     *
-     * <p>Both directions of the session call this, so it runs inside the
-     * {@link #stateMonitor}: extraction and the session updates it triggers are one
-     * atomic step, which is what keeps a response attributed to the command that
-     * produced it.</p>
-     */
     private List<DatabaseTrafficEvent> extractAndRecordState(WireMessage message) {
         synchronized (stateMonitor) {
             List<DatabaseTrafficEvent> events = extractor.extract(message.direction(),
@@ -117,14 +136,6 @@ public class DatabaseTrafficInspector implements MessageInterceptor {
         }
     }
 
-    /**
-     * Delivers the observed events to the audit sink and enforces the risk policy
-     * on the original message.
-     *
-     * <p>A denial stops the chain but never suppresses the events that were already
-     * recorded: an operation the gateway refused is exactly the one an audit trail
-     * must contain.</p>
-     */
     private TrafficDecision dispatch(List<DatabaseTrafficEvent> events, WireMessage message) {
         for (DatabaseTrafficEvent event : events) {
             if (!deliver(event)) {
@@ -132,6 +143,7 @@ public class DatabaseTrafficInspector implements MessageInterceptor {
             }
             RiskDecision decision = riskPolicy.evaluate(event);
             if (!decision.isAllowed()) {
+                runtimeMetrics.recordPolicyDenial();
                 log.warn("Database traffic denied for protocol {}, session {}, operation {}: {}",
                         event.getProtocolName(), event.getSessionId(), event.getOperation(), decision.getReason());
                 return TrafficDecision.deny(message);
@@ -140,16 +152,6 @@ public class DatabaseTrafficInspector implements MessageInterceptor {
         return TrafficDecision.forward(message);
     }
 
-    /**
-     * Delivers one event, applying the sink's failure policy.
-     *
-     * <p>A best-effort sink (dashboards, metrics) is fail-open: losing an event must
-     * never fail a client connection. A mandatory sink — an audit trail — is
-     * fail-closed: an operation the gateway cannot record must not run, otherwise
-     * the trail is complete by claim and incomplete in fact (rule 8.5).</p>
-     *
-     * @return {@code false} when the operation must be denied
-     */
     private boolean deliver(DatabaseTrafficEvent event) {
         try {
             observer.onEvent(event);
