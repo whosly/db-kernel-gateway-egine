@@ -38,6 +38,7 @@ import org.springframework.context.annotation.Bean;
 import com.whosly.gateway.console.SupportedDatabaseCatalog;
 import com.whosly.gateway.console.persist.ConsoleInstanceStore;
 import com.whosly.gateway.console.masking.InstanceMaskingEngineFactory;
+import com.whosly.gateway.console.observe.RecentTrafficRing;
 import com.whosly.gateway.console.masking.InstanceMaskingRuleCompiler;
 import com.whosly.gateway.console.security.ConsoleMaskingKeyHolder;
 import com.whosly.gateway.console.security.ConsoleSecretCipher;
@@ -373,10 +374,11 @@ public class GatewayConfig implements DisposableBean {
             GatewayInstanceProperties instanceProperties,
             SupportedDatabaseCatalog catalog,
             ConsoleInstanceStore consoleInstanceStore,
-            @Autowired(required = false) InstanceMaskingEngineFactory maskingEngineFactory) {
+            @Autowired(required = false) InstanceMaskingEngineFactory maskingEngineFactory,
+            @Autowired(required = false) RecentTrafficRing recentTrafficRing) {
         return new GatewayListenerRuntime(
                 this, protocolAdapterRegistry, instanceProperties, catalog,
-                consoleInstanceStore, maskingEngineFactory);
+                consoleInstanceStore, maskingEngineFactory, recentTrafficRing);
     }
 
     /**
@@ -582,6 +584,12 @@ public class GatewayConfig implements DisposableBean {
     public String getTargetUsername() { return targetUsername; }
     public String getTargetPassword() { return targetPassword; }
     public String getTargetDatabase() { return targetDatabase; }
+    public boolean isAuditEnabled() { return auditEnabled; }
+    public boolean isAuditMaskStatements() { return auditMaskStatements; }
+    public String getAuditDestination() { return auditDestination; }
+    public boolean isConsoleSecretKeyConfigured() {
+        return consoleSecretKeyBase64 != null && !consoleSecretKeyBase64.isBlank();
+    }
     public String getProxyDbType() { return proxyDbType; }
     public int getProxyPort() { return proxyPort; }
 }

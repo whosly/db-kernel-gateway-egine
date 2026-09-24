@@ -58,7 +58,7 @@ public class SqlServerProtocolAdapter extends AbstractProtocolAdapter {
     protected void handleClientConnection(Socket clientSocket) {
         String sessionId = "sqlserver-" + UUID.randomUUID();
         SqlServerSession session = new SqlServerSession(sessionId);
-        registerSession(session);
+        registerSession(session, clientSocket);
 
         BackendProvider backendProvider = backendProvider();
         ProbedHandshake probed = probeClientForRouting(clientSocket);

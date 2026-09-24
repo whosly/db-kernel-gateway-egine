@@ -1,6 +1,9 @@
 package com.whosly.gateway.console;
 
+import com.whosly.gateway.adapter.ProtocolAdapter;
+import com.whosly.gateway.adapter.protocol.SessionSnapshot;
 import com.whosly.gateway.console.GatewayInstance.InstanceStatus;
+import java.util.Collection;
 import com.whosly.gateway.console.masking.InstanceMaskingEngineFactory;
 import com.whosly.gateway.console.persist.MaskingRuleRecord;
 import com.whosly.gateway.console.persist.MaskingRuleStore;
@@ -90,6 +93,25 @@ public class GatewayInstanceRegistry {
         body.put("status", instance.status().name());
         body.put("metrics", instance.metrics());
         return body;
+    }
+
+    /** Active session snapshots for an instance (empty when unbound/stopped). */
+    public Collection<SessionSnapshot> sessionSnapshots(String id) {
+        require(id);
+        return listenerRuntime.getAdapter(id.trim())
+                .map(ProtocolAdapter::getActiveSessionSnapshots)
+                .orElse(List.of());
+    }
+
+    /**
+     * Kill one client session by connectionId. Returns false when unknown.
+     * Closes client leg only (see AbstractProtocolAdapter#killClientSession).
+     */
+    public boolean killSession(String id, String connectionId) {
+        require(id);
+        return listenerRuntime.getAdapter(id.trim())
+                .map(adapter -> adapter.killClientSession(connectionId))
+                .orElse(false);
     }
 
 

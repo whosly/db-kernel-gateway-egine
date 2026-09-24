@@ -580,3 +580,87 @@ gateway:
 - [x] STATUS / README 如实更新
 
 **结论：设计可通过 → 进入 Phase B 实现。**
+
+
+---
+
+## 13. 行业对标 · 会话 / 健康 / 导出 + Compose 一键启
+
+> 作者自检通过后实现。对标 **MaxScale MaxGUI / ProxySQL Admin / PgBouncer SHOW** 的 **代理控制面**能力（非完整 DBA IDE）。  
+> 明确 **非目标**：MaxGUI 查询编辑器、ETL、故障切换编排、完整 Spring Security SSO。
+
+### 13.1 对标映射
+
+| 行业能力 | 本项目落点 | API（协议无关） |
+|---|---|---|
+| Processlist / SHOW CLIENTS | `ProtocolAdapter#getActiveSessionSnapshots()` | `GET /console/api/instances/{id}/sessions` |
+| KILL CLIENT | 关闭客户端腿 Socket | `DELETE /console/api/instances/{id}/sessions/{connectionId}` |
+| Backend monitor / ping | TCP（首选）+ 可选 JDBC | `POST /console/api/instances/{id}/health-check` |
+| Config export（无密钥） | 实例 + 脱敏规则元数据 + 配置摘要 | `GET .../instances/export` · `GET .../config/export` |
+| 轻量近期语句 | 内存环 `RecentTrafficRing` | `GET .../instances/{id}/recent-statements` |
+| 一键实验室 | Docker Compose + 多阶段镜像 | 仓库根 `docker-compose.yml` |
+
+### 13.2 会话列表与 Kill
+
+**响应字段（无密钥）**：`connectionId`、`protocolName`、`state`、`confidence`、`inTransaction`、`clientUser`、`clientDatabase`、`dirtiness`（摘要 map）、`connectedAt`、`lastActivity`（ISO-8601）。
+
+**Kill 语义**：
+
+- `AbstractProtocolAdapter` 维护 `connectionId → Socket`（与 `activeSessions` 同步 register/unregister）。
+- Kill **仅关闭客户端腿**；中继线程退出后释放后端（与 MaxGUI/PgBouncer「掐客户端」同类，**不**代发协议级 KILL 到后端）。
+- 未知 `connectionId` → **404**；实例未绑定 / 已停止 → 空列表或 Kill 404。
+
+### 13.3 后端健康探测
+
+- 超时约 **3s**。
+- 步骤：TCP connect `targetHost:targetPort` → 可选 JDBC `isValid` / 简单查询（有解密后凭据时）。
+- 响应：`{ok, latencyMs, targetHost, targetPort, message, checkedAt, tcpOk?, jdbcOk?}`。
+- 协议无关：禁止 `/console/api/mysql/...` 品牌路径。
+
+### 13.4 配置导出
+
+- **实例导出**：JSON 数组；`passwordConfigured` 布尔；**永不**含 password / secret-key / masking key 材料；可附带脱敏规则元数据（id/name/strategy/column/table/enabled，无密钥）。
+- **配置导出**：catalog 摘要 + 实例导出 + `maskingKeyConfigured` + `audit.enabled` 等非密钥标志（来自 config summary / GatewayConfig）。
+- UI：运维页或实例页「导出配置」下载 JSON。
+
+### 13.5 最近语句环（诚实边界）
+
+- 进程内 `RecentTrafficRing`（默认容量 100），实现 `DatabaseTrafficObserver`，与审计 observer **compose**。
+- 优先在 **masking 包装之后**写入，避免明文密码进环；截断过长 statement。
+- 按 `instanceId` 标签过滤（装配时 tagging）。
+- **STATUS 诚实声明**：内存-only，重启丢失；**不能**替代 audit spool。
+
+### 13.6 Docker Compose 一键启（实验室）
+
+| 服务 | 镜像 / 构建 | 端口 | 说明 |
+|---|---|---|---|
+| `mysql` | `mysql:8` | `13308:3306` | 密码 `Aa123456.`（含末尾点）；库 `demo`；healthcheck |
+| `postgres` | `postgres:16` | `15432:5432` | 同密码风格；healthcheck |
+| `gateway` | 多阶段 Dockerfile | `8080`、`33307`、`35433` | `SPRING_PROFILES_ACTIVE=docker`；挂载 `application-docker.yml` 或 profile 资源；卷 `./data/console` |
+
+- 构建：`maven:3.9-eclipse-temurin-17` → `mvn -DskipTests package`（CI 跑测试）；运行时 `eclipse-temurin:17-jre`。
+- `.env.example`：`GATEWAY_CONSOLE_SECRET_KEY_BASE64`（`openssl rand -base64 32`）；**勿**提交真实 `.env`。
+- 密码仅 lab；**不声称**生产安全。主路径 SPA 由 jar 提供 `/console`；可选 profile `dev-ui` 非必须。
+
+### 13.7 演进表更新
+
+| Phase | 内容 | 状态 |
+|---|---|---|
+| **A / A+ / B** | 见 §11–§12 | ✅ |
+| **B+（本轮）** | 会话 / Kill / 健康探测 / 导出 / 最近语句环 / Compose | ✅ 设计 → 实现 |
+| **C** | 完整鉴权 / SSO；审计进 spool UI | 规划 |
+| **D / E** | CDN 前端 / Micrometer | 规划 |
+
+### 13.8 自检清单（作者）
+
+- [x] 会话 API 协议无关；无密钥字段；停止实例返回空列表
+- [x] Kill：connectionId→Socket；关客户端腿；未知 id → 404；文档写明语义
+- [x] 健康探测：TCP + 可选 JDBC；~3s 超时；无品牌路径
+- [x] 导出：无 password / masking key；仅 `passwordConfigured` / configured 标志
+- [x] RecentTrafficRing：有界、可截断、mask 后写入、实例过滤；STATUS 标明内存-only
+- [x] Compose / Dockerfile / `.env.example` / `.dockerignore` / `application-docker.yml`；README 中文一键命令
+- [x] 无 `/console/api/mysql|postgresql/...` 分叉
+- [x] 单测：空会话、Kill 404、导出无密码、ring 边界、健康超时映射
+- [x] `mvn test` 绿；`npm run build` 绿；STATUS / README 更新
+
+**结论：设计可通过 → 进入 §13 实现。**

@@ -148,3 +148,39 @@ export interface AuditEntry {
   detailJson?: string | null
   actor?: string | null
 }
+
+
+export interface SessionRow {
+  connectionId: string
+  protocolName?: string
+  state?: string
+  confidence?: string
+  inTransaction?: boolean
+  clientUser?: string | null
+  clientDatabase?: string | null
+  dirtiness?: Record<string, unknown>
+  connectedAt?: string | null
+  lastActivity?: string | null
+}
+
+export interface HealthCheckResult {
+  ok: boolean
+  latencyMs: number
+  targetHost: string
+  targetPort: number
+  message?: string
+  checkedAt?: string
+  tcpOk?: boolean
+  jdbcOk?: boolean
+  instanceId?: string
+}
+
+export interface RecentStatement {
+  instanceId?: string | null
+  sessionId?: string
+  protocolName?: string
+  operation?: string
+  eventType?: string
+  statement?: string
+  observedAt?: string | null
+}

@@ -19,6 +19,7 @@
 - [演示](#演示)
 - [审计与脱敏](#审计与脱敏)
 - [数据库管控台](#数据库管控台)
+- [Docker 一键启动](#docker-一键启动)
 - [文档索引](#文档索引)
 - [开发约定](#开发约定)
 
@@ -373,12 +374,16 @@ mvn -Pintegration-test test
 | UI | [http://localhost:8080/console](http://localhost:8080/console)（`server.port` 可改） |
 | 类型目录 API | `GET /console/api/supported-databases` |
 | 实例 API | `GET/POST /console/api/instances`、`/instances/{id}/status|metrics|start|stop` |
+| 会话 | `GET …/instances/{id}/sessions`；`DELETE …/sessions/{connectionId}`（关客户端腿） |
+| 健康探测 | `POST|GET …/instances/{id}/health-check`（TCP + 可选 JDBC，~3s） |
+| 导出 | `GET …/instances/export`、`GET …/config/export`（无密码） |
+| 最近语句 | `GET …/instances/{id}/recent-statements`（内存环，重启丢失） |
 | 脱敏规则 API | `GET/POST/PUT/DELETE /console/api/instances/{id}/masking-rules`（协议无关） |
 | 列提示 | `GET /console/api/instances/{id}/schema/columns?table=`（JDBC metadata；失败 502） |
 | 安全 | `GET/PUT/DELETE /console/api/security/masking-key`；`GET /console/api/audit` |
 | 控制面加密 | `gateway.console.secret-key-base64`（32 字节 AES Base64）→ 密码/密钥 `enc:v1:`；缺省实验室明文 |
 | 可选 API Token | `gateway.console.api-token`；`Authorization: Bearer` 或 `X-Console-Token`（仅 `/console/api/**`） |
-| 设计 | [`docs/CONSOLE_ARCHITECTURE.md`](docs/CONSOLE_ARCHITECTURE.md) §11–§12 · [`CONSOLE_DESIGN.md`](docs/CONSOLE_DESIGN.md) |
+| 设计 | [`docs/CONSOLE_ARCHITECTURE.md`](docs/CONSOLE_ARCHITECTURE.md) §11–§13 · [`CONSOLE_DESIGN.md`](docs/CONSOLE_DESIGN.md) |
 
 一等实体是 **网关实例**（监听端口 + `dbType` 标签），不是按 MySQL/PG 分拆的控制台。  
 类型目录（`gateway.catalog`）与实例注册表（`gateway.instances`）分离。  
@@ -416,6 +421,30 @@ gateway:
 ```
 
 既有 `/gateway/*` 与 `/actuator/gateway` **保留**。
+
+
+
+## Docker 一键启动
+
+实验室 Compose 栈（**非生产**）。本仓库在无 Docker 的环境仍可开发；请在已安装 Docker Desktop / Engine 的 Mac/Linux 上执行：
+
+```bash
+cp .env.example .env   # fill secret key
+# 生成控制面密钥：openssl rand -base64 32
+docker compose up -d --build
+# open http://localhost:8080/console/
+# mysql client → 127.0.0.1:33307 ; psql → 127.0.0.1:35433
+```
+
+| 服务 | 端口映射 | 说明 |
+|---|---|---|
+| `mysql` | `13308→3306` | 密码 `Aa123456.`（含末尾点）；库 `demo` |
+| `postgres` | `15432→5432` | 同密码风格；用户/库 `demo` |
+| `gateway` | `8080`、`33307`、`35433` | profile `docker`；SPA 于 `/console/` |
+| `console-ui`（可选） | `5173` | `docker compose --profile dev-ui up`；主路径仍为 jar 内 SPA |
+
+相关文件：`Dockerfile`（多阶段 Temurin 17，`mvn -DskipTests package`）、`docker-compose.yml`、`.env.example`、`src/main/resources/application-docker.yml`（及 `deploy/docker/` 副本）、`.dockerignore`。  
+镜像构建跳过测试以加速；**CI / 本地请跑 `mvn test`**。Lab 密码勿用于生产。
 
 ## 文档索引
 

@@ -1,6 +1,13 @@
 package com.whosly.gateway.controller.console;
 
 import com.whosly.gateway.adapter.AbstractProtocolAdapter;
+import org.springframework.web.server.ResponseStatusException;
+import com.whosly.gateway.runtime.GatewayListenerRuntime.ManagedListener;
+import com.whosly.gateway.runtime.GatewayListenerRuntime;
+import com.whosly.gateway.console.observe.RecentTrafficRing;
+import com.whosly.gateway.console.InstanceBackendHealthService;
+import com.whosly.gateway.adapter.protocol.SessionSnapshot;
+import com.whosly.gateway.adapter.protocol.SessionDirtiness;
 import com.whosly.gateway.adapter.ProtocolAdapter;
 import com.whosly.gateway.adapter.protocol.GatewayRuntimeMetrics;
 import com.whosly.gateway.config.GatewayConfig;
@@ -52,6 +59,9 @@ public class ConsoleApiController {
     private final ConsoleAuditService auditService;
     private final ConsoleMaskingKeyService maskingKeyService;
     private final InstanceSchemaColumnsService schemaColumnsService;
+    private final InstanceBackendHealthService healthService;
+    private final RecentTrafficRing recentTrafficRing;
+    private final GatewayListenerRuntime listenerRuntime;
 
     /** Test-friendly constructor (security extras optional). */
     public ConsoleApiController(SupportedDatabaseCatalog catalog,
@@ -60,7 +70,7 @@ public class ConsoleApiController {
                                 GatewayRuntimeMetrics runtimeMetrics,
                                 GatewayConfig gatewayConfig) {
         this(catalog, instanceRegistry, protocolAdapter, runtimeMetrics, gatewayConfig,
-                null, null, null);
+                null, null, null, null, null, null);
     }
 
     @Autowired
@@ -71,7 +81,10 @@ public class ConsoleApiController {
                                 GatewayConfig gatewayConfig,
                                 @Autowired(required = false) ConsoleAuditService auditService,
                                 @Autowired(required = false) ConsoleMaskingKeyService maskingKeyService,
-                                @Autowired(required = false) InstanceSchemaColumnsService schemaColumnsService) {
+                                @Autowired(required = false) InstanceSchemaColumnsService schemaColumnsService,
+                                @Autowired(required = false) InstanceBackendHealthService healthService,
+                                @Autowired(required = false) RecentTrafficRing recentTrafficRing,
+                                @Autowired(required = false) GatewayListenerRuntime listenerRuntime) {
         this.catalog = catalog;
         this.instanceRegistry = instanceRegistry;
         this.protocolAdapter = protocolAdapter;
@@ -80,6 +93,9 @@ public class ConsoleApiController {
         this.auditService = auditService;
         this.maskingKeyService = maskingKeyService;
         this.schemaColumnsService = schemaColumnsService;
+        this.healthService = healthService;
+        this.recentTrafficRing = recentTrafficRing;
+        this.listenerRuntime = listenerRuntime;
     }
 
     @GetMapping("/supported-databases")
@@ -330,6 +346,115 @@ public class ConsoleApiController {
         return instanceRegistry.reloadMasking(id);
     }
 
+
+    // ---- Sessions / health / export / recent statements (industry-aligned control plane) ----
+
+    @GetMapping("/instances/{id}/sessions")
+    public Map<String, Object> listSessions(@PathVariable("id") String id) {
+        GatewayInstance instance = instanceRegistry.findById(id)
+                .orElseThrow(() -> new IllegalArgumentException("Unknown gateway instance id: " + id));
+        List<Map<String, Object>> sessions = new ArrayList<>();
+        for (SessionSnapshot snap : instanceRegistry.sessionSnapshots(id)) {
+            sessions.add(toSessionDto(snap));
+        }
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("instanceId", instance.id());
+        body.put("sessions", sessions);
+        body.put("count", sessions.size());
+        return body;
+    }
+
+    @DeleteMapping("/instances/{id}/sessions/{connectionId}")
+    public Map<String, Object> killSession(@PathVariable("id") String id,
+                                           @PathVariable("connectionId") String connectionId) {
+        instanceRegistry.findById(id)
+                .orElseThrow(() -> new IllegalArgumentException("Unknown gateway instance id: " + id));
+        if (!instanceRegistry.killSession(id, connectionId)) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND,
+                    "Unknown session connectionId: " + connectionId);
+        }
+        audit("session.kill", id, ConsoleAuditService.detail("connectionId", connectionId));
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("ok", true);
+        body.put("instanceId", id);
+        body.put("connectionId", connectionId);
+        body.put("message", "已关闭客户端连接（仅客户端腿；不代发协议级 KILL 到后端）");
+        return body;
+    }
+
+    @PostMapping("/instances/{id}/health-check")
+    public Map<String, Object> healthCheck(@PathVariable("id") String id) {
+        if (healthService == null) {
+            throw new IllegalStateException("Health check service is not available");
+        }
+        return healthService.check(id);
+    }
+
+    @GetMapping("/instances/{id}/health-check")
+    public Map<String, Object> healthCheckGet(@PathVariable("id") String id) {
+        return healthCheck(id);
+    }
+
+    @GetMapping("/instances/export")
+    public List<Map<String, Object>> exportInstances() {
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (GatewayInstance i : instanceRegistry.listInstances()) {
+            out.add(toExportInstance(i));
+        }
+        return out;
+    }
+
+    @GetMapping("/config/export")
+    public Map<String, Object> exportConfig() {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("exportedAt", java.time.Instant.now().toString());
+        body.put("catalog", catalog.listAll());
+        body.put("instances", exportInstances());
+        Map<String, Object> security = new LinkedHashMap<>();
+        if (maskingKeyService != null) {
+            Map<String, Object> keyStatus = maskingKeyService.status();
+            security.put("maskingKeyConfigured", Boolean.TRUE.equals(keyStatus.get("configured")));
+            security.put("maskingKeySource", keyStatus.get("source"));
+        } else {
+            security.put("maskingKeyConfigured", false);
+        }
+        security.put("consoleSecretKeyConfigured", gatewayConfig.isConsoleSecretKeyConfigured());
+        body.put("security", security);
+        Map<String, Object> audit = new LinkedHashMap<>();
+        audit.put("enabled", gatewayConfig.isAuditEnabled());
+        audit.put("maskStatements", gatewayConfig.isAuditMaskStatements());
+        audit.put("destination", gatewayConfig.getAuditDestination());
+        body.put("audit", audit);
+        body.put("note", "Non-secret export only; passwords and keys omitted");
+        // Sanity: never leak password material
+        String asText = body.toString();
+        if (asText.contains("password=") || asText.contains("targetPassword")) {
+            throw new IllegalStateException("export leaked password field");
+        }
+        return body;
+    }
+
+    @GetMapping("/instances/{id}/recent-statements")
+    public Map<String, Object> recentStatements(@PathVariable("id") String id,
+                                                @RequestParam(value = "limit", defaultValue = "50") int limit) {
+        instanceRegistry.findById(id)
+                .orElseThrow(() -> new IllegalArgumentException("Unknown gateway instance id: " + id));
+        int lim = Math.max(1, Math.min(limit, 100));
+        List<Map<String, Object>> entries = new ArrayList<>();
+        if (recentTrafficRing != null) {
+            for (RecentTrafficRing.RecentEntry e : recentTrafficRing.recent(id, lim)) {
+                entries.add(e.toMap());
+            }
+        }
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("instanceId", id);
+        body.put("entries", entries);
+        body.put("count", entries.size());
+        body.put("capacity", recentTrafficRing != null ? recentTrafficRing.capacity() : 0);
+        body.put("note", "内存环，重启丢失；不能替代 audit spool");
+        return body;
+    }
+
     // ---- Schema column hints (Phase A+ leftover) ----
 
     @GetMapping("/instances/{id}/schema/columns")
@@ -383,6 +508,74 @@ public class ConsoleApiController {
         }).toList());
         body.put("count", rows.size());
         return body;
+    }
+
+
+    static Map<String, Object> toSessionDto(SessionSnapshot snap) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("connectionId", snap.connectionId());
+        m.put("protocolName", snap.protocolName());
+        m.put("state", snap.state() != null ? snap.state().name() : null);
+        m.put("confidence", snap.confidence() != null ? snap.confidence().name() : null);
+        m.put("inTransaction", snap.inTransaction());
+        m.put("clientUser", snap.clientUser().orElse(null));
+        m.put("clientDatabase", snap.clientDatabase().orElse(null));
+        m.put("dirtiness", dirtinessSummary(snap.dirtiness()));
+        m.put("connectedAt", snap.connectedAt() != null ? snap.connectedAt().toString() : null);
+        m.put("lastActivity", snap.lastActivity() != null ? snap.lastActivity().toString() : null);
+        return m;
+    }
+
+    static Map<String, Object> dirtinessSummary(SessionDirtiness d) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        if (d == null) {
+            m.put("clean", true);
+            return m;
+        }
+        m.put("clean", d.isClean());
+        m.put("hasPreparedStatements", d.hasPreparedStatements());
+        m.put("hasSessionSettings", d.hasSessionSettings());
+        m.put("hasTemporaryObjects", d.hasTemporaryObjects());
+        m.put("hasUserVariables", d.hasUserVariables());
+        m.put("hasLocks", d.hasLocks());
+        m.put("tooComplexToReset", d.tooComplexToReset());
+        return m;
+    }
+
+    private Map<String, Object> toExportInstance(GatewayInstance i) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("id", i.id());
+        m.put("name", i.name());
+        m.put("dbType", i.dbType());
+        m.put("listenHost", i.listenHost());
+        m.put("listenPort", i.listenPort());
+        m.put("enabled", i.enabled());
+        m.put("status", i.status().name());
+        m.put("bound", i.bound());
+        m.put("targetHost", i.targetHost());
+        m.put("targetPort", i.targetPort());
+        m.put("targetDatabase", i.targetDatabase());
+        m.put("targetUsername", i.targetUsername());
+        m.put("passwordConfigured", i.passwordConfigured());
+        m.put("source", i.source());
+        try {
+            List<MaskingRuleRecord> rules = instanceRegistry.listMaskingRules(i.id());
+            m.put("maskingRules", rules.stream().map(r -> {
+                Map<String, Object> meta = new LinkedHashMap<>();
+                meta.put("id", r.id());
+                meta.put("name", r.name());
+                meta.put("strategy", r.strategy());
+                meta.put("priority", r.priority());
+                meta.put("columnName", r.columnName());
+                meta.put("tableName", r.tableName());
+                meta.put("namePattern", r.namePattern());
+                meta.put("enabled", r.enabled());
+                return meta;
+            }).toList());
+        } catch (RuntimeException e) {
+            m.put("maskingRules", List.of());
+        }
+        return m;
     }
 
     static Map<String, Object> toMaskingRuleDto(MaskingRuleRecord row) {

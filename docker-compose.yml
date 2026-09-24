@@ -1,0 +1,87 @@
+# db-kernel-gateway lab stack — Compose v2
+# Usage:
+#   cp .env.example .env   # fill GATEWAY_CONSOLE_SECRET_KEY_BASE64
+#   docker compose up -d --build
+# Open http://localhost:8080/console/
+# mysql client → 127.0.0.1:33307 ; psql → 127.0.0.1:35433
+# Lab passwords only (Aa123456.) — not production-safe.
+
+services:
+  mysql:
+    image: mysql:8
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-Aa123456.}
+      MYSQL_DATABASE: demo
+      MYSQL_USER: demo
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-Aa123456.}
+    ports:
+      - "13308:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-p${MYSQL_ROOT_PASSWORD:-Aa123456.}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 20s
+
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: demo
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-Aa123456.}
+      POSTGRES_DB: demo
+    ports:
+      - "15432:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U demo -d demo"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+
+  gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      mysql:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    environment:
+      SERVER_PORT: "8080"
+      SPRING_PROFILES_ACTIVE: docker
+      GATEWAY_CONSOLE_DB_PATH: /app/data/console/gateway-console
+      GATEWAY_CONSOLE_SECRET_KEY_BASE64: ${GATEWAY_CONSOLE_SECRET_KEY_BASE64:-}
+      GATEWAY_CONSOLE_API_TOKEN: ${GATEWAY_CONSOLE_API_TOKEN:-}
+    ports:
+      - "8080:8080"
+      - "33307:33307"
+      - "35433:35433"
+    volumes:
+      - ./data/console:/app/data/console
+      - ./data/audit:/app/audit
+    # Optional: override profile YAML
+    #   - ./deploy/docker/application-docker.yml:/app/config/application-docker.yml:ro
+
+  # Optional: live Vite UI against the gateway (nice-to-have; primary SPA is in the jar)
+  console-ui:
+    profiles: ["dev-ui"]
+    image: node:20-alpine
+    working_dir: /ui
+    volumes:
+      - ./console-ui:/ui
+    command: sh -c "npm ci && npm run dev -- --host 0.0.0.0 --port 5173"
+    environment:
+      VITE_CONSOLE_API_BASE: http://gateway:8080/console/api
+    ports:
+      - "5173:5173"
+    depends_on:
+      - gateway
+
+volumes:
+  mysql_data:
+  pg_data:

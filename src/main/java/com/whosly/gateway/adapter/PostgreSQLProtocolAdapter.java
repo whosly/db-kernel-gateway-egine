@@ -76,7 +76,7 @@ public class PostgreSQLProtocolAdapter extends AbstractProtocolAdapter {
     protected void handleClientConnection(Socket clientSocket) {
         String sessionId = "postgresql-" + UUID.randomUUID();
         PostgreSQLSession session = new PostgreSQLSession(sessionId);
-        registerSession(session);
+        registerSession(session, clientSocket);
 
         BackendProvider backendProvider = backendProvider();
         ProbedHandshake probed;

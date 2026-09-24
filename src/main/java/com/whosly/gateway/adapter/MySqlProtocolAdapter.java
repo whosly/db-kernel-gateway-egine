@@ -70,7 +70,7 @@ public class MySqlProtocolAdapter extends AbstractProtocolAdapter {
     protected void handleClientConnection(Socket clientSocket) {
         String sessionId = "mysql-" + UUID.randomUUID();
         MySQLSession session = new MySQLSession(sessionId);
-        registerSession(session);
+        registerSession(session, clientSocket);
 
         BackendProvider backendProvider = backendProvider();
         ProbedHandshake probed = probeClientForRouting(clientSocket);

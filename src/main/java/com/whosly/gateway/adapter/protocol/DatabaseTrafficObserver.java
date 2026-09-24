@@ -48,4 +48,16 @@ public interface DatabaseTrafficObserver {
     static DatabaseTrafficObserver masking(DatabaseTrafficObserver delegate) {
         return new MaskingTrafficObserver(delegate);
     }
+
+    /**
+     * Fan-out to two observers. Delivery is mandatory if <em>either</em> sink
+     * requires it. Failures from a non-mandatory sink are swallowed so dashboards
+     * cannot break audit or client traffic.
+     */
+    static DatabaseTrafficObserver compose(DatabaseTrafficObserver first,
+                                           DatabaseTrafficObserver second) {
+        return new CompositeDatabaseTrafficObserver(
+                first != null ? first : noop(),
+                second != null ? second : noop());
+    }
 }

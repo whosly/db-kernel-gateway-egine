@@ -111,3 +111,51 @@ export function listAudit(limit = 50) {
     `/audit?limit=${limit}`,
   )
 }
+
+
+export function listSessions(instanceId: string) {
+  return apiGet<{ instanceId: string; sessions: import('./types').SessionRow[]; count: number }>(
+    `/instances/${encodeURIComponent(instanceId)}/sessions`,
+  )
+}
+
+export function killSession(instanceId: string, connectionId: string) {
+  return apiDelete<ActionResult>(
+    `/instances/${encodeURIComponent(instanceId)}/sessions/${encodeURIComponent(connectionId)}`,
+  )
+}
+
+export function healthCheck(instanceId: string) {
+  return apiPost<import('./types').HealthCheckResult>(
+    `/instances/${encodeURIComponent(instanceId)}/health-check`,
+  )
+}
+
+export function listRecentStatements(instanceId: string, limit = 50) {
+  return apiGet<{
+    instanceId: string
+    entries: import('./types').RecentStatement[]
+    count: number
+    note?: string
+  }>(`/instances/${encodeURIComponent(instanceId)}/recent-statements?limit=${limit}`)
+}
+
+export async function downloadInstancesExport() {
+  const data = await apiGet<unknown[]>('/instances/export')
+  triggerDownload(data, `gateway-instances-${Date.now()}.json`)
+}
+
+export async function downloadConfigExport() {
+  const data = await apiGet<Record<string, unknown>>('/config/export')
+  triggerDownload(data, `gateway-config-${Date.now()}.json`)
+}
+
+function triggerDownload(data: unknown, filename: string) {
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  a.click()
+  URL.revokeObjectURL(url)
+}

@@ -5,6 +5,8 @@ import InstanceDrawer from '../components/InstanceDrawer.vue'
 import {
   createInstance,
   deleteInstance,
+  downloadConfigExport,
+  downloadInstancesExport,
   listInstances,
   listSupportedDatabases,
   startInstance,
@@ -136,6 +138,8 @@ async function onDelete() {
     <div class="toolbar">
       <p class="lead">网关实例为一等实体；类型仅为徽章。可新建管控台实例（H2 持久化 + 运行时绑定）。</p>
       <button class="primary" @click="openCreate">新建实例</button>
+        <button type="button" @click="downloadInstancesExport().catch((e) => toast(String(e)))">导出实例</button>
+        <button type="button" @click="downloadConfigExport().catch((e) => toast(String(e)))">导出配置</button>
     </div>
     <p v-if="error" class="err">{{ error }}</p>
 

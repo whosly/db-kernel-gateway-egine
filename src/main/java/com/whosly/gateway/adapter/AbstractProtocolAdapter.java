@@ -77,6 +77,8 @@ public abstract class AbstractProtocolAdapter implements ProtocolAdapter {
     protected String protocolName;
     private final Map<String, ProtocolSession> activeSessions = new ConcurrentHashMap<>();
     private final Set<Socket> activeClientSockets = ConcurrentHashMap.newKeySet();
+    /** connectionId → client-leg socket for control-plane KILL (MaxGUI/PgBouncer-style). */
+    private final Map<String, Socket> clientSocketsByConnectionId = new ConcurrentHashMap<>();
     private Semaphore connectionPermits = new Semaphore(DEFAULT_MAX_CONNECTIONS);
     private int maxConnections = DEFAULT_MAX_CONNECTIONS;
     private int idleTimeoutMillis;
@@ -244,6 +246,7 @@ public abstract class AbstractProtocolAdapter implements ProtocolAdapter {
         if (acceptorExecutor != null) acceptorExecutor.shutdownNow();
         activeClientSockets.forEach(AbstractProtocolAdapter::closeQuietly);
         activeClientSockets.clear();
+        clientSocketsByConnectionId.clear();
         activeSessions.values().forEach(ProtocolSession::close);
         activeSessions.clear();
         closeSharedBackendProvider();
@@ -255,11 +258,62 @@ public abstract class AbstractProtocolAdapter implements ProtocolAdapter {
     @Override public Collection<ProtocolSession> getActiveSessions() { return List.copyOf(activeSessions.values()); }
 
     protected void registerSession(ProtocolSession session) {
+        registerSession(session, null);
+    }
+
+    /**
+     * Register session and optionally bind the client-leg socket for later KILL.
+     */
+    protected void registerSession(ProtocolSession session, Socket clientSocket) {
+        if (session == null) {
+            return;
+        }
         activeSessions.put(session.getConnectionId(), session);
+        if (clientSocket != null) {
+            clientSocketsByConnectionId.put(session.getConnectionId(), clientSocket);
+        }
     }
+
     protected void unregisterSession(ProtocolSession session) {
-        if (session != null) activeSessions.remove(session.getConnectionId());
+        if (session != null) {
+            activeSessions.remove(session.getConnectionId());
+            clientSocketsByConnectionId.remove(session.getConnectionId());
+        }
     }
+
+    /**
+     * Closes the client-leg socket for {@code connectionId}.
+     *
+     * <p>Does not send a protocol-level KILL to the backend; the duplex relay exits
+     * when the client socket closes and then releases the backend connection.</p>
+     */
+    @Override
+    public boolean killClientSession(String connectionId) {
+        if (connectionId == null || connectionId.isBlank()) {
+            return false;
+        }
+        Socket socket = clientSocketsByConnectionId.get(connectionId.trim());
+        if (socket == null) {
+            return false;
+        }
+        log.info("Killing client session {} on {} adapter (closing client leg)",
+                connectionId.trim(), protocolName);
+        closeQuietly(socket);
+        return true;
+    }
+
+    public DatabaseTrafficObserver getDatabaseTrafficObserver() {
+        return databaseTrafficObserver;
+    }
+
+    /** Target host for health probes (no secret). */
+    public String getTargetHost() { return targetHost; }
+    public int getTargetPort() { return targetPort; }
+    public String getTargetUsername() { return targetUsername; }
+    /** Decrypted runtime password for optional JDBC health ping — never expose via API. */
+    public String getTargetPassword() { return targetPassword; }
+    public String getTargetDatabase() { return targetDatabase; }
+
     protected void rejectClientConnection(Socket clientSocket) { closeQuietly(clientSocket); }
 
     protected void acceptConnections() {

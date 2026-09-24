@@ -135,7 +135,7 @@ public class InstanceSchemaColumnsService {
     /**
      * Build a JDBC URL from dbType — protocol-agnostic mapping, no brand UI forks.
      */
-    static String buildJdbcUrl(String dbType, String host, int port, String database) {
+    public static String buildJdbcUrl(String dbType, String host, int port, String database) {
         String type = dbType != null ? dbType.toLowerCase(Locale.ROOT).trim() : "";
         String h = hasText(host) ? host.trim() : "127.0.0.1";
         String db = database != null ? database.trim() : "";

@@ -11,6 +11,8 @@ import com.whosly.gateway.console.SupportedDatabaseInfo;
 import com.whosly.gateway.console.persist.ConsoleInstanceRecord;
 import com.whosly.gateway.console.persist.ConsoleInstanceStore;
 import com.whosly.gateway.console.masking.InstanceMaskingEngineFactory;
+import com.whosly.gateway.console.observe.RecentTrafficRing;
+import com.whosly.gateway.adapter.protocol.DatabaseTrafficObserver;
 import com.whosly.gateway.masking.MaskingEngine;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -48,13 +50,14 @@ public class GatewayListenerRuntime implements DisposableBean {
     private final SupportedDatabaseCatalog catalog;
     private final ConsoleInstanceStore consoleStore; // nullable in map-only test ctor
     private final InstanceMaskingEngineFactory maskingEngineFactory; // nullable
+    private final RecentTrafficRing recentTrafficRing; // nullable
     private final Object mute = new Object();
 
     public GatewayListenerRuntime(GatewayConfig gatewayConfig,
                                   ProtocolAdapterRegistry adapterRegistry,
                                   GatewayInstanceProperties instanceProperties,
                                   SupportedDatabaseCatalog catalog) {
-        this(gatewayConfig, adapterRegistry, instanceProperties, catalog, null, null);
+        this(gatewayConfig, adapterRegistry, instanceProperties, catalog, null, null, null);
     }
 
     public GatewayListenerRuntime(GatewayConfig gatewayConfig,
@@ -62,7 +65,7 @@ public class GatewayListenerRuntime implements DisposableBean {
                                   GatewayInstanceProperties instanceProperties,
                                   SupportedDatabaseCatalog catalog,
                                   ConsoleInstanceStore consoleStore) {
-        this(gatewayConfig, adapterRegistry, instanceProperties, catalog, consoleStore, null);
+        this(gatewayConfig, adapterRegistry, instanceProperties, catalog, consoleStore, null, null);
     }
 
     public GatewayListenerRuntime(GatewayConfig gatewayConfig,
@@ -71,6 +74,17 @@ public class GatewayListenerRuntime implements DisposableBean {
                                   SupportedDatabaseCatalog catalog,
                                   ConsoleInstanceStore consoleStore,
                                   InstanceMaskingEngineFactory maskingEngineFactory) {
+        this(gatewayConfig, adapterRegistry, instanceProperties, catalog, consoleStore,
+                maskingEngineFactory, null);
+    }
+
+    public GatewayListenerRuntime(GatewayConfig gatewayConfig,
+                                  ProtocolAdapterRegistry adapterRegistry,
+                                  GatewayInstanceProperties instanceProperties,
+                                  SupportedDatabaseCatalog catalog,
+                                  ConsoleInstanceStore consoleStore,
+                                  InstanceMaskingEngineFactory maskingEngineFactory,
+                                  RecentTrafficRing recentTrafficRing) {
         Objects.requireNonNull(gatewayConfig, "gatewayConfig");
         Objects.requireNonNull(adapterRegistry, "adapterRegistry");
         Objects.requireNonNull(instanceProperties, "instanceProperties");
@@ -81,6 +95,7 @@ public class GatewayListenerRuntime implements DisposableBean {
         this.catalog = catalog;
         this.consoleStore = consoleStore;
         this.maskingEngineFactory = maskingEngineFactory;
+        this.recentTrafficRing = recentTrafficRing;
 
         List<GatewayInstanceProperties.InstanceEntry> yamlEntries =
                 resolveEntries(gatewayConfig, instanceProperties);
@@ -139,6 +154,7 @@ public class GatewayListenerRuntime implements DisposableBean {
         this.catalog = null;
         this.consoleStore = null;
         this.maskingEngineFactory = null;
+        this.recentTrafficRing = null;
         this.listeners.putAll(listeners);
         this.legacyId = legacyId != null && listeners.containsKey(legacyId)
                 ? legacyId
@@ -524,6 +540,7 @@ public class GatewayListenerRuntime implements DisposableBean {
                     targetPassword,
                     targetDatabase,
                     metrics);
+            attachRecentTraffic(id, adapter);
             applyInstanceMasking(id, adapter);
         }
 
@@ -605,6 +622,24 @@ public class GatewayListenerRuntime implements DisposableBean {
         log.info("Reloaded MaskingEngine for instance '{}' (active={})",
                 listener.id(), engine.isActive());
         return body;
+    }
+
+
+    /**
+     * Compose instance-tagged {@link RecentTrafficRing} in front of the existing observer
+     * (audit/masking). Fail-open ring must not break mandatory audit delivery.
+     */
+    private void attachRecentTraffic(String instanceId, ProtocolAdapter adapter) {
+        if (recentTrafficRing == null || !(adapter instanceof AbstractProtocolAdapter apa)) {
+            return;
+        }
+        DatabaseTrafficObserver prior = apa.getDatabaseTrafficObserver();
+        // Mask literals before the ring (and independently of audit spool masking).
+        DatabaseTrafficObserver maskedRing =
+                DatabaseTrafficObserver.masking(recentTrafficRing.forInstance(instanceId));
+        apa.setDatabaseTrafficObserver(DatabaseTrafficObserver.compose(
+                maskedRing,
+                prior != null ? prior : DatabaseTrafficObserver.noop()));
     }
 
     private void applyInstanceMasking(String instanceId, ProtocolAdapter adapter) {

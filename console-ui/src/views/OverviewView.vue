@@ -28,9 +28,13 @@ const kpis = computed(() => {
   const d = data.value
   if (!d) return []
   const health = d.health || {}
+  const sessionSum = (d.instances || [])
+    .filter((i) => i.status === 'RUNNING')
+    .reduce((n, i) => n + (Number(i.activeSessions) || 0), 0)
   return [
     { label: '实例总数', value: d.instances?.length ?? 0 },
     { label: '运行中', value: Number(health.runningCount ?? 0) },
+    { label: '活跃会话', value: sessionSum, hint: 'RUNNING 实例合计' },
     { label: '已绑定', value: Number(health.boundCount ?? 0) },
     { label: '接受连接', value: d.metrics?.connectionsAccepted ?? 0, hint: '全实例求和' },
     { label: '策略拒绝', value: d.metrics?.policyDenials ?? 0 },

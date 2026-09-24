@@ -2,6 +2,8 @@
 import { ref } from 'vue'
 import {
   deleteMaskingKey,
+  downloadConfigExport,
+  downloadInstancesExport,
   getConfigSummary,
   getHealth,
   getMaskingKeyStatus,
@@ -75,6 +77,15 @@ function sourceLabel(s?: string) {
 
 <template>
   <div>
+    <div class="panel">
+      <h3>配置导出</h3>
+      <p class="muted">导出 JSON（无密码 / 无脱敏密钥材料；仅 passwordConfigured 等标志）。</p>
+      <div class="row">
+        <button type="button" @click="downloadInstancesExport().catch((e) => (error = String(e)))">导出实例</button>
+        <button type="button" class="primary" @click="downloadConfigExport().catch((e) => (error = String(e)))">导出配置</button>
+      </div>
+    </div>
+
     <div class="panel">
       <h3>运维说明</h3>
       <ul>
@@ -181,4 +192,6 @@ pre { font-size: 0.75rem; overflow: auto; max-height: 280px; }
 .audit { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
 .audit th, .audit td { border-bottom: 1px solid var(--border); padding: 0.4rem 0.35rem; text-align: left; vertical-align: top; }
 code { font-size: 0.85em; }
+.row { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+.muted { color: var(--text-muted); font-size: 0.9rem; }
 </style>

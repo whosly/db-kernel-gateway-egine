@@ -1,12 +1,25 @@
 <script setup lang="ts">
 import { computed, inject, onMounted, reactive, ref, watch } from 'vue'
-import type { GatewayInstance, MaskingRule, MaskingRulePayload, MaskingStrategy, SchemaColumn } from '../api/types'
+import type {
+  GatewayInstance,
+  HealthCheckResult,
+  MaskingRule,
+  MaskingRulePayload,
+  MaskingStrategy,
+  RecentStatement,
+  SchemaColumn,
+  SessionRow,
+} from '../api/types'
 import {
   createMaskingRule,
   deleteMaskingRule,
   getInstanceMetrics,
   getSchemaColumns,
+  healthCheck,
+  killSession,
   listMaskingRules,
+  listRecentStatements,
+  listSessions,
   updateMaskingRule,
 } from '../api/consoleApi'
 
@@ -14,7 +27,7 @@ const props = defineProps<{ instance: GatewayInstance | null }>()
 defineEmits<{ close: []; delete: [] }>()
 
 const toast = inject<(m: string) => void>('toast', () => {})
-const tab = ref<'info' | 'masking'>('info')
+const tab = ref<'info' | 'masking' | 'sessions' | 'recent'>('info')
 const metrics = ref<Record<string, number>>({})
 const rules = ref<MaskingRule[]>([])
 const rulesError = ref<string | null>(null)
@@ -25,6 +38,15 @@ const schemaColumns = ref<SchemaColumn[]>([])
 const schemaLoading = ref(false)
 const schemaError = ref<string | null>(null)
 const schemaTableFilter = ref('')
+const sessions = ref<SessionRow[]>([])
+const sessionsLoading = ref(false)
+const sessionsError = ref<string | null>(null)
+const recent = ref<RecentStatement[]>([])
+const recentLoading = ref(false)
+const recentError = ref<string | null>(null)
+const recentNote = ref<string | null>(null)
+const health = ref<HealthCheckResult | null>(null)
+const healthBusy = ref(false)
 
 const strategyOptions: { value: MaskingStrategy; label: string }[] = [
   { value: 'null', label: '置空' },
@@ -184,6 +206,64 @@ function pickColumn(col: SchemaColumn) {
   form.tableName = col.table || form.tableName
 }
 
+
+async function loadSessions() {
+  if (!props.instance) return
+  sessionsLoading.value = true
+  sessionsError.value = null
+  try {
+    const body = await listSessions(props.instance.id)
+    sessions.value = body.sessions || []
+  } catch (e) {
+    sessionsError.value = e instanceof Error ? e.message : String(e)
+    sessions.value = []
+  } finally {
+    sessionsLoading.value = false
+  }
+}
+
+async function onKill(row: SessionRow) {
+  if (!props.instance) return
+  if (!confirm(`断开会话 ${row.connectionId}？（仅关闭客户端腿）`)) return
+  try {
+    await killSession(props.instance.id, row.connectionId)
+    toast('已断开客户端会话')
+    await loadSessions()
+  } catch (e) {
+    toast(e instanceof Error ? e.message : String(e))
+  }
+}
+
+async function loadRecent() {
+  if (!props.instance) return
+  recentLoading.value = true
+  recentError.value = null
+  try {
+    const body = await listRecentStatements(props.instance.id, 50)
+    recent.value = body.entries || []
+    recentNote.value = body.note || null
+  } catch (e) {
+    recentError.value = e instanceof Error ? e.message : String(e)
+    recent.value = []
+  } finally {
+    recentLoading.value = false
+  }
+}
+
+async function onHealthCheck() {
+  if (!props.instance) return
+  healthBusy.value = true
+  try {
+    health.value = await healthCheck(props.instance.id)
+    toast(health.value.ok ? `后端可达 ${health.value.latencyMs}ms` : (health.value.message || '探测失败'))
+  } catch (e) {
+    health.value = null
+    toast(e instanceof Error ? e.message : String(e))
+  } finally {
+    healthBusy.value = false
+  }
+}
+
 onMounted(() => {
   loadMetrics()
   loadRules()
@@ -193,10 +273,15 @@ watch(
   () => {
     tab.value = 'info'
     resetForm()
+    health.value = null
     loadMetrics()
     loadRules()
   },
 )
+watch(tab, (v) => {
+  if (v === 'sessions') loadSessions()
+  if (v === 'recent') loadRecent()
+})
 </script>
 
 <template>
@@ -212,6 +297,8 @@ watch(
 
       <nav class="tabs">
         <button :class="{ active: tab === 'info' }" @click="tab = 'info'">概览</button>
+        <button :class="{ active: tab === 'sessions' }" @click="tab = 'sessions'">会话</button>
+        <button :class="{ active: tab === 'recent' }" @click="tab = 'recent'">最近语句</button>
         <button :class="{ active: tab === 'masking' }" @click="tab = 'masking'">脱敏规则</button>
       </nav>
 
@@ -223,6 +310,17 @@ watch(
             <span class="badge">{{ instance.source === 'console' ? '管控台(H2)' : 'YAML' }}</span>
           </p>
           <p class="muted">{{ instance.message }}</p>
+          <div class="health-row">
+            <button type="button" :disabled="healthBusy" @click="onHealthCheck">
+              {{ healthBusy ? '探测中…' : '探测后端' }}
+            </button>
+            <span
+              v-if="health"
+              class="badge"
+              :class="health.ok ? 'ok' : 'bad'"
+            >{{ health.ok ? '可达' : '不可达' }} · {{ health.latencyMs }}ms</span>
+            <span v-if="health" class="muted tiny">{{ health.message }}</span>
+          </div>
         </section>
 
         <section>
@@ -252,7 +350,62 @@ watch(
         </footer>
       </template>
 
-      <template v-else>
+      <template v-else-if="tab === 'sessions'">
+        <section>
+          <div class="schema-head">
+            <h4>活跃会话</h4>
+            <button type="button" :disabled="sessionsLoading" @click="loadSessions">
+              {{ sessionsLoading ? '刷新中…' : '刷新' }}
+            </button>
+          </div>
+          <p class="muted tiny">对标 MaxGUI processlist / PgBouncer SHOW CLIENTS；Kill 仅关闭客户端腿。</p>
+          <p v-if="sessionsError" class="err">{{ sessionsError }}</p>
+          <p v-else-if="!sessions.length" class="muted">暂无会话</p>
+          <table v-else class="mini">
+            <thead>
+              <tr>
+                <th>连接 ID</th><th>用户</th><th>库</th><th>状态</th><th>事务</th><th></th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="s in sessions" :key="s.connectionId">
+                <td class="mono">{{ s.connectionId }}</td>
+                <td>{{ s.clientUser || '—' }}</td>
+                <td>{{ s.clientDatabase || '—' }}</td>
+                <td>{{ s.state }}</td>
+                <td>{{ s.inTransaction ? '是' : '否' }}</td>
+                <td><button type="button" class="danger" @click="onKill(s)">断开</button></td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+      </template>
+
+      <template v-else-if="tab === 'recent'">
+        <section>
+          <div class="schema-head">
+            <h4>最近语句</h4>
+            <button type="button" :disabled="recentLoading" @click="loadRecent">
+              {{ recentLoading ? '刷新中…' : '刷新' }}
+            </button>
+          </div>
+          <p class="muted tiny">{{ recentNote || '内存环，重启丢失；不能替代审计 spool。' }}</p>
+          <p v-if="recentError" class="err">{{ recentError }}</p>
+          <p v-else-if="!recent.length" class="muted">暂无观测事件</p>
+          <ul v-else class="rule-list">
+            <li v-for="(e, idx) in recent" :key="idx">
+              <div class="rule-head">
+                <span class="badge">{{ e.operation || e.eventType }}</span>
+                <span class="muted tiny">{{ e.observedAt }}</span>
+              </div>
+              <pre class="stmt">{{ e.statement }}</pre>
+              <div class="muted tiny">session {{ e.sessionId }}</div>
+            </li>
+          </ul>
+        </section>
+      </template>
+
+      <template v-else-if="tab === 'masking'">
         <section>
           <h4>已配置规则</h4>
           <p class="muted tiny">
@@ -443,5 +596,21 @@ code { font-size: 0.8em; }
   padding: 0.25rem 0.45rem;
   border-radius: 999px;
   background: var(--accent-soft);
+}
+
+.health-row { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin-top: 0.5rem; }
+.badge.ok { background: #1b5e20; color: #c8e6c9; }
+.badge.bad { background: #b71c1c; color: #ffcdd2; }
+table.mini { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
+table.mini th, table.mini td { border-bottom: 1px solid var(--border); padding: 0.35rem 0.25rem; text-align: left; }
+.mono { font-family: ui-monospace, monospace; font-size: 0.75rem; word-break: break-all; }
+.stmt {
+  background: var(--bg);
+  border-radius: 6px;
+  padding: 0.4rem 0.5rem;
+  font-size: 0.75rem;
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 0.35rem 0;
 }
 </style>
