@@ -10,6 +10,8 @@ import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
+import static com.whosly.gateway.console.security.ConsolePermission.INSTANCES_START_STOP;
+import static com.whosly.gateway.console.security.ConsolePermission.SECURITY_KEYS;
 import static org.assertj.core.api.Assertions.assertThat;
 
 class ConsoleOidcRoleMapperTest {
@@ -21,7 +23,9 @@ class ConsoleOidcRoleMapperTest {
     @Test
     void missingRolesDefaultsToViewer() {
         Collection<? extends GrantedAuthority> auths = mapperWithDefaults().mapAuthorities(Map.of("sub", "u1"));
-        assertThat(names(auths)).containsExactly(ConsoleOidcRoleMapper.ROLE_VIEWER);
+        assertThat(names(auths))
+                .contains(ConsoleOidcRoleMapper.ROLE_VIEWER, "instances:read")
+                .doesNotContain(ConsoleOidcRoleMapper.ROLE_ADMIN, SECURITY_KEYS);
     }
 
     @Test
@@ -29,7 +33,16 @@ class ConsoleOidcRoleMapperTest {
         Collection<? extends GrantedAuthority> auths = mapperWithDefaults()
                 .mapAuthorities(Map.of("roles", List.of("CONSOLE_ADMIN")));
         assertThat(names(auths)).contains(
-                ConsoleOidcRoleMapper.ROLE_ADMIN, ConsoleOidcRoleMapper.ROLE_VIEWER);
+                ConsoleOidcRoleMapper.ROLE_ADMIN, SECURITY_KEYS, "instances:delete");
+    }
+
+    @Test
+    void mapsOperatorRole() {
+        Collection<? extends GrantedAuthority> auths = mapperWithDefaults()
+                .mapAuthorities(Map.of("roles", List.of("CONSOLE_OPERATOR")));
+        assertThat(names(auths))
+                .contains(ConsoleOidcRoleMapper.ROLE_OPERATOR, INSTANCES_START_STOP)
+                .doesNotContain(SECURITY_KEYS, ConsoleOidcRoleMapper.ROLE_ADMIN);
     }
 
     @Test
@@ -61,16 +74,15 @@ class ConsoleOidcRoleMapperTest {
         oidc.setRoleClaim("roles");
         ConsoleOidcRoleMapper mapper = new ConsoleOidcRoleMapper(oidc);
         assertThat(names(mapper.mapAuthorities(Map.of("groups", List.of("viewer")))))
-                .containsExactly(ConsoleOidcRoleMapper.ROLE_VIEWER);
+                .contains(ConsoleOidcRoleMapper.ROLE_VIEWER)
+                .doesNotContain(ConsoleOidcRoleMapper.ROLE_ADMIN);
     }
-
 
     @Test
     void mapsLiteralDottedClaimKeyFromKeycloakMapper() {
         Oidc oidc = new Oidc();
         oidc.setRoleClaim("realm_access.roles");
         ConsoleOidcRoleMapper mapper = new ConsoleOidcRoleMapper(oidc);
-        // Some Keycloak exports put a flat claim key "realm_access.roles"
         Map<String, Object> claims = Map.of("realm_access.roles", List.of("CONSOLE_ADMIN"));
         assertThat(names(mapper.mapAuthorities(claims)))
                 .contains(ConsoleOidcRoleMapper.ROLE_ADMIN);

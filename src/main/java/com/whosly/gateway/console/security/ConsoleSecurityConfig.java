@@ -61,6 +61,7 @@ public class ConsoleSecurityConfig {
     private static final Logger log = LoggerFactory.getLogger(ConsoleSecurityConfig.class);
 
     public static final String ROLE_ADMIN = "CONSOLE_ADMIN";
+    public static final String ROLE_OPERATOR = "CONSOLE_OPERATOR";
     public static final String ROLE_VIEWER = "CONSOLE_VIEWER";
 
     private final ConsoleAuthProperties authProperties;
@@ -101,11 +102,15 @@ public class ConsoleSecurityConfig {
         if (users == null || users.isEmpty()) {
             mgr.createUser(User.withUsername("admin")
                     .password(consolePasswordEncoder.encode("admin"))
-                    .roles(ROLE_ADMIN)
+                    .authorities(ConsoleAuthoritySupport.authoritiesForRoles(ROLE_ADMIN))
+                    .build());
+            mgr.createUser(User.withUsername("operator")
+                    .password(consolePasswordEncoder.encode("operator"))
+                    .authorities(ConsoleAuthoritySupport.authoritiesForRoles(ROLE_OPERATOR))
                     .build());
             mgr.createUser(User.withUsername("viewer")
                     .password(consolePasswordEncoder.encode("viewer"))
-                    .roles(ROLE_VIEWER)
+                    .authorities(ConsoleAuthoritySupport.authoritiesForRoles(ROLE_VIEWER))
                     .build());
             return mgr;
         }
@@ -120,7 +125,7 @@ public class ConsoleSecurityConfig {
             String[] roles = parseRoles(u.getRoles());
             mgr.createUser(User.withUsername(u.getUsername().trim())
                     .password(encoded)
-                    .roles(roles)
+                    .authorities(ConsoleAuthoritySupport.authoritiesForRoles(roles))
                     .build());
         }
         return mgr;
@@ -196,10 +201,8 @@ public class ConsoleSecurityConfig {
                         .requestMatchers("/console/api/v1/auth/login", "/console/api/v1/auth/me",
                                 "/console/api/v1/auth/mode", "/console/api/v1/auth/status")
                         .permitAll()
-                        .requestMatchers(HttpMethod.GET, "/console/api/v1/**")
-                        .hasAnyRole(ROLE_ADMIN, ROLE_VIEWER)
                         .requestMatchers("/console/api/v1/**")
-                        .hasRole(ROLE_ADMIN)
+                        .hasAnyRole(ROLE_ADMIN, ROLE_OPERATOR, ROLE_VIEWER)
                         .requestMatchers(HttpMethod.GET, "/console", "/console/", "/console/**")
                         .permitAll()
                         .anyRequest().permitAll())
@@ -238,10 +241,8 @@ public class ConsoleSecurityConfig {
                         .permitAll()
                         .requestMatchers(HttpMethod.GET, "/console", "/console/", "/console/**")
                         .permitAll()
-                        .requestMatchers(HttpMethod.GET, "/console/api/v1/**")
-                        .hasAnyRole(ROLE_ADMIN, ROLE_VIEWER)
                         .requestMatchers("/console/api/v1/**")
-                        .hasRole(ROLE_ADMIN)
+                        .hasAnyRole(ROLE_ADMIN, ROLE_OPERATOR, ROLE_VIEWER)
                         .anyRequest().permitAll())
                 .oauth2Login(oauth -> oauth
                         .userInfoEndpoint(userInfo -> userInfo.oidcUserService(oidcUserService))
@@ -330,21 +331,12 @@ public class ConsoleSecurityConfig {
             return new String[]{ROLE_VIEWER};
         }
         List<String> out = new ArrayList<>();
-        for (String part : roles.split("[,\\s]+")) {
+        for (String part : roles.split("[,\s]+")) {
             String r = part.trim();
             if (r.isEmpty()) {
                 continue;
             }
-            if (r.startsWith("ROLE_")) {
-                r = r.substring(5);
-            }
-            if ("ADMIN".equalsIgnoreCase(r) || "CONSOLE_ADMIN".equalsIgnoreCase(r)) {
-                r = ROLE_ADMIN;
-            } else if ("VIEWER".equalsIgnoreCase(r) || "CONSOLE_VIEWER".equalsIgnoreCase(r)
-                    || "READ".equalsIgnoreCase(r)) {
-                r = ROLE_VIEWER;
-            }
-            out.add(r);
+            out.add(ConsoleRoles.normalize(r));
         }
         return out.isEmpty() ? new String[]{ROLE_VIEWER} : out.toArray(String[]::new);
     }

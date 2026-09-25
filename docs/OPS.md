@@ -119,6 +119,7 @@ mvn spring-boot:run -Dspring-boot.run.profiles=dev
 # 打开 http://localhost:8080/console/login
 # 点「使用 SSO 登录」→ Keycloak 登录
 #   console-admin / admin   → CONSOLE_ADMIN
+#   console-operator / operator → CONSOLE_OPERATOR（可选）
 #   console-viewer / viewer → CONSOLE_VIEWER
 # 成功落到 /console/
 ```
@@ -153,7 +154,7 @@ gateway.console.auth.oidc.jwk-set-uri: https://idp.example/.../certs
 gateway.console.auth.oidc.user-info-uri: https://idp.example/.../userinfo
 ```
 
-Redirect URI 登记：`{console-base}/login/oauth2/code/console`。角色 claim → `CONSOLE_ADMIN` / `CONSOLE_VIEWER`（缺省 VIEWER）。详见 [`CONSOLE_ARCHITECTURE.md`](CONSOLE_ARCHITECTURE.md) §17。
+Redirect URI 登记：`{console-base}/login/oauth2/code/console`。角色 claim → `CONSOLE_ADMIN` / `CONSOLE_OPERATOR` / `CONSOLE_VIEWER`（缺省 VIEWER）；权限串见 [`CONSOLE_ARCHITECTURE.md`](CONSOLE_ARCHITECTURE.md) §22。OIDC 细节见 §17。
 
 ### 管控台 HTTPS（server.ssl，非 gateway.tls）
 

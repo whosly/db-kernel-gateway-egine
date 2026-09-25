@@ -10,12 +10,12 @@
 
 | 项 | 现状 | 证据 |
 |---|---|---|
-| 非集成 `@Test`/`@ParameterizedTest` 注解数 | **575** | `mvn test` Results；排除 `*IntegrationTest` |
+| 非集成 `@Test`/`@ParameterizedTest` 注解数 | **592** | `mvn test` Results；排除 `*IntegrationTest` |
 | 集成测试 | 14 条注解；默认 surefire **排除** `*IntegrationTest`；无 local props 时 `-Pintegration-test` **assumeTrue 跳过**；本机有库时可 14/14 绿 | `pom.xml` excludes；跳过策略见 `docs/OPS.md` / `integration-test.properties` |
-| 本环境 `mvn test`（`JAVA_HOME`=JDK 17） | **BUILD SUCCESS：Tests run 575, Failures 0, Errors 0, Skipped 0** | surefire；含告警阈值 + 列加密 E2E + SQL IDE + form/token/open 鉴权 |
+| 本环境 `mvn test`（`JAVA_HOME`=JDK 17） | **BUILD SUCCESS：Tests run 592, Failures 0, Errors 0, Skipped 0** | surefire；含告警阈值 + 列加密 E2E + SQL IDE + form/token/open 鉴权 |
 | `pom.xml` 编译目标 | `maven.compiler.source/target=17` | **保持 17**；不升到 21 |
 
-**结论**：编译目标保持 17；VT 仅在 JDK 21+ 运行期启用。管控台已完成 Phase B/B+/C partial/E lite，并完成本轮**实例编辑/克隆/导入/筛选/批量**与 **SQL 工作台经代理 listenPort**；完整 SQL IDE（MaxGUI-lite）与本地 form/token 鉴权 + HTTPS 模板已落地；OIDC 为配置路径；**审计 spool 内容浏览**已落地；**SQL 多语句 + 尽力而为取消**已落地；**列加密 E2E**（密钥轮换 + verify）已落地（非 KMS）；**管控台告警阈值**（H2 + 进程内评估）已落地；外部 Prometheus·Grafana / PagerDuty 仍不做。见 P0 / P1 / P2。
+**结论**：编译目标保持 17；VT 仅在 JDK 21+ 运行期启用。管控台已完成 Phase B/B+/C partial/E lite，并完成本轮**实例编辑/克隆/导入/筛选/批量**与 **SQL 工作台经代理 listenPort**；完整 SQL IDE（MaxGUI-lite）与本地 form/token 鉴权 + HTTPS 模板已落地；OIDC 为配置路径；**审计 spool 内容浏览**已落地；**SQL 多语句 + 尽力而为取消**已落地；**列加密 E2E**（密钥轮换 + verify）已落地（非 KMS）；**管控台告警阈值**（H2 + 进程内评估）已落地；**细粒度 RBAC**（VIEWER/OPERATOR/ADMIN + 权限串，§22）已落地；外部 Prometheus·Grafana / PagerDuty 仍不做。见 P0 / P1 / P2。
 
 ## 2. 能力总览（按主题）
 
@@ -95,7 +95,7 @@ Spring 实际读取的键（`@Value`）与默认 `application.yml`、模板一�
 |---|---|---|---|---|
 | P2-1 | NIO / 少线程模型 | **missing（deferred）** | 仍 `ServerSocket.accept` + 阻塞读；并发模型选定为 **每连接线程 / 可选 VT**（`VirtualThreadExecutors`） | **不做 NIO 重写**；若 JDK 21+ VT 不足再开专项 |
 | P2-2 | JDBC vs 协议代理分裂 | **partial（improved）** | `DatabaseConnectionService` / adapter 字段 `@Deprecated` + javadoc；STATUS §6；wire 仍走 `BackendProvider` | 无调用方后可删类；勿接入 DuplexRelay |
-| P2-3 | HTTP 管控面 / 管控台 | **partial（improved）** | Vue3+TS+Vite；H2 CRUD；脱敏热挂；B/B+/C partial/E lite/风控；实例编辑/克隆/导入/筛选/批量；**SQL IDE**：schema catalog 对象树、多 Tab、历史/片段 H2、CSV/JSON 导出、EXPLAIN；**多语句**（;≤20，遇错即停）+ **尽力而为取消**（`Statement.cancel`，非 TDS Attention/PG cancel key）；执行仍经代理 listenPort。**鉴权（本轮）**：`gateway.console.auth.mode=open|token|form|oidc`；open/token/form 可用；OIDC 为**可激活** SSO（显式 URI / Keycloak 路径 / issuer discovery + 角色映射 + Login SSO 按钮）；**Keycloak 实验室 Compose**（`docker-compose.keycloak.yml` + realm import）与 OPS 一路径已就绪；**真浏览器联调需本机 Docker**（本环境可能无 Docker），非 CI 已验收联邦。管控台 HTTPS：`server.ssl.*` + `application-console-https-template.yml`。 **控制面密码强制加密**：`gateway.console.require-secret-encryption`（默认 false）；缺钥拒写 503。设计 [`CONSOLE_ARCHITECTURE.md`](CONSOLE_ARCHITECTURE.md) §16–§20（含审计 spool、多语句/取消、**列加密 E2E**）。**不做** Prometheus/Grafana 出口；encrypt **非**完整 KMS/HSM | 外部 Micrometer 见 P2-4；Keycloak lab 在有 Docker 的 Mac 上按 OPS 一路径验收 |
+| P2-3 | HTTP 管控面 / 管控台 | **partial（improved）** | Vue3+TS+Vite；H2 CRUD；脱敏热挂；B/B+/C partial/E lite/风控；实例编辑/克隆/导入/筛选/批量；**SQL IDE**：schema catalog 对象树、多 Tab、历史/片段 H2、CSV/JSON 导出、EXPLAIN；**多语句**（;≤20，遇错即停）+ **尽力而为取消**（`Statement.cancel`，非 TDS Attention/PG cancel key）；执行仍经代理 listenPort。**鉴权**：`gateway.console.auth.mode=open|token|form|oidc`；**§22 RBAC**（VIEWER/OPERATOR/ADMIN + `permissions[]`，方法级强制；open 全开）；OIDC 为**可激活** SSO（显式 URI / Keycloak 路径 / issuer discovery + 角色映射 + Login SSO 按钮）；**Keycloak 实验室 Compose**（`docker-compose.keycloak.yml` + realm import）与 OPS 一路径已就绪；**真浏览器联调需本机 Docker**（本环境可能无 Docker），非 CI 已验收联邦。管控台 HTTPS：`server.ssl.*` + `application-console-https-template.yml`。 **控制面密码强制加密**：`gateway.console.require-secret-encryption`（默认 false）；缺钥拒写 503。设计 [`CONSOLE_ARCHITECTURE.md`](CONSOLE_ARCHITECTURE.md) §16–§20（含审计 spool、多语句/取消、**列加密 E2E**）。**不做** Prometheus/Grafana 出口；encrypt **非**完整 KMS/HSM | 外部 Micrometer 见 P2-4；Keycloak lab 在有 Docker 的 Mac 上按 OPS 一路径验收 |
 | P2-4 | Metrics 出口 | **partial（improved）** | 每 listener 独立 metrics；overview 求和 + `legacyMetrics`；**E lite**：`MetricsHistorySampler` + `GET …/metrics/history` + Overview SVG 火花图（内存环） | 外部 Prometheus/Grafana 非必需 | 可选后续接 Micrometer；告警阈值见 `docs/OPS.md` |
 | P2-5 | 审计测试与运维手册 | **partial（improved）** | P0-3 单测已有；**`docs/OPS.md`** 开启清单 / 告警清单；管控台 **spool 内容浏览**（§18）；README 运维段索引 | JDBC 审计真库验收仍缺 |
 | P2-6 | 集成测试在 CI 可复现 | **partial（improved）** | 跳过策略写入 `integration-test.properties` + OPS；`-Pintegration-test` 无 props → `assumeTrue` skip；`-Pintegration-testcontainers` **stub only** | 真 Testcontainers 接线另开；默认 `mvn test` 仍不需 Docker |

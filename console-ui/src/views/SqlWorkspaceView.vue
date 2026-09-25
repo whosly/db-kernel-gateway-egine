@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { usePermissions, Perm } from '../composables/usePermissions'
 import { computed, inject, onMounted, ref, watch } from 'vue'
 import {
   cancelSql,
@@ -21,6 +22,7 @@ import type {
   SqlStatementResult,
 } from '../api/types'
 
+const { has } = usePermissions()
 const toast = inject<(m: string) => void>('toast', () => {})
 
 interface EditorTab {
@@ -432,7 +434,7 @@ onMounted(async () => {
         maxRows
         <input v-model.number="maxRows" type="number" min="1" max="1000" />
       </label>
-      <button class="primary" :disabled="running || !instanceId" @click="run()">
+      <button class="primary" :disabled="running || !instanceId || !has(Perm.SQL_EXECUTE)" :title="!has(Perm.SQL_EXECUTE) ? '需要 sql:execute' : ''" @click="run()">
         {{ running ? '执行中…' : '运行 (Ctrl/⌘+Enter)' }}
       </button>
       <button
@@ -444,7 +446,7 @@ onMounted(async () => {
       >
         取消
       </button>
-      <button type="button" :disabled="running || !instanceId" @click="runExplain">EXPLAIN</button>
+      <button type="button" :disabled="running || !instanceId || !has(Perm.SQL_EXECUTE)" @click="runExplain">EXPLAIN</button>
       <button type="button" :disabled="!activeResult?.columns?.length" @click="exportCsv">导出 CSV</button>
       <button type="button" :disabled="!result" @click="exportJson">导出 JSON</button>
       <button type="button" @click="loadInstances">刷新实例</button>

@@ -5,6 +5,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.server.ResponseStatusException;
@@ -19,6 +20,14 @@ import org.springframework.web.server.ResponseStatusException;
 public class ConsoleApiExceptionAdvice {
 
     private static final MediaType PROBLEM = MediaType.parseMediaType(ConsoleApiProblem.MEDIA_TYPE);
+
+
+    @ExceptionHandler(AccessDeniedException.class)
+    public ResponseEntity<ConsoleApiProblem> forbidden(AccessDeniedException ex, HttpServletRequest req) {
+        String detail = ex.getMessage() != null && !ex.getMessage().isBlank()
+                ? ex.getMessage() : "Forbidden";
+        return problem(HttpStatus.FORBIDDEN, "Forbidden", detail, "FORBIDDEN", req);
+    }
 
     @ExceptionHandler(IllegalArgumentException.class)
     public ResponseEntity<ConsoleApiProblem> badRequest(IllegalArgumentException ex, HttpServletRequest req) {

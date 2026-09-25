@@ -115,6 +115,9 @@
 
 OIDC 入口仍为 Spring 标准 `/oauth2/authorization/{registrationId}`（非 console api 版本树）。
 
+`GET /auth/me` 响应：`{ authenticated, username, roles[], permissions[], mode }`。  
+细粒度 RBAC（VIEWER / OPERATOR / ADMIN → 权限串）见 [`CONSOLE_ARCHITECTURE.md`](CONSOLE_ARCHITECTURE.md) §22；`open` 模式返回 ADMIN 全权限且不强制。
+
 ---
 
 ## 2. JSON 约定

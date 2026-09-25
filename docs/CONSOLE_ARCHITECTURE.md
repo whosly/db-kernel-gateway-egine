@@ -955,7 +955,7 @@ GET /console/api/audit/status
 | `form` | Session + Cookie CSRF；`gateway.console.auth.users` |
 | `oidc` | OAuth2 Authorization Code；registration id 默认 `console` |
 
-配置前缀：`gateway.console.auth.*`。角色：`CONSOLE_ADMIN` / `CONSOLE_VIEWER`（Spring `ROLE_*`）。
+配置前缀：`gateway.console.auth.*`。角色：`CONSOLE_ADMIN` / `CONSOLE_OPERATOR` / `CONSOLE_VIEWER`（Spring `ROLE_*`）；权限串与方法级强制见 **§22**。
 
 ### 17.2 OIDC ClientRegistration 解析顺序
 
@@ -1234,3 +1234,86 @@ GET /console/api/audit/spool?limit=50&before=&source=auto|ring|spool|jdbc&protoc
 - [x] 单测 + `mvn test` + `npm run build` 绿；非 Prometheus
 
 **结论：§21 已实现（进程内告警；非 Prometheus / 非 PagerDuty）。**
+
+
+---
+
+## 22. 管控台细粒度 RBAC（权限目录 · 角色 · 方法鉴权）
+
+> 作者自检通过后实现。在既有 `open` / `token` / `form` / `oidc` 之上升级为**生产可用的全局角色 + 权限串**模型。  
+> **不做**完整 IAM / 多租户 / 实例级 ACL（下轮可选）；**不做**外部 IdP 角色同步产品化（仅扩展既有 OIDC claim 映射）；**不做** Prometheus。
+
+### 22.1 目标
+
+| 项 | 约定 |
+|---|---|
+| 权限目录 | 稳定字符串常量（如 `instances:read`），非自由文本 |
+| 角色 | `VIEWER` / `OPERATOR` / `ADMIN`（Spring 名 `CONSOLE_*`）→ 权限集合 |
+| 强制面 | `/console/api/v1/**` 方法级 `@PreAuthorize`（或等价）；`open` **不**强制（实验室全开） |
+| `GET /auth/me` | `{ username, roles, permissions[] }` |
+| 前端 | 按 permission 隐藏/禁用按钮；仍以 API **403** 为准 |
+| 实例级 ACL | **本轮不做**；文档记为下一阶段 |
+
+### 22.2 权限目录（`ConsolePermission`）
+
+| 权限 | 含义 |
+|---|---|
+| `instances:read` | 实例/目录/总览/指标/导出走读、会话列表、最近语句、健康探测读 |
+| `instances:write` | 创建/编辑/克隆/导入实例 |
+| `instances:start_stop` | 启停、批量启停、健康探测写 |
+| `instances:delete` | 删除管控台实例 |
+| `sql:execute` | SQL 执行/取消；片段写；清历史 |
+| `sessions:kill` | 断开会话 |
+| `masking:write` | 实例脱敏规则 CRUD / 热重载 |
+| `security:keys` | 脱敏密钥 PUT/DELETE/verify |
+| `audit:read` | 管控操作审计 / 流量 spool / 审计状态 |
+| `alerts:read` | 告警阈值读 + 当前触发 |
+| `alerts:write` | 告警阈值 CRUD |
+| `risk:write` | 风控策略 PUT |
+| `metrics:read` | 指标历史（与 instances:read 同级只读） |
+| `schema:read` | schema catalog / columns |
+| `config:read` | config / secret-encryption 状态 |
+
+### 22.3 角色 → 权限
+
+| 角色 | Spring `ROLE_*` | 权限集合 |
+|---|---|---|
+| **VIEWER** | `ROLE_CONSOLE_VIEWER` | `instances:read` · `audit:read` · `alerts:read` · `metrics:read` · `schema:read` · `config:read` |
+| **OPERATOR** | `ROLE_CONSOLE_OPERATOR` | VIEWER 全部 + `instances:start_stop` · `sql:execute` · `sessions:kill` · `alerts:write` · `masking:write` |
+| **ADMIN** | `ROLE_CONSOLE_ADMIN` | 全部权限（含 `instances:write` · `instances:delete` · `security:keys` · `risk:write`） |
+
+兼容：form/OIDC 配置仍可用 `CONSOLE_ADMIN` / `CONSOLE_VIEWER`；新增 `CONSOLE_OPERATOR` / `OPERATOR`。Admin 命中时仍附带 VIEWER（及 OPERATOR 权限经 ADMIN 全集覆盖）。
+
+### 22.4 模式行为
+
+| mode | 行为 |
+|---|---|
+| `open` | 实验室：API 不强制鉴权；`/auth/me` 返回 ADMIN 全权限；方法安全表达式对 open 恒 true |
+| `token` | `api-token` → ADMIN 权限；仅 `read-token` → VIEWER；写操作仍仅 api-token；过滤器写入 `SecurityContext` |
+| `form` / `oidc` | Session 认证；角色展开为权限 authority；方法级强制；未认证 → 401；缺权限 → 403 |
+
+### 22.5 API / UX
+
+- `GET /console/api/v1/auth/me` → `authenticated` · `username` · `roles[]` · `permissions[]` · `mode`
+- 控制器写路径加 `@PreAuthorize("@consoleAuthz.has('…')")`；读路径加对应 read 权限
+- Vue：`usePermissions()` / `can('instances:delete')`；启停/删除/密钥/风控/SQL 执行等按钮按权限禁用
+
+### 22.6 诚实边界 / 下一阶段
+
+| 已做 | 仍非 / 下轮 |
+|---|---|
+| 全局三角色 + 权限串 | 按实例 ACL（谁可管哪台） |
+| OIDC claim → 三角色 | 外部 IdP 组同步 UI / SCIM |
+| 方法级 403 | 完整 IAM 产品 |
+
+### 22.7 自检清单（作者）
+
+- [x] 权限常量集中；三角色映射可单测
+- [x] VIEWER 不能 PUT masking-key / DELETE instance；OPERATOR 可 start；ADMIN 可 keys
+- [x] open 模式行为不变（全开）
+- [x] `/auth/me` 含 `permissions[]`
+- [x] 前端按权限隐藏/禁用；API 仍 403
+- [x] OIDC 映射扩展 OPERATOR；无外网单测
+- [x] `mvn test` + `npm run build` 绿；STATUS / README 同步
+
+**结论：§22 已实现（全局三角色 + 权限串；实例级 ACL 下轮；open 模式不变）。**

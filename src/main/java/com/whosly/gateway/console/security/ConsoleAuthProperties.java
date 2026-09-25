@@ -73,7 +73,7 @@ public class ConsoleAuthProperties {
     public static class UserAccount {
         private String username;
         private String password;
-        /** CONSOLE_ADMIN or CONSOLE_VIEWER (comma-separated ok). */
+        /** CONSOLE_ADMIN / CONSOLE_OPERATOR / CONSOLE_VIEWER (comma-separated ok). */
         private String roles = "CONSOLE_VIEWER";
 
         public String getUsername() { return username; }
@@ -118,6 +118,8 @@ public class ConsoleAuthProperties {
         private String roleClaim = "roles";
         /** Comma-separated IdP values that map to CONSOLE_ADMIN. */
         private String adminRoleValues = "CONSOLE_ADMIN,admin,console-admin";
+        /** Comma-separated IdP values that map to CONSOLE_OPERATOR. */
+        private String operatorRoleValues = "CONSOLE_OPERATOR,operator,console-operator";
         /** Comma-separated IdP values that map to CONSOLE_VIEWER. */
         private String viewerRoleValues = "CONSOLE_VIEWER,viewer,console-viewer";
 
@@ -153,6 +155,8 @@ public class ConsoleAuthProperties {
         public void setRoleClaim(String roleClaim) { this.roleClaim = roleClaim; }
         public String getAdminRoleValues() { return adminRoleValues; }
         public void setAdminRoleValues(String adminRoleValues) { this.adminRoleValues = adminRoleValues; }
+        public String getOperatorRoleValues() { return operatorRoleValues; }
+        public void setOperatorRoleValues(String operatorRoleValues) { this.operatorRoleValues = operatorRoleValues; }
         public String getViewerRoleValues() { return viewerRoleValues; }
         public void setViewerRoleValues(String viewerRoleValues) { this.viewerRoleValues = viewerRoleValues; }
 
@@ -172,6 +176,10 @@ public class ConsoleAuthProperties {
 
         public List<String> adminRoleValueList() {
             return splitCsv(adminRoleValues);
+        }
+
+        public List<String> operatorRoleValueList() {
+            return splitCsv(operatorRoleValues);
         }
 
         public List<String> viewerRoleValueList() {

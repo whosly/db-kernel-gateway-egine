@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { usePermissions, Perm } from '../composables/usePermissions'
 import { ref } from 'vue'
 import {
   deleteMaskingKey,
@@ -26,6 +27,7 @@ import type {
   TrafficAuditEntry,
 } from '../api/types'
 import { usePolling } from '../composables/usePolling'
+const { has } = usePermissions()
 
 const summary = ref<Record<string, unknown> | null>(null)
 const health = ref<Record<string, unknown> | null>(null)
@@ -352,7 +354,7 @@ function sourceLabel(s?: string) {
         </div>
       </div>
       <div class="actions">
-        <button type="button" class="primary" :disabled="riskBusy" @click="saveRisk">保存并热挂</button>
+        <button type="button" class="primary" :disabled="riskBusy || !has(Perm.RISK_WRITE)" :title="!has(Perm.RISK_WRITE) ? '需要 risk:write' : ''" @click="saveRisk">保存并热挂</button>
       </div>
       <p v-if="riskMsg" class="msg">{{ riskMsg }}</p>
     </div>
@@ -420,9 +422,9 @@ function sourceLabel(s?: string) {
           <input v-model="keepPrevious" type="checkbox" /> 保留现有密钥环供解密（轮换）
         </label>
         <div class="actions">
-          <button type="submit" class="primary" :disabled="keyBusy">设置 / 轮换密钥</button>
-          <button type="button" :disabled="keyBusy" @click="clearKey">清除管控台密钥</button>
-          <button type="button" :disabled="verifyBusy || !keyStatus?.configured" @click="runVerify">
+          <button type="submit" class="primary" :disabled="keyBusy || !has(Perm.SECURITY_KEYS)" :title="!has(Perm.SECURITY_KEYS) ? '需要 security:keys' : ''">设置 / 轮换密钥</button>
+          <button type="button" :disabled="keyBusy || !has(Perm.SECURITY_KEYS)" @click="clearKey">清除管控台密钥</button>
+          <button type="button" :disabled="verifyBusy || !keyStatus?.configured || !has(Perm.SECURITY_KEYS)" @click="runVerify">
             {{ verifyBusy ? '自检中…' : '加密自检' }}
           </button>
         </div>

@@ -2,9 +2,7 @@ package com.whosly.gateway.console.security;
 
 import com.whosly.gateway.console.security.ConsoleAuthProperties.Oidc;
 import org.springframework.security.core.GrantedAuthority;
-import org.springframework.security.core.authority.SimpleGrantedAuthority;
 
-import java.util.ArrayList;
 import java.util.Collection;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -15,12 +13,13 @@ import java.util.Set;
 
 /**
  * Maps IdP OIDC/OAuth2 claims (roles / groups / realm_access.roles) to
- * {@code ROLE_CONSOLE_ADMIN} / {@code ROLE_CONSOLE_VIEWER}.
- * Missing or unmatched roles → VIEWER only.
+ * {@code ROLE_CONSOLE_ADMIN} / {@code ROLE_CONSOLE_OPERATOR} / {@code ROLE_CONSOLE_VIEWER}
+ * plus permission authorities. Missing or unmatched roles → VIEWER only.
  */
 public class ConsoleOidcRoleMapper {
 
     public static final String ROLE_ADMIN = "ROLE_" + ConsoleSecurityConfig.ROLE_ADMIN;
+    public static final String ROLE_OPERATOR = "ROLE_" + ConsoleSecurityConfig.ROLE_OPERATOR;
     public static final String ROLE_VIEWER = "ROLE_" + ConsoleSecurityConfig.ROLE_VIEWER;
 
     private final Oidc oidc;
@@ -32,15 +31,15 @@ public class ConsoleOidcRoleMapper {
     public Collection<? extends GrantedAuthority> mapAuthorities(Map<String, Object> claims) {
         Set<String> idpRoles = extractRoleValues(claims, oidc.getRoleClaim());
         boolean admin = matchesAny(idpRoles, oidc.adminRoleValueList());
-        List<GrantedAuthority> out = new ArrayList<>(2);
+        boolean operator = matchesAny(idpRoles, oidc.operatorRoleValueList());
         if (admin) {
-            out.add(new SimpleGrantedAuthority(ROLE_ADMIN));
-            out.add(new SimpleGrantedAuthority(ROLE_VIEWER));
-            return out;
+            return ConsoleAuthoritySupport.authoritiesForRoles(ConsoleRoles.ADMIN);
+        }
+        if (operator) {
+            return ConsoleAuthoritySupport.authoritiesForRoles(ConsoleRoles.OPERATOR);
         }
         // viewer match or default
-        out.add(new SimpleGrantedAuthority(ROLE_VIEWER));
-        return out;
+        return ConsoleAuthoritySupport.authoritiesForRoles(ConsoleRoles.VIEWER);
     }
 
     /**

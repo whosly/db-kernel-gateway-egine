@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref } from 'vue'
+import { usePermissions, Perm } from '../composables/usePermissions'
 import type { GatewayInstance, HealthCheckResult } from '../api/types'
 import { proxyModeBadgeClass } from '../api/proxyMode'
 import { healthCheck } from '../api/consoleApi'
@@ -13,6 +14,7 @@ defineEmits<{
 
 const health = ref<HealthCheckResult | null>(null)
 const busy = ref(false)
+const { has } = usePermissions()
 
 async function probe() {
   busy.value = true
@@ -65,14 +67,20 @@ async function probe() {
     <footer @click.stop>
       <button
         class="primary"
-        :disabled="!instance.startable || instance.status === 'RUNNING'"
+        :disabled="!has(Perm.INSTANCES_START_STOP) || !instance.startable || instance.status === 'RUNNING'"
+        :title="!has(Perm.INSTANCES_START_STOP) ? '需要 instances:start_stop' : ''"
         @click="$emit('start')"
       >启动</button>
       <button
-        :disabled="!instance.bound || instance.status !== 'RUNNING'"
+        :disabled="!has(Perm.INSTANCES_START_STOP) || !instance.bound || instance.status !== 'RUNNING'"
+        :title="!has(Perm.INSTANCES_START_STOP) ? '需要 instances:start_stop' : ''"
         @click="$emit('stop')"
       >停止</button>
-      <button :disabled="busy" @click="probe">{{ busy ? '探测…' : '探测后端' }}</button>
+      <button
+        :disabled="busy || !has(Perm.INSTANCES_START_STOP)"
+        :title="!has(Perm.INSTANCES_START_STOP) ? '需要 instances:start_stop' : ''"
+        @click="probe"
+      >{{ busy ? '探测…' : '探测后端' }}</button>
     </footer>
   </article>
 </template>

@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { usePermissions, Perm } from '../composables/usePermissions'
 import { computed, inject, onMounted, reactive, ref, watch } from 'vue'
 import type {
   GatewayInstance,
@@ -29,6 +30,8 @@ import {
   getSecretEncryptionStatus,
   updateMaskingRule,
 } from '../api/consoleApi'
+
+const { has } = usePermissions()
 
 const props = defineProps<{ instance: GatewayInstance | null }>()
 const emit = defineEmits<{ close: []; delete: []; save: [UpdateInstancePayload]; clone: [] }>()
@@ -476,8 +479,8 @@ watch(tab, (v) => {
         </section>
 
         <footer class="drawer-foot">
-          <button type="button" @click="emit('clone')">克隆</button>
-          <button v-if="instance.source === 'console'" class="danger" @click="emit('delete')">删除实例</button>
+          <button type="button" :disabled="!has(Perm.INSTANCES_WRITE)" :title="!has(Perm.INSTANCES_WRITE) ? '需要 instances:write' : ''" @click="emit('clone')">克隆</button>
+          <button v-if="instance.source === 'console' && has(Perm.INSTANCES_DELETE)" class="danger" @click="emit('delete')">删除实例</button>
           <p class="muted tiny">克隆会生成新的管控台实例（可改端口）；删除仅管控台来源可用。</p>
         </footer>
       </template>
@@ -506,7 +509,7 @@ watch(tab, (v) => {
                 <td>{{ s.clientDatabase || '—' }}</td>
                 <td>{{ s.state }}</td>
                 <td>{{ s.inTransaction ? '是' : '否' }}</td>
-                <td><button type="button" class="danger" @click="onKill(s)">断开</button></td>
+                <td><button type="button" class="danger" :disabled="!has(Perm.SESSIONS_KILL)" :title="!has(Perm.SESSIONS_KILL) ? '需要 sessions:kill' : ''" @click="onKill(s)">断开</button></td>
               </tr>
             </tbody>
           </table>
@@ -567,8 +570,8 @@ watch(tab, (v) => {
                 · 优先级 {{ r.priority }}
               </div>
               <div class="rule-actions">
-                <button type="button" @click="startEdit(r)">编辑</button>
-                <button type="button" class="danger" @click="removeRule(r)">删除</button>
+                <button type="button" :disabled="!has(Perm.MASKING_WRITE)" @click="startEdit(r)">编辑</button>
+                <button type="button" class="danger" :disabled="!has(Perm.MASKING_WRITE)" @click="removeRule(r)">删除</button>
               </div>
             </li>
           </ul>

@@ -56,9 +56,14 @@ class ConsoleSecurityConfigTest {
         PasswordEncoder encoder = cfg.consolePasswordEncoder();
         UserDetailsService uds = cfg.consoleUserDetailsService(encoder);
         assertThat(uds.loadUserByUsername("admin").getAuthorities())
-                .anyMatch(a -> a.getAuthority().contains("CONSOLE_ADMIN"));
+                .anyMatch(a -> a.getAuthority().contains("CONSOLE_ADMIN"))
+                .anyMatch(a -> "security:keys".equals(a.getAuthority()));
+        assertThat(uds.loadUserByUsername("operator").getAuthorities())
+                .anyMatch(a -> a.getAuthority().contains("CONSOLE_OPERATOR"))
+                .anyMatch(a -> "instances:start_stop".equals(a.getAuthority()));
         assertThat(uds.loadUserByUsername("viewer").getAuthorities())
-                .anyMatch(a -> a.getAuthority().contains("CONSOLE_VIEWER"));
+                .anyMatch(a -> a.getAuthority().contains("CONSOLE_VIEWER"))
+                .noneMatch(a -> "security:keys".equals(a.getAuthority()));
         assertThat(encoder.matches("admin", uds.loadUserByUsername("admin").getPassword())).isTrue();
     }
 }

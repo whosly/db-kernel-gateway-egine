@@ -10,6 +10,9 @@ import {
 } from '../api/consoleApi'
 import type { ActiveAlert, AlertThreshold, GatewayInstance } from '../api/types'
 import { usePolling } from '../composables/usePolling'
+import { usePermissions, Perm } from '../composables/usePermissions'
+
+const { has } = usePermissions()
 
 const thresholds = ref<AlertThreshold[]>([])
 const active = ref<ActiveAlert[]>([])
@@ -133,6 +136,7 @@ async function save() {
 }
 
 async function remove(id: string) {
+  if (!has(Perm.ALERTS_WRITE)) { msg.value = '需要 alerts:write'; return }
   if (!confirm('删除该告警阈值？')) return
   busy.value = true
   try {
@@ -244,6 +248,7 @@ function sevClass(s?: string) {
 
       <div class="panel">
         <h3>{{ editingId ? '编辑阈值' : '新建阈值' }}</h3>
+        <p v-if="!has(Perm.ALERTS_WRITE)" class="muted">只读：需要 alerts:write 才能修改阈值。</p>
         <form class="form" @submit.prevent="save">
           <label>
             名称
@@ -293,7 +298,7 @@ function sevClass(s?: string) {
             启用
           </label>
           <div class="row">
-            <button type="submit" class="primary" :disabled="busy">
+            <button type="submit" class="primary" :disabled="busy || !has(Perm.ALERTS_WRITE)" :title="!has(Perm.ALERTS_WRITE) ? '需要 alerts:write' : ''">
               {{ editingId ? '保存' : '创建' }}
             </button>
             <button v-if="editingId" type="button" :disabled="busy" @click="resetForm">取消</button>

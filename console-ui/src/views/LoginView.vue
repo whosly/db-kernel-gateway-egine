@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { inject, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { getAuthMode, login } from '../api/consoleApi'
 
 const router = useRouter()
+const refreshAuth = inject<() => Promise<void>>('refreshAuth', async () => {})
 const username = ref('admin')
 const password = ref('admin')
 const error = ref<string | null>(null)
@@ -25,7 +26,7 @@ onMounted(async () => {
       hint.value = m.oidcConfigured === false
         ? 'OIDC 模式已启用但尚未配置 issuer-uri/client-id，请联系运维。'
         : '当前为 OIDC SSO 模式，请使用下方按钮跳转 IdP 登录。'
-    } else hint.value = '请使用表单账号登录（默认 lab：admin/admin）。'
+    } else hint.value = '请使用表单账号登录（默认 lab：admin/admin · operator/operator · viewer/viewer）。'
     if (m.open) {
       router.replace('/')
     }
@@ -43,6 +44,7 @@ async function submit() {
       error.value = (res as { message?: string }).message || '登录失败'
       return
     }
+    await refreshAuth()
     router.replace('/')
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e)

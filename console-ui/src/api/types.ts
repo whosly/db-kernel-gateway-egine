@@ -437,6 +437,7 @@ export interface AuthMeResponse {
   authenticated: boolean
   username?: string | null
   roles?: string[]
+  permissions?: string[]
   mode?: string
 }
 

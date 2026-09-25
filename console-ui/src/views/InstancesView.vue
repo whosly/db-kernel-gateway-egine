@@ -26,8 +26,10 @@ import type {
 } from '../api/types'
 import { proxyModeBadgeClass, proxyModeHint } from '../api/proxyMode'
 import { usePolling } from '../composables/usePolling'
+import { usePermissions, Perm } from '../composables/usePermissions'
 
 const toast = inject<(m: string) => void>('toast', () => {})
+const { has } = usePermissions()
 const instances = ref<GatewayInstance[]>([])
 const catalog = ref<CatalogEntry[]>([])
 const error = ref<string | null>(null)
@@ -280,9 +282,9 @@ async function onImportFile(ev: Event) {
     <div class="toolbar">
       <p class="lead">网关实例为一等实体；可编辑 / 克隆 / 导入导出；类型仅为徽章。</p>
       <div class="actions">
-        <button class="primary" @click="openCreate">新建实例</button>
+        <button class="primary" :disabled="!has(Perm.INSTANCES_WRITE)" :title="!has(Perm.INSTANCES_WRITE) ? '需要 instances:write' : ''" @click="openCreate">新建实例</button>
         <button type="button" @click="downloadInstancesExport().catch((e) => toast(String(e)))">导出实例</button>
-        <button type="button" @click="importInput?.click()">导入 JSON</button>
+        <button type="button" :disabled="!has(Perm.INSTANCES_WRITE)" @click="importInput?.click()">导入 JSON</button>
         <input ref="importInput" type="file" accept="application/json,.json" hidden @change="onImportFile" />
         <button type="button" @click="downloadConfigExport().catch((e) => toast(String(e)))">导出配置</button>
       </div>
@@ -315,8 +317,8 @@ async function onImportFile(ev: Event) {
         />
         全选当前
       </label>
-      <button type="button" :disabled="!selectedIds.size" @click="onBulk('start')">批量启动</button>
-      <button type="button" :disabled="!selectedIds.size" @click="onBulk('stop')">批量停止</button>
+      <button type="button" :disabled="!selectedIds.size || !has(Perm.INSTANCES_START_STOP)" @click="onBulk('start')">批量启动</button>
+      <button type="button" :disabled="!selectedIds.size || !has(Perm.INSTANCES_START_STOP)" @click="onBulk('stop')">批量停止</button>
       <span class="muted tiny">已选 {{ selectedIds.size }}</span>
     </div>
 

@@ -9,7 +9,8 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
-import org.springframework.http.MediaType;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 
@@ -20,10 +21,11 @@ import java.nio.charset.StandardCharsets;
  * Optional Bearer / X-Console-Token gate for {@code /console/api/**}.
  * <ul>
  *   <li>Blank {@code gateway.console.api-token} and {@code read-token} → open (lab default).</li>
- *   <li>{@code api-token}: read + write.</li>
- *   <li>{@code read-token}: GET/HEAD only; writes still require {@code api-token} when configured.</li>
+ *   <li>{@code api-token}: ADMIN permissions (read + write).</li>
+ *   <li>{@code read-token}: VIEWER permissions; GET/HEAD only; writes still require {@code api-token}.</li>
  * </ul>
  * Does not protect static SPA assets under {@code /console}.
+ * On success, installs a {@link SecurityContextHolder} authentication so method security can enforce RBAC.
  */
 @Component
 @Order(Ordered.HIGHEST_PRECEDENCE + 20)
@@ -62,7 +64,7 @@ public class ConsoleApiTokenFilter extends OncePerRequestFilter {
         if (path == null || !path.startsWith("/console/api")) {
             return true;
         }
-        // auth discovery endpoints stay open even in token mode
+        // auth discovery endpoints stay open even in token mode (me resolves token if present)
         return path.startsWith("/console/api/v1/auth/");
     }
 
@@ -73,19 +75,21 @@ public class ConsoleApiTokenFilter extends OncePerRequestFilter {
         String method = request.getMethod() != null ? request.getMethod().toUpperCase() : "GET";
         boolean readOnly = "GET".equals(method) || "HEAD".equals(method);
 
+        boolean apiOk = matches(apiToken, provided);
+        boolean readOk = matches(readToken, provided);
+
         boolean ok;
+        String role;
         if (readOnly) {
-            ok = matches(apiToken, provided) || matches(readToken, provided);
-            // If only read-token is configured (api blank), still allow GET with read-token
-            if (!ok && apiToken.isEmpty() && matches(readToken, provided)) {
-                ok = true;
-            }
+            ok = apiOk || readOk;
+            role = apiOk ? ConsoleRoles.ADMIN : ConsoleRoles.VIEWER;
         } else {
-            // Writes require api-token when it is configured; if only read-token exists, deny writes
             if (!apiToken.isEmpty()) {
-                ok = matches(apiToken, provided);
+                ok = apiOk;
+                role = ConsoleRoles.ADMIN;
             } else {
                 ok = false;
+                role = ConsoleRoles.VIEWER;
             }
         }
 
@@ -94,17 +98,30 @@ public class ConsoleApiTokenFilter extends OncePerRequestFilter {
             response.setCharacterEncoding(StandardCharsets.UTF_8.name());
             response.setContentType("application/problem+json");
             response.getWriter().write(
-                    "{\"ok\":false,\"message\":\"Unauthorized: missing or invalid console API token\"}");
+                    "{\"type\":\"about:blank\",\"title\":\"Unauthorized\",\"status\":401,"
+                            + "\"detail\":\"Unauthorized: missing or invalid console API token\","
+                            + "\"code\":\"UNAUTHORIZED\"}");
             return;
         }
-        filterChain.doFilter(request, response);
+
+        UsernamePasswordAuthenticationToken authentication =
+                new UsernamePasswordAuthenticationToken(
+                        apiOk ? "api-token" : "read-token",
+                        "N/A",
+                        ConsoleAuthoritySupport.authoritiesForRoles(role));
+        SecurityContextHolder.getContext().setAuthentication(authentication);
+        try {
+            filterChain.doFilter(request, response);
+        } finally {
+            SecurityContextHolder.clearContext();
+        }
     }
 
     private static boolean matches(String expected, String actual) {
         return expected != null && !expected.isEmpty() && constantTimeEquals(expected, actual);
     }
 
-    private static String extractToken(HttpServletRequest request) {
+    static String extractToken(HttpServletRequest request) {
         String header = request.getHeader("Authorization");
         if (header != null) {
             String h = header.trim();
