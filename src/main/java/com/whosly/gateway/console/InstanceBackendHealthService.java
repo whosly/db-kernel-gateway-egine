@@ -3,7 +3,7 @@ package com.whosly.gateway.console;
 import com.whosly.gateway.adapter.AbstractProtocolAdapter;
 import com.whosly.gateway.adapter.ProtocolAdapter;
 import com.whosly.gateway.config.GatewayConfig;
-import com.whosly.gateway.console.persist.ConsoleInstanceRecord;
+import com.whosly.gateway.runtime.spi.PersistedInstance;
 import com.whosly.gateway.console.persist.ConsoleInstanceStore;
 import com.whosly.gateway.console.schema.InstanceSchemaColumnsService;
 import com.whosly.gateway.runtime.GatewayListenerRuntime;
@@ -143,9 +143,9 @@ public class InstanceBackendHealthService {
         }
 
         if (consoleStore != null && "console".equals(listener.source())) {
-            Optional<ConsoleInstanceRecord> row = consoleStore.findById(listener.id());
+            Optional<PersistedInstance> row = consoleStore.findById(listener.id());
             if (row.isPresent()) {
-                ConsoleInstanceRecord r = row.get();
+                PersistedInstance r = row.get();
                 if (hasText(r.targetHost())) {
                     host = r.targetHost();
                 }

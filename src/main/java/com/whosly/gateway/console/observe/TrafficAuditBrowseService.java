@@ -3,6 +3,7 @@ package com.whosly.gateway.console.observe;
 import com.whosly.gateway.audit.AuditSpoolReader;
 import com.whosly.gateway.audit.AuditSpoolReader.ParsedRecord;
 import com.whosly.gateway.config.GatewayConfig;
+import com.whosly.gateway.runtime.observe.RecentTrafficRing;
 import com.whosly.gateway.console.sql.InstanceSqlExecuteService;
 import com.whosly.gateway.parser.SqlMasker;
 import org.slf4j.Logger;

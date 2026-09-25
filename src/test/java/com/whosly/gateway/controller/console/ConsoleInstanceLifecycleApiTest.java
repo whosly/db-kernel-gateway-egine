@@ -95,7 +95,7 @@ class ConsoleInstanceLifecycleApiTest {
     @Test
     void bulkStopReturnsPerIdResults() {
         Map<String, Object> body = console.bulkInstances(
-                new ConsoleApiController.BulkInstancesBody("stop", List.of("gw-run", "missing")));
+                new ConsoleApiModels.BulkInstancesBody("stop", List.of("gw-run", "missing")));
         assertThat(body.get("okCount")).isEqualTo(1);
         assertThat(body.get("failCount")).isEqualTo(1);
         @SuppressWarnings("unchecked")

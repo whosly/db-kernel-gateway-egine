@@ -3,6 +3,7 @@ package com.whosly.gateway.console.masking;
 import com.whosly.gateway.console.persist.MaskingRuleRecord;
 import com.whosly.gateway.console.persist.MaskingRuleStore;
 import com.whosly.gateway.masking.MaskingEngine;
+import com.whosly.gateway.runtime.spi.InstanceMaskingSupport;
 import com.whosly.gateway.masking.MaskingRule;
 import com.whosly.gateway.masking.MaskingRuleRegistry;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -17,7 +18,7 @@ import java.util.Objects;
  * plus enabled H2 rules for that instance (instance rules win via priority boost).
  */
 @Component
-public class InstanceMaskingEngineFactory {
+public class InstanceMaskingEngineFactory implements InstanceMaskingSupport {
 
     private final MaskingRuleStore store;
     private final InstanceMaskingRuleCompiler compiler;
@@ -69,4 +70,40 @@ public class InstanceMaskingEngineFactory {
         }
         return new MaskingEngine(new MaskingRuleRegistry(merged));
     }
+
+    @Override
+    public int deleteRulesByInstanceId(String instanceId) {
+        return store.deleteByInstanceId(instanceId);
+    }
+
+    @Override
+    public void copyRules(String sourceInstanceId, String targetInstanceId) {
+        Objects.requireNonNull(sourceInstanceId, "sourceInstanceId");
+        Objects.requireNonNull(targetInstanceId, "targetInstanceId");
+        List<MaskingRuleRecord> rules = store.findByInstanceId(sourceInstanceId);
+        if (rules.isEmpty()) {
+            return;
+        }
+        List<MaskingRuleRecord> copies = new ArrayList<>();
+        for (MaskingRuleRecord r : rules) {
+            copies.add(new MaskingRuleRecord(
+                    null,
+                    targetInstanceId,
+                    r.name(),
+                    r.strategy(),
+                    r.priority(),
+                    r.columnName(),
+                    r.tableName(),
+                    r.namePattern(),
+                    r.fixedValue(),
+                    r.keepPrefix(),
+                    r.keepSuffix(),
+                    r.hashHexLength(),
+                    r.enabled(),
+                    null,
+                    null));
+        }
+        store.replaceAll(targetInstanceId, copies);
+    }
+
 }

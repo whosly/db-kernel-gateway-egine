@@ -229,7 +229,7 @@ class GatewayListenerRuntimeTest {
         int port = freePort();
         ConsoleInstanceStore store = memStore("rt-boot");
         Instant now = Instant.now();
-        store.upsert(new com.whosly.gateway.console.persist.ConsoleInstanceRecord(
+        store.upsert(new com.whosly.gateway.runtime.spi.PersistedInstance(
                 "from-h2", "已持久化", "postgresql", "0.0.0.0", port, true,
                 "127.0.0.1", 5432, "postgres", "pg", "pw", now, now));
 

@@ -13,6 +13,7 @@ import com.whosly.gateway.runtime.GatewayListenerRuntime.CreateInstanceRequest;
 import com.whosly.gateway.runtime.GatewayListenerRuntime.UpdateInstanceRequest;
 import com.whosly.gateway.runtime.GatewayListenerRuntime.CloneInstanceRequest;
 import com.whosly.gateway.runtime.GatewayListenerRuntime.ManagedListener;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
@@ -33,9 +34,17 @@ import java.util.Optional;
 public class GatewayInstanceRegistry {
 
     private final GatewayListenerRuntime listenerRuntime;
+    private final InstanceMaskingEngineFactory maskingEngineFactory;
 
     public GatewayInstanceRegistry(GatewayListenerRuntime listenerRuntime) {
+        this(listenerRuntime, null);
+    }
+
+    @Autowired
+    public GatewayInstanceRegistry(GatewayListenerRuntime listenerRuntime,
+                                   @Autowired(required = false) InstanceMaskingEngineFactory maskingEngineFactory) {
         this.listenerRuntime = Objects.requireNonNull(listenerRuntime, "listenerRuntime");
+        this.maskingEngineFactory = maskingEngineFactory;
     }
 
     public List<GatewayInstance> listInstances() {
@@ -274,8 +283,10 @@ public class GatewayInstanceRegistry {
     }
 
     private InstanceMaskingEngineFactory maskingFactory() {
-        return listenerRuntime.maskingEngineFactory().orElseThrow(() ->
-                new IllegalStateException("Masking rule store is not configured"));
+        if (maskingEngineFactory != null) {
+            return maskingEngineFactory;
+        }
+        throw new IllegalStateException("Masking rule store is not configured");
     }
 
     private MaskingRuleStore maskingStore() {

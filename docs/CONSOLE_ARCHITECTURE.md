@@ -78,6 +78,17 @@
 | 配置 | `config.Gateway*Properties` | `catalog` / `instances` 绑定 | UI 专用字段泄漏进协议层 |
 | 协议 | `adapter.*` | 各 DB wire 实现 | 被 controller 直接依赖（除 metrics 类型） |
 
+
+**依赖倒置（SPI seam）**：`runtime` / `adapter` **不得** `import com.whosly.gateway.console.*`。
+管控台实现通过 `com.whosly.gateway.runtime.spi` 注入（`InstanceCatalog`、`PersistedInstanceStore`、
+`InstanceMaskingSupport`、`TrafficRingAttachment`）；`RecentTrafficRing` 位于 `runtime.observe`（数据面观测）。
+装配仍在 `GatewayConfig` / console `@Configuration`，方向为 console → runtime。
+
+**Controller 拆分**：`/console/api` 按域拆为多个 `@RestController`（`ConsoleOverviewApiController`、
+`ConsoleInstanceApiController`、`ConsoleSqlApiController`、`ConsoleAuditApiController`、
+`ConsoleSecurityApiController`），路径与 JSON 不变；共享异常映射见 `ConsoleApiExceptionAdvice`，
+请求体见 `ConsoleApiModels`；业务实现集中在 `@Component` `ConsoleApiController`（无 HTTP 映射）。
+
 ### 2.2 领域对象（稳定）
 
 **CatalogEntry（类型）** ≠ **GatewayInstance（实例）**

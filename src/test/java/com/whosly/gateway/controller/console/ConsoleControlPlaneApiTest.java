@@ -13,7 +13,7 @@ import com.whosly.gateway.console.GatewayInstanceRegistry;
 import com.whosly.gateway.console.InstanceBackendHealthService;
 import com.whosly.gateway.console.SupportedDatabaseCatalog;
 import com.whosly.gateway.console.observe.MetricsHistorySampler;
-import com.whosly.gateway.console.observe.RecentTrafficRing;
+import com.whosly.gateway.runtime.observe.RecentTrafficRing;
 import com.whosly.gateway.adapter.protocol.DatabaseTrafficEvent;
 import com.whosly.gateway.runtime.GatewayListenerRuntime;
 import com.whosly.gateway.runtime.GatewayListenerRuntime.ManagedListener;

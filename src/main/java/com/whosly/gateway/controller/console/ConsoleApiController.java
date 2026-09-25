@@ -1,11 +1,14 @@
 package com.whosly.gateway.controller.console;
 
+import static com.whosly.gateway.controller.console.ConsoleApiModels.*;
+import org.springframework.stereotype.Component;
+
 import com.whosly.gateway.adapter.AbstractProtocolAdapter;
 import org.springframework.web.server.ResponseStatusException;
 import com.whosly.gateway.runtime.GatewayListenerRuntime.ManagedListener;
 import com.whosly.gateway.runtime.GatewayListenerRuntime;
 import com.whosly.gateway.console.observe.MetricsHistorySampler;
-import com.whosly.gateway.console.observe.RecentTrafficRing;
+import com.whosly.gateway.runtime.observe.RecentTrafficRing;
 import com.whosly.gateway.console.observe.TrafficAuditBrowseService;
 import com.whosly.gateway.console.InstanceBackendHealthService;
 import com.whosly.gateway.adapter.protocol.SessionSnapshot;
@@ -34,17 +37,6 @@ import com.whosly.gateway.runtime.GatewayListenerRuntime.CloneInstanceRequest;
 import com.whosly.gateway.console.sql.InstanceSqlExecuteService;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
-import org.springframework.web.bind.annotation.DeleteMapping;
-import org.springframework.web.bind.annotation.ExceptionHandler;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PathVariable;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.PutMapping;
-import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RequestParam;
-import org.springframework.web.bind.annotation.ResponseStatus;
-import org.springframework.web.bind.annotation.RestController;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -58,8 +50,7 @@ import java.util.stream.Collectors;
  * <p>First-class resource is the <em>gateway instance</em>; database type is only
  * an attribute. Existing {@code /gateway/*} endpoints remain unchanged.</p>
  */
-@RestController
-@RequestMapping("/console/api")
+@Component
 public class ConsoleApiController {
 
     private final SupportedDatabaseCatalog catalog;
@@ -130,7 +121,6 @@ public class ConsoleApiController {
         this.secretCipher = secretCipher;
     }
 
-    @GetMapping("/supported-databases")
     public Map<String, Object> supportedDatabases() {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("databases", catalog.listAll());
@@ -138,11 +128,10 @@ public class ConsoleApiController {
         return body;
     }
 
-    @GetMapping("/instances")
     public Map<String, Object> listInstances(
-            @RequestParam(value = "status", required = false) String status,
-            @RequestParam(value = "dbType", required = false) String dbType,
-            @RequestParam(value = "q", required = false) String q) {
+            String status,
+            String dbType,
+            String q) {
         List<GatewayInstance> instances = instanceRegistry.listInstances();
         if (status != null && !status.isBlank()) {
             String s = status.trim().toUpperCase();
@@ -180,39 +169,32 @@ public class ConsoleApiController {
         return value != null && value.toLowerCase().contains(needle);
     }
 
-    @GetMapping("/instances/{id}")
-    public GatewayInstance getInstance(@PathVariable("id") String id) {
+    public GatewayInstance getInstance(String id) {
         return instanceRegistry.findById(id)
                 .orElseThrow(() -> new IllegalArgumentException("Unknown gateway instance id: " + id));
     }
 
-    @GetMapping("/instances/{id}/status")
-    public Map<String, Object> instanceStatus(@PathVariable("id") String id) {
+    public Map<String, Object> instanceStatus(String id) {
         return instanceRegistry.statusOf(id);
     }
 
-    @GetMapping("/instances/{id}/metrics")
-    public Map<String, Object> instanceMetrics(@PathVariable("id") String id) {
+    public Map<String, Object> instanceMetrics(String id) {
         return instanceRegistry.metricsOf(id);
     }
 
-    @PostMapping("/instances/{id}/start")
-    public Map<String, Object> startInstance(@PathVariable("id") String id) {
+    public Map<String, Object> startInstance(String id) {
         Map<String, Object> result = instanceRegistry.start(id);
         audit("instance.start", id, ConsoleAuditService.detail("ok", result.get("ok")));
         return result;
     }
 
-    @PostMapping("/instances/{id}/stop")
-    public Map<String, Object> stopInstance(@PathVariable("id") String id) {
+    public Map<String, Object> stopInstance(String id) {
         Map<String, Object> result = instanceRegistry.stop(id);
         audit("instance.stop", id, ConsoleAuditService.detail("ok", result.get("ok")));
         return result;
     }
 
-    @PostMapping("/instances")
-    @ResponseStatus(HttpStatus.CREATED)
-    public GatewayInstance createInstance(@RequestBody CreateInstanceBody body) {
+    public GatewayInstance createInstance(CreateInstanceBody body) {
         if (body == null || body.dbType() == null || body.dbType().isBlank()) {
             throw new IllegalArgumentException("dbType is required");
         }
@@ -245,8 +227,7 @@ public class ConsoleApiController {
         return created;
     }
 
-    @DeleteMapping("/instances/{id}")
-    public Map<String, Object> deleteInstance(@PathVariable("id") String id) {
+    public Map<String, Object> deleteInstance(String id) {
         Map<String, Object> result = instanceRegistry.remove(id);
         if (Boolean.FALSE.equals(result.get("ok"))) {
             throw new IllegalArgumentException(String.valueOf(result.get("message")));
@@ -255,9 +236,8 @@ public class ConsoleApiController {
         return result;
     }
 
-    @PutMapping("/instances/{id}")
-    public GatewayInstance updateInstance(@PathVariable("id") String id,
-                                          @RequestBody UpdateInstanceBody body) {
+    public GatewayInstance updateInstance(String id,
+                                          UpdateInstanceBody body) {
         if (body == null) {
             throw new IllegalArgumentException("request body is required");
         }
@@ -279,10 +259,8 @@ public class ConsoleApiController {
         return updated;
     }
 
-    @PostMapping("/instances/{id}/clone")
-    @ResponseStatus(HttpStatus.CREATED)
-    public GatewayInstance cloneInstance(@PathVariable("id") String id,
-                                         @RequestBody(required = false) CloneInstanceBody body) {
+    public GatewayInstance cloneInstance(String id,
+                                         CloneInstanceBody body) {
         CloneInstanceRequest request = body == null
                 ? new CloneInstanceRequest(null, null, null, true)
                 : new CloneInstanceRequest(body.id(), body.name(), body.listenPort(),
@@ -295,8 +273,7 @@ public class ConsoleApiController {
         return cloned;
     }
 
-    @PostMapping("/instances/import")
-    public Map<String, Object> importInstances(@RequestBody ImportInstancesBody body) {
+    public Map<String, Object> importInstances(ImportInstancesBody body) {
         if (body == null || body.instances() == null) {
             throw new IllegalArgumentException("instances array is required");
         }
@@ -313,8 +290,7 @@ public class ConsoleApiController {
         return result;
     }
 
-    @PostMapping("/instances/bulk")
-    public Map<String, Object> bulkInstances(@RequestBody BulkInstancesBody body) {
+    public Map<String, Object> bulkInstances(BulkInstancesBody body) {
         if (body == null) {
             throw new IllegalArgumentException("request body is required");
         }
@@ -326,9 +302,8 @@ public class ConsoleApiController {
         return result;
     }
 
-    @PostMapping("/instances/{id}/sql/execute")
-    public Map<String, Object> executeSql(@PathVariable("id") String id,
-                                          @RequestBody SqlExecuteBody body) {
+    public Map<String, Object> executeSql(String id,
+                                          SqlExecuteBody body) {
         if (sqlExecuteService == null) {
             throw new IllegalStateException("SQL execute service is not available");
         }
@@ -365,9 +340,8 @@ public class ConsoleApiController {
      * Best-effort cancel of an in-flight console SQL execute for this instance.
      * Body: {@code { "executionId": "..." }}.
      */
-    @PostMapping("/instances/{id}/sql/cancel")
-    public Map<String, Object> cancelSql(@PathVariable("id") String id,
-                                         @RequestBody(required = false) SqlCancelBody body) {
+    public Map<String, Object> cancelSql(String id,
+                                         SqlCancelBody body) {
         if (sqlExecuteService == null) {
             throw new IllegalStateException("SQL execute service is not available");
         }
@@ -383,8 +357,7 @@ public class ConsoleApiController {
     /**
      * Best-effort cancel by executionId (protocol-agnostic).
      */
-    @PostMapping("/sql/executions/{executionId}/cancel")
-    public Map<String, Object> cancelSqlExecution(@PathVariable("executionId") String executionId) {
+    public Map<String, Object> cancelSqlExecution(String executionId) {
         if (sqlExecuteService == null) {
             throw new IllegalStateException("SQL execute service is not available");
         }
@@ -397,7 +370,6 @@ public class ConsoleApiController {
         return result;
     }
 
-    @GetMapping("/health")
     public Map<String, Object> health() {
         List<GatewayInstance> instances = instanceRegistry.listInstances();
         long running = instances.stream().filter(i -> i.status() == GatewayInstance.InstanceStatus.RUNNING).count();
@@ -413,7 +385,6 @@ public class ConsoleApiController {
         return body;
     }
 
-    @GetMapping("/config/summary")
     public Map<String, Object> configSummary() {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("process", Map.of(
@@ -469,7 +440,6 @@ public class ConsoleApiController {
         return body;
     }
 
-    @GetMapping("/overview")
     public Map<String, Object> overview() {
         List<GatewayInstance> instances = instanceRegistry.listInstances();
         Map<String, Object> body = new LinkedHashMap<>();
@@ -501,8 +471,7 @@ public class ConsoleApiController {
 
     // ---- Instance masking rules (Phase A+) ----
 
-    @GetMapping("/instances/{id}/masking-rules")
-    public Map<String, Object> listMaskingRules(@PathVariable("id") String id) {
+    public Map<String, Object> listMaskingRules(String id) {
         List<MaskingRuleRecord> rules = instanceRegistry.listMaskingRules(id);
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("instanceId", id);
@@ -511,29 +480,25 @@ public class ConsoleApiController {
         return body;
     }
 
-    @PostMapping("/instances/{id}/masking-rules")
-    @ResponseStatus(HttpStatus.CREATED)
-    public Map<String, Object> createMaskingRule(@PathVariable("id") String id,
-                                                 @RequestBody MaskingRuleBody body) {
+    public Map<String, Object> createMaskingRule(String id,
+                                                 MaskingRuleBody body) {
         MaskingRuleRecord saved = instanceRegistry.createMaskingRule(id, fromBody(id, body, null));
         audit("masking-rule.create", id, ConsoleAuditService.detail(
                 "ruleId", saved.id(), "strategy", saved.strategy(), "name", saved.name()));
         return toMaskingRuleDto(saved);
     }
 
-    @PutMapping("/instances/{id}/masking-rules/{ruleId}")
-    public Map<String, Object> updateMaskingRule(@PathVariable("id") String id,
-                                                 @PathVariable("ruleId") String ruleId,
-                                                 @RequestBody MaskingRuleBody body) {
+    public Map<String, Object> updateMaskingRule(String id,
+                                                 String ruleId,
+                                                 MaskingRuleBody body) {
         MaskingRuleRecord saved = instanceRegistry.updateMaskingRule(id, ruleId, fromBody(id, body, ruleId));
         audit("masking-rule.update", id, ConsoleAuditService.detail(
                 "ruleId", saved.id(), "strategy", saved.strategy()));
         return toMaskingRuleDto(saved);
     }
 
-    @PutMapping("/instances/{id}/masking-rules")
-    public Map<String, Object> replaceMaskingRules(@PathVariable("id") String id,
-                                                   @RequestBody List<MaskingRuleBody> bodies) {
+    public Map<String, Object> replaceMaskingRules(String id,
+                                                   List<MaskingRuleBody> bodies) {
         if (bodies == null) {
             throw new IllegalArgumentException("request body must be a JSON array of rules");
         }
@@ -550,24 +515,21 @@ public class ConsoleApiController {
         return resp;
     }
 
-    @DeleteMapping("/instances/{id}/masking-rules/{ruleId}")
-    public Map<String, Object> deleteMaskingRule(@PathVariable("id") String id,
-                                                 @PathVariable("ruleId") String ruleId) {
+    public Map<String, Object> deleteMaskingRule(String id,
+                                                 String ruleId) {
         Map<String, Object> result = instanceRegistry.deleteMaskingRule(id, ruleId);
         audit("masking-rule.delete", id, ConsoleAuditService.detail("ruleId", ruleId));
         return result;
     }
 
-    @PostMapping("/instances/{id}/masking-rules/reload")
-    public Map<String, Object> reloadMasking(@PathVariable("id") String id) {
+    public Map<String, Object> reloadMasking(String id) {
         return instanceRegistry.reloadMasking(id);
     }
 
 
     // ---- Sessions / health / export / recent statements (industry-aligned control plane) ----
 
-    @GetMapping("/instances/{id}/sessions")
-    public Map<String, Object> listSessions(@PathVariable("id") String id) {
+    public Map<String, Object> listSessions(String id) {
         GatewayInstance instance = instanceRegistry.findById(id)
                 .orElseThrow(() -> new IllegalArgumentException("Unknown gateway instance id: " + id));
         List<Map<String, Object>> sessions = new ArrayList<>();
@@ -581,9 +543,8 @@ public class ConsoleApiController {
         return body;
     }
 
-    @DeleteMapping("/instances/{id}/sessions/{connectionId}")
-    public Map<String, Object> killSession(@PathVariable("id") String id,
-                                           @PathVariable("connectionId") String connectionId) {
+    public Map<String, Object> killSession(String id,
+                                           String connectionId) {
         instanceRegistry.findById(id)
                 .orElseThrow(() -> new IllegalArgumentException("Unknown gateway instance id: " + id));
         if (!instanceRegistry.killSession(id, connectionId)) {
@@ -599,20 +560,17 @@ public class ConsoleApiController {
         return body;
     }
 
-    @PostMapping("/instances/{id}/health-check")
-    public Map<String, Object> healthCheck(@PathVariable("id") String id) {
+    public Map<String, Object> healthCheck(String id) {
         if (healthService == null) {
             throw new IllegalStateException("Health check service is not available");
         }
         return healthService.check(id);
     }
 
-    @GetMapping("/instances/{id}/health-check")
-    public Map<String, Object> healthCheckGet(@PathVariable("id") String id) {
+    public Map<String, Object> healthCheckGet(String id) {
         return healthCheck(id);
     }
 
-    @GetMapping("/instances/export")
     public List<Map<String, Object>> exportInstances() {
         List<Map<String, Object>> out = new ArrayList<>();
         for (GatewayInstance i : instanceRegistry.listInstances()) {
@@ -621,7 +579,6 @@ public class ConsoleApiController {
         return out;
     }
 
-    @GetMapping("/config/export")
     public Map<String, Object> exportConfig() {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("exportedAt", java.time.Instant.now().toString());
@@ -651,9 +608,8 @@ public class ConsoleApiController {
         return body;
     }
 
-    @GetMapping("/instances/{id}/recent-statements")
-    public Map<String, Object> recentStatements(@PathVariable("id") String id,
-                                                @RequestParam(value = "limit", defaultValue = "50") int limit) {
+    public Map<String, Object> recentStatements(String id,
+                                                int limit) {
         instanceRegistry.findById(id)
                 .orElseThrow(() -> new IllegalArgumentException("Unknown gateway instance id: " + id));
         int lim = Math.max(1, Math.min(limit, 100));
@@ -674,18 +630,16 @@ public class ConsoleApiController {
 
     // ---- Schema column hints (Phase A+ leftover) ----
 
-    @GetMapping("/instances/{id}/schema/catalog")
-    public Map<String, Object> schemaCatalog(@PathVariable("id") String id) {
+    public Map<String, Object> schemaCatalog(String id) {
         if (schemaColumnsService == null) {
             throw new IllegalStateException("Schema columns service is not available");
         }
         return schemaColumnsService.listCatalog(id);
     }
 
-    @GetMapping("/instances/{id}/schema/columns")
-    public Map<String, Object> schemaColumns(@PathVariable("id") String id,
-                                             @RequestParam(value = "table", required = false) String table,
-                                             @RequestParam(value = "schema", required = false) String schema) {
+    public Map<String, Object> schemaColumns(String id,
+                                             String table,
+                                             String schema) {
         if (schemaColumnsService == null) {
             throw new IllegalStateException("Schema columns service is not available");
         }
@@ -694,10 +648,9 @@ public class ConsoleApiController {
 
     // ---- SQL IDE: history + snippets ----
 
-    @GetMapping("/sql/history")
     public Map<String, Object> sqlHistory(
-            @RequestParam(value = "instanceId", required = false) String instanceId,
-            @RequestParam(value = "limit", defaultValue = "50") int limit) {
+            String instanceId,
+            int limit) {
         if (sqlHistoryStore == null) {
             throw new IllegalStateException("SQL history store is not available");
         }
@@ -722,8 +675,7 @@ public class ConsoleApiController {
         return body;
     }
 
-    @DeleteMapping("/sql/history")
-    public Map<String, Object> clearSqlHistory(@RequestParam(value = "id", required = false) String id) {
+    public Map<String, Object> clearSqlHistory(String id) {
         if (sqlHistoryStore == null) {
             throw new IllegalStateException("SQL history store is not available");
         }
@@ -740,7 +692,6 @@ public class ConsoleApiController {
         return body;
     }
 
-    @GetMapping("/sql/snippets")
     public Map<String, Object> listSnippets() {
         if (sqlSnippetStore == null) {
             throw new IllegalStateException("SQL snippet store is not available");
@@ -755,9 +706,7 @@ public class ConsoleApiController {
         return body;
     }
 
-    @PostMapping("/sql/snippets")
-    @ResponseStatus(HttpStatus.CREATED)
-    public Map<String, Object> createSnippet(@RequestBody SqlSnippetBody body) {
+    public Map<String, Object> createSnippet(SqlSnippetBody body) {
         if (sqlSnippetStore == null) {
             throw new IllegalStateException("SQL snippet store is not available");
         }
@@ -769,8 +718,7 @@ public class ConsoleApiController {
         return snippetToMap(saved);
     }
 
-    @PutMapping("/sql/snippets/{id}")
-    public Map<String, Object> updateSnippet(@PathVariable("id") String id, @RequestBody SqlSnippetBody body) {
+    public Map<String, Object> updateSnippet(String id, SqlSnippetBody body) {
         if (sqlSnippetStore == null) {
             throw new IllegalStateException("SQL snippet store is not available");
         }
@@ -782,8 +730,7 @@ public class ConsoleApiController {
         return snippetToMap(saved);
     }
 
-    @DeleteMapping("/sql/snippets/{id}")
-    public Map<String, Object> deleteSnippet(@PathVariable("id") String id) {
+    public Map<String, Object> deleteSnippet(String id) {
         if (sqlSnippetStore == null) {
             throw new IllegalStateException("SQL snippet store is not available");
         }
@@ -800,20 +747,17 @@ public class ConsoleApiController {
 
     // ---- Security: masking key + audit ----
 
-    @GetMapping("/security/masking-key")
     public Map<String, Object> maskingKeyStatus() {
         return requireMaskingKeyService().status();
     }
 
-    @PutMapping("/security/masking-key")
-    public Map<String, Object> putMaskingKey(@RequestBody MaskingKeyBody body) {
+    public Map<String, Object> putMaskingKey(MaskingKeyBody body) {
         if (body == null) {
             throw new IllegalArgumentException("request body is required");
         }
         return requireMaskingKeyService().putKey(body.keyId(), body.keyBase64());
     }
 
-    @DeleteMapping("/security/masking-key")
     public Map<String, Object> deleteMaskingKey() {
         return requireMaskingKeyService().clearKey();
     }
@@ -822,7 +766,6 @@ public class ConsoleApiController {
      * Control-plane password envelope status (no key material).
      * Used by Ops / instance-create UI when require-secret-encryption is on.
      */
-    @GetMapping("/security/secret-encryption")
     public Map<String, Object> secretEncryptionStatus() {
         if (secretCipher != null) {
             return secretCipher.status();
@@ -841,9 +784,8 @@ public class ConsoleApiController {
         return body;
     }
 
-    @GetMapping("/audit")
-    public Map<String, Object> listAudit(@RequestParam(value = "limit", defaultValue = "50") int limit,
-                                          @RequestParam(value = "action", required = false) String action) {
+    public Map<String, Object> listAudit(int limit,
+                                          String action) {
         if (auditService == null) {
             Map<String, Object> empty = new LinkedHashMap<>();
             empty.put("entries", List.of());
@@ -869,7 +811,6 @@ public class ConsoleApiController {
         return body;
     }
 
-    @GetMapping("/audit/status")
     public Map<String, Object> auditStatus() {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("enabled", gatewayConfig.isAuditEnabled());
@@ -889,13 +830,12 @@ public class ConsoleApiController {
      *
      * <p>{@code source}=auto|ring|spool|jdbc；分页 {@code limit}+{@code before}（epoch ms，排他上界）。</p>
      */
-    @GetMapping("/audit/spool")
     public Map<String, Object> listAuditSpool(
-            @RequestParam(value = "limit", defaultValue = "50") int limit,
-            @RequestParam(value = "before", required = false) Long before,
-            @RequestParam(value = "source", required = false) String source,
-            @RequestParam(value = "protocol", required = false) String protocol,
-            @RequestParam(value = "operation", required = false) String operation) {
+            int limit,
+            Long before,
+            String source,
+            String protocol,
+            String operation) {
         TrafficAuditBrowseService svc = trafficAuditBrowseService;
         if (svc == null) {
             svc = new TrafficAuditBrowseService(gatewayConfig, recentTrafficRing);
@@ -904,20 +844,18 @@ public class ConsoleApiController {
     }
 
     /** Alias for {@link #listAuditSpool}. */
-    @GetMapping("/audit/records")
     public Map<String, Object> listAuditRecords(
-            @RequestParam(value = "limit", defaultValue = "50") int limit,
-            @RequestParam(value = "before", required = false) Long before,
-            @RequestParam(value = "source", required = false) String source,
-            @RequestParam(value = "protocol", required = false) String protocol,
-            @RequestParam(value = "operation", required = false) String operation) {
+            int limit,
+            Long before,
+            String source,
+            String protocol,
+            String operation) {
         return listAuditSpool(limit, before, source, protocol, operation);
     }
 
-    @GetMapping("/metrics/history")
     public Map<String, Object> metricsHistory(
-            @RequestParam(value = "instanceId", required = false) String instanceId,
-            @RequestParam(value = "limit", defaultValue = "120") int limit) {
+            String instanceId,
+            int limit) {
         Map<String, Object> body = new LinkedHashMap<>();
         if (metricsHistorySampler == null) {
             body.put("intervalSeconds", 5);
@@ -941,7 +879,6 @@ public class ConsoleApiController {
         return body;
     }
 
-    @GetMapping("/risk-policy")
     public Map<String, Object> getRiskPolicy() {
         if (riskPolicyService == null) {
             throw new IllegalStateException("Risk policy service is not available");
@@ -949,8 +886,7 @@ public class ConsoleApiController {
         return riskPolicyService.getView();
     }
 
-    @PutMapping("/risk-policy")
-    public Map<String, Object> putRiskPolicy(@RequestBody RiskPolicyBody body) {
+    public Map<String, Object> putRiskPolicy(RiskPolicyBody body) {
         if (riskPolicyService == null) {
             throw new IllegalStateException("Risk policy service is not available");
         }
@@ -1119,132 +1055,11 @@ public class ConsoleApiController {
         }
         return maskingKeyService;
     }
-
-    @ExceptionHandler(IllegalArgumentException.class)
-    @ResponseStatus(HttpStatus.BAD_REQUEST)
-    public Map<String, Object> badRequest(IllegalArgumentException ex) {
-        return errorBody(ex.getMessage());
-    }
-
-    @ExceptionHandler(IllegalStateException.class)
-    @ResponseStatus(HttpStatus.SERVICE_UNAVAILABLE)
-    public Map<String, Object> serviceUnavailable(IllegalStateException ex) {
-        return errorBody(ex.getMessage());
-    }
-
-    @ExceptionHandler(SchemaConnectException.class)
-    @ResponseStatus(HttpStatus.BAD_GATEWAY)
-    public Map<String, Object> badGateway(SchemaConnectException ex) {
-        return errorBody(ex.getMessage());
-    }
-
-    private static Map<String, Object> errorBody(String message) {
-        Map<String, Object> body = new LinkedHashMap<>();
-        body.put("ok", false);
-        body.put("message", message);
-        return body;
-    }
-
     private static boolean hasText(String value) {
         return value != null && !value.isBlank();
     }
 
     private static String blankToNull(String value) {
         return hasText(value) ? value : null;
-    }
-
-    public record CreateInstanceBody(
-            String id,
-            String name,
-            String dbType,
-            String listenHost,
-            Integer listenPort,
-            String targetHost,
-            Integer targetPort,
-            String targetDatabase,
-            String targetUsername,
-            String targetPassword,
-            Boolean enabled
-    ) {
-    }
-
-    public record MaskingRuleBody(
-            String id,
-            String name,
-            String strategy,
-            Integer priority,
-            String columnName,
-            String tableName,
-            String namePattern,
-            String fixedValue,
-            Integer keepPrefix,
-            Integer keepSuffix,
-            Integer hashHexLength,
-            Boolean enabled
-    ) {
-    }
-
-    public record MaskingKeyBody(String keyId, String keyBase64) {
-    }
-
-    public record RiskPolicyBody(
-            Boolean enabled,
-            List<String> deniedOperations,
-            List<String> deniedStatementKeywords
-    ) {
-    }
-
-    public record UpdateInstanceBody(
-            String name,
-            String listenHost,
-            Integer listenPort,
-            String targetHost,
-            Integer targetPort,
-            String targetDatabase,
-            String targetUsername,
-            String targetPassword,
-            Boolean enabled
-    ) {
-    }
-
-    public record CloneInstanceBody(
-            String id,
-            String name,
-            Integer listenPort,
-            Boolean copyMaskingRules
-    ) {
-    }
-
-    public record ImportInstancesBody(
-            List<Map<String, Object>> instances,
-            Boolean replace,
-            Boolean skipExisting
-    ) {
-    }
-
-    public record BulkInstancesBody(
-            String action,
-            List<String> ids
-    ) {
-    }
-
-    public record SqlExecuteBody(
-            String sql,
-            Integer maxRows,
-            Integer timeoutMs,
-            String executionId,
-            Boolean continueOnError
-    ) {
-    }
-
-    public record SqlCancelBody(
-            String executionId
-    ) {
-    }
-
-    public record SqlSnippetBody(
-            String name,
-            String sql
-    ) {
     }
 }

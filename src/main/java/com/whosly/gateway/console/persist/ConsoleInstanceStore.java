@@ -1,6 +1,8 @@
 package com.whosly.gateway.console.persist;
 
 import com.whosly.gateway.console.security.ConsoleSecretCipher;
+import com.whosly.gateway.runtime.spi.PersistedInstance;
+import com.whosly.gateway.runtime.spi.PersistedInstanceStore;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -25,7 +27,7 @@ import java.util.Optional;
  * This DB is <em>not</em> the proxied business database.</p>
  */
 @Repository
-public class ConsoleInstanceStore {
+public class ConsoleInstanceStore implements PersistedInstanceStore {
 
     private static final Logger log = LoggerFactory.getLogger(ConsoleInstanceStore.class);
 
@@ -52,7 +54,7 @@ public class ConsoleInstanceStore {
 
     private final JdbcTemplate jdbc;
     private final ConsoleSecretCipher cipher;
-    private final RowMapper<ConsoleInstanceRecord> rowMapper;
+    private final RowMapper<PersistedInstance> rowMapper;
 
     public ConsoleInstanceStore(JdbcTemplate jdbc, ConsoleSecretCipher cipher) {
         this.jdbc = Objects.requireNonNull(jdbc, "jdbc");
@@ -68,7 +70,7 @@ public class ConsoleInstanceStore {
         this(jdbc, ConsoleSecretCipher.fromBase64MasterKey(null));
     }
 
-    public List<ConsoleInstanceRecord> findAll() {
+    public List<PersistedInstance> findAll() {
         return jdbc.query(
                 "SELECT id, name, db_type, listen_host, listen_port, enabled, "
                         + "target_host, target_port, target_database, target_username, target_password, "
@@ -76,8 +78,8 @@ public class ConsoleInstanceStore {
                 rowMapper);
     }
 
-    public Optional<ConsoleInstanceRecord> findById(String id) {
-        List<ConsoleInstanceRecord> rows = jdbc.query(
+    public Optional<PersistedInstance> findById(String id) {
+        List<PersistedInstance> rows = jdbc.query(
                 "SELECT id, name, db_type, listen_host, listen_port, enabled, "
                         + "target_host, target_port, target_database, target_username, target_password, "
                         + "created_at, updated_at FROM gateway_instance WHERE id = ?",
@@ -85,7 +87,7 @@ public class ConsoleInstanceStore {
         return rows.stream().findFirst();
     }
 
-    public void upsert(ConsoleInstanceRecord row) {
+    public void upsert(PersistedInstance row) {
         Objects.requireNonNull(row, "row");
         Instant now = Instant.now();
         Instant created = row.createdAt() != null ? row.createdAt() : now;
@@ -133,12 +135,12 @@ public class ConsoleInstanceStore {
         return rows.stream().findFirst();
     }
 
-    private ConsoleInstanceRecord mapRow(ResultSet rs, int rowNum) throws SQLException {
+    private PersistedInstance mapRow(ResultSet rs, int rowNum) throws SQLException {
         Timestamp created = rs.getTimestamp("created_at");
         Timestamp updated = rs.getTimestamp("updated_at");
         String storedPassword = rs.getString("target_password");
         String plaintextPassword = cipher.openFromStorage(storedPassword);
-        return new ConsoleInstanceRecord(
+        return new PersistedInstance(
                 rs.getString("id"),
                 rs.getString("name"),
                 rs.getString("db_type"),

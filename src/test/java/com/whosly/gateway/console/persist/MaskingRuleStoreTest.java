@@ -1,5 +1,7 @@
 package com.whosly.gateway.console.persist;
 
+import com.whosly.gateway.runtime.spi.PersistedInstance;
+
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -30,7 +32,7 @@ class MaskingRuleStoreTest {
     @Test
     void insertFindUpdateDeleteAndCascadeByInstance() {
         Instant now = Instant.parse("2026-01-01T00:00:00Z");
-        instances.upsert(new ConsoleInstanceRecord(
+        instances.upsert(new PersistedInstance(
                 "inst-a", "A", "mysql", "0.0.0.0", 33310, true,
                 "127.0.0.1", 3306, "db", "root", "secret",
                 now, now));

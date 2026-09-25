@@ -39,7 +39,7 @@ import org.springframework.context.annotation.Bean;
 import com.whosly.gateway.console.SupportedDatabaseCatalog;
 import com.whosly.gateway.console.persist.ConsoleInstanceStore;
 import com.whosly.gateway.console.masking.InstanceMaskingEngineFactory;
-import com.whosly.gateway.console.observe.RecentTrafficRing;
+import com.whosly.gateway.runtime.observe.RecentTrafficRing;
 import com.whosly.gateway.console.masking.InstanceMaskingRuleCompiler;
 import com.whosly.gateway.console.security.ConsoleMaskingKeyHolder;
 import com.whosly.gateway.console.security.ConsoleSecretCipher;

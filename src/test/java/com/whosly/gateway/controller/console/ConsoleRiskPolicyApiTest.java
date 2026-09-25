@@ -93,7 +93,7 @@ class ConsoleRiskPolicyApiTest {
         assertThat(got.get("source")).isEqualTo("yaml");
         assertThat(got.get("enabled")).isEqualTo(true);
 
-        Map<String, Object> put = console.putRiskPolicy(new ConsoleApiController.RiskPolicyBody(
+        Map<String, Object> put = console.putRiskPolicy(new ConsoleApiModels.RiskPolicyBody(
                 true, List.of(), List.of("drop table")));
         assertThat(put.get("ok")).isEqualTo(true);
         assertThat(put.get("source")).isEqualTo("console");

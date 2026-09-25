@@ -1,12 +1,12 @@
-package com.whosly.gateway.console.persist;
+package com.whosly.gateway.runtime.spi;
 
 import java.time.Instant;
 
 /**
- * Row in control-plane table {@code gateway_instance} (H2).
- * Password is stored for lab MVP only — never returned by REST; encrypt in a later phase.
+ * Neutral DTO for a console-managed gateway instance row.
+ * Neutral control-plane instance row; console H2 store implements {@link PersistedInstanceStore}.
  */
-public record ConsoleInstanceRecord(
+public record PersistedInstance(
         String id,
         String name,
         String dbType,

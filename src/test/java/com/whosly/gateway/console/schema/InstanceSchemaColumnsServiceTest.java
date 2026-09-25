@@ -1,7 +1,7 @@
 package com.whosly.gateway.console.schema;
 
 import com.whosly.gateway.config.GatewayConfig;
-import com.whosly.gateway.console.persist.ConsoleInstanceRecord;
+import com.whosly.gateway.runtime.spi.PersistedInstance;
 import com.whosly.gateway.console.persist.ConsoleInstanceStore;
 import com.whosly.gateway.runtime.GatewayListenerRuntime;
 import com.whosly.gateway.runtime.GatewayListenerRuntime.ManagedListener;
@@ -49,7 +49,7 @@ class InstanceSchemaColumnsServiceTest {
         control.setPassword("");
         ConsoleInstanceStore store = new ConsoleInstanceStore(new JdbcTemplate(control));
         Instant now = Instant.now();
-        store.upsert(new ConsoleInstanceRecord(
+        store.upsert(new PersistedInstance(
                 "h2-1", "hint", "h2", "0.0.0.0", 9, true,
                 "127.0.0.1", 0, "jdbc:h2:mem:schema_hint_target;MODE=PostgreSQL;DB_CLOSE_DELAY=-1",
                 "sa", "",
@@ -106,7 +106,7 @@ class InstanceSchemaColumnsServiceTest {
         control.setPassword("");
         ConsoleInstanceStore store = new ConsoleInstanceStore(new JdbcTemplate(control));
         Instant now = Instant.now();
-        store.upsert(new ConsoleInstanceRecord(
+        store.upsert(new PersistedInstance(
                 "h2-cat", "catalog", "h2", "0.0.0.0", 9, true,
                 "127.0.0.1", 0, "jdbc:h2:mem:schema_catalog_target;MODE=PostgreSQL;DB_CLOSE_DELAY=-1",
                 "sa", "",

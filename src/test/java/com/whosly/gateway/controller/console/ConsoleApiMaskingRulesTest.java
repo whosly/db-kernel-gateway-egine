@@ -12,7 +12,7 @@ import com.whosly.gateway.console.masking.InstanceMaskingEngineFactory;
 import com.whosly.gateway.console.masking.InstanceMaskingRuleCompiler;
 import com.whosly.gateway.console.persist.ConsoleInstanceStore;
 import com.whosly.gateway.console.persist.MaskingRuleStore;
-import com.whosly.gateway.controller.console.ConsoleApiController.MaskingRuleBody;
+import com.whosly.gateway.controller.console.ConsoleApiModels.MaskingRuleBody;
 import com.whosly.gateway.runtime.GatewayListenerRuntime;
 import com.whosly.gateway.runtime.GatewayListenerRuntime.CreateInstanceRequest;
 import org.junit.jupiter.api.BeforeEach;
@@ -91,7 +91,7 @@ class ConsoleApiMaskingRulesTest {
                 "127.0.0.1", 3306, "mysql", "root", "s3cret-should-not-leak", true));
         instanceId = "api-mask";
 
-        GatewayInstanceRegistry registry = new GatewayInstanceRegistry(runtime);
+        GatewayInstanceRegistry registry = new GatewayInstanceRegistry(runtime, factory);
         console = new ConsoleApiController(
                 catalog, registry, runtime.getLegacyAdapter(),
                 new GatewayRuntimeMetrics(), gatewayConfig);

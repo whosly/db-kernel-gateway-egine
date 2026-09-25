@@ -1,4 +1,6 @@
-package com.whosly.gateway.console.observe;
+package com.whosly.gateway.runtime.observe;
+
+import com.whosly.gateway.runtime.observe.RecentTrafficRing;
 
 import com.whosly.gateway.adapter.protocol.DatabaseTrafficEvent;
 import org.junit.jupiter.api.Test;

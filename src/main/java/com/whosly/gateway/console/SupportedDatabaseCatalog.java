@@ -1,6 +1,8 @@
 package com.whosly.gateway.console;
 
 import com.whosly.gateway.adapter.ProtocolAdapterRegistry;
+import com.whosly.gateway.runtime.spi.DatabaseTypeInfo;
+import com.whosly.gateway.runtime.spi.InstanceCatalog;
 import com.whosly.gateway.config.GatewayCatalogProperties;
 import org.springframework.stereotype.Service;
 
@@ -15,7 +17,7 @@ import java.util.Optional;
  * for which ids are actually creatable at runtime.
  */
 @Service
-public class SupportedDatabaseCatalog {
+public class SupportedDatabaseCatalog implements InstanceCatalog {
 
     private final GatewayCatalogProperties properties;
     private final ProtocolAdapterRegistry registry;
@@ -74,6 +76,11 @@ public class SupportedDatabaseCatalog {
                 mode,
                 mode.label()
         );
+    }
+
+    @Override
+    public Optional<DatabaseTypeInfo> lookup(String dbType) {
+        return findById(dbType).map(info -> new DatabaseTypeInfo(info.id(), info.creatable()));
     }
 
     /**

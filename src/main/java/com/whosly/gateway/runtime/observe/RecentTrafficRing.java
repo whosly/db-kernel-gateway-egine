@@ -1,7 +1,8 @@
-package com.whosly.gateway.console.observe;
+package com.whosly.gateway.runtime.observe;
 
 import com.whosly.gateway.adapter.protocol.DatabaseTrafficEvent;
 import com.whosly.gateway.adapter.protocol.DatabaseTrafficObserver;
+import com.whosly.gateway.runtime.spi.TrafficRingAttachment;
 import org.springframework.stereotype.Component;
 
 import java.time.Instant;
@@ -20,7 +21,7 @@ import java.util.concurrent.locks.ReentrantLock;
  * <em>after</em> statement masking so literals already redacted when possible.</p>
  */
 @Component
-public final class RecentTrafficRing implements DatabaseTrafficObserver {
+public final class RecentTrafficRing implements DatabaseTrafficObserver, TrafficRingAttachment {
 
     public static final int DEFAULT_CAPACITY = 100;
     public static final int DEFAULT_STATEMENT_MAX = 512;

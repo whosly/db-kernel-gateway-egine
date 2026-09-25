@@ -5,7 +5,7 @@ import com.whosly.gateway.adapter.protocol.DatabaseTrafficEvent;
 import com.whosly.gateway.adapter.protocol.MutableDatabaseRiskPolicy;
 import com.whosly.gateway.adapter.protocol.RiskDecision;
 import com.whosly.gateway.config.GatewayConfig;
-import com.whosly.gateway.console.persist.ConsoleInstanceRecord;
+import com.whosly.gateway.runtime.spi.PersistedInstance;
 import com.whosly.gateway.console.persist.ConsoleInstanceStore;
 import com.whosly.gateway.console.schema.InstanceSchemaColumnsService;
 import com.whosly.gateway.console.schema.InstanceSchemaColumnsService.SchemaConnectException;
@@ -574,9 +574,9 @@ public class InstanceSqlExecuteService {
         String password = null;
 
         if (consoleStore != null && "console".equals(listener.source())) {
-            Optional<ConsoleInstanceRecord> row = consoleStore.findById(listener.id());
+            Optional<PersistedInstance> row = consoleStore.findById(listener.id());
             if (row.isPresent()) {
-                ConsoleInstanceRecord r = row.get();
+                PersistedInstance r = row.get();
                 host = first(r.targetHost(), host);
                 port = r.targetPort() > 0 ? r.targetPort() : port;
                 database = first(r.targetDatabase(), database);

@@ -1,5 +1,7 @@
 package com.whosly.gateway.console.observe;
 
+import com.whosly.gateway.runtime.observe.RecentTrafficRing;
+
 import com.whosly.gateway.adapter.protocol.DatabaseTrafficEvent;
 import com.whosly.gateway.audit.AuditDurability;
 import com.whosly.gateway.audit.AuditSpool;
