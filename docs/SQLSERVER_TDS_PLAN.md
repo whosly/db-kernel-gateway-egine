@@ -2,7 +2,7 @@
 
 > **决策**：第三协议为 **SQL Server / TDS**（非 Oracle）。  
 > **分支**：`future/database-wire-protocol-foundation`  
-> **状态**：P0 脚手架已落地（透明双工中继 + 注册表 + framing 单测）；见 [STATUS_AND_GAPS.md](STATUS_AND_GAPS.md) P2-7。
+> **状态**：P0 透明双工中继已落地；P1-lite Login7/SQL_BATCH **明文观测**已挂入 `DuplexRelay` 管线。**仍非** MySQL/PG 对等（无脱敏/cancel/深 token/协议 reset/Login7 路由）。见 [STATUS_AND_GAPS.md](STATUS_AND_GAPS.md) P2-7。
 
 ## 1. 目标
 
@@ -46,11 +46,12 @@ ASCII：
 - [x] `application-sqlserver-template.yml`（proxy-port **31433** → target **1433**，密码占位 `change-me`）
 - [x] 单测：registry、framing、adapter start/stop、透明中继
 
-**说明**：TDS 虽为 client-first（PreLogin），但 PreLogin 不含 user/database；P0 `acquire` 使用空 `RoutingContext`（与 MySQL 首连类似）。Login7 观测留给 P1。
+**说明**：TDS 虽为 client-first（PreLogin），但 PreLogin 不含 user/database；P0 `acquire` 使用空 `RoutingContext`（与 MySQL 首连类似）。Login7 **观测**已在双工路径落地（P1-lite）；仍不驱动路由。
 
 ### P1 — 基础观测与冒烟
 
-- [ ] 可解析时观测 Login7 用户 / 初始库（写入 `SqlServerSession` / 事件）
+- [x] 可解析时观测 Login7 用户 / 初始库（写入 `SqlServerSession` / `client.*` 属性 / `LOGIN7` 事件；**明文**路径；不驱动路由）
+- [x] 可解析时观测 SQL_BATCH 文本为 `SQL_BATCH` 流量事件（P1-lite；无 RPC/Attention）
 - [ ] 后端错误透传（默认已是 transparent；网关侧拒绝时可补最小 TDS ERROR token）
 - [ ] 本机 Docker 集成冒烟（可选；无 Docker 时 skip）
 
@@ -127,5 +128,6 @@ JDBC 示例 URL：`jdbc:sqlserver://localhost:31433;databaseName=master;encrypt=
 | `SqlServerProtocolAdapter` | 监听 / 会话 / DuplexRelay |
 | `adapter/sqlserver/TdsFrameCodec` | 8 字节头编解码 |
 | `adapter/sqlserver/TdsMessageFraming` | EOM 逻辑消息边界 |
-| `adapter/sqlserver/SqlServerSession` | 会话状态（P1 填身份） |
+| `adapter/sqlserver/SqlServerSession` | 会话状态（P1-lite 填 Login7 身份） |
+| `adapter/sqlserver/SqlServerDatabaseEventExtractor` / `Login7Observation` | P1-lite 明文观测（Login7 + SQL_BATCH）；挂入 adapter 管线 |
 | `application-sqlserver-template.yml` | 配置模板 |

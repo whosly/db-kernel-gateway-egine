@@ -23,6 +23,7 @@
         <mockito.version>5.3.1</mockito.version>
         <mysql.version>8.0.33</mysql.version>
         <postgresql.version>42.6.2</postgresql.version>
+        <mssql.version>12.8.1.jre11</mssql.version>
         <nodejs.version>v20.18.1</nodejs.version>
         <npm.version>10.8.2</npm.version>
         <skip.frontend>false</skip.frontend>
@@ -100,6 +101,13 @@
             <groupId>org.postgresql</groupId>
             <artifactId>postgresql</artifactId>
             <version>${postgresql.version}</version>
+        </dependency>
+
+        <!-- SQL Server JDBC (MIT) — console SQL workspace via proxy listenPort -->
+        <dependency>
+            <groupId>com.microsoft.sqlserver</groupId>
+            <artifactId>mssql-jdbc</artifactId>
+            <version>${mssql.version}</version>
         </dependency>
 
         <!-- Lombok -->

@@ -1,11 +1,15 @@
 package com.whosly.gateway.adapter;
 
 import com.whosly.gateway.adapter.protocol.BackendProvider;
+import com.whosly.gateway.adapter.protocol.DatabaseTrafficInspector;
 import com.whosly.gateway.adapter.protocol.DuplexRelay;
+import com.whosly.gateway.adapter.protocol.MessagePipeline;
 import com.whosly.gateway.adapter.protocol.ProbedHandshake;
+import com.whosly.gateway.adapter.sqlserver.SqlServerDatabaseEventExtractor;
 import com.whosly.gateway.adapter.sqlserver.SqlServerSession;
 import com.whosly.gateway.parser.DruidSqlParser;
 import com.whosly.gateway.parser.SqlParser;
+import com.whosly.gateway.parser.StatementClassifier;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -14,19 +18,19 @@ import java.net.Socket;
 import java.util.UUID;
 
 /**
- * SQL Server (TDS) transparent protocol proxy adapter (P0 scaffold).
+ * SQL Server (TDS) protocol proxy adapter.
  *
- * <p><b>Handshake shape:</b> TDS is client-first (PreLogin → Login7). P0 does
- * <em>not</em> peek Login7 for routing identity — {@link BackendProvider#acquire}
- * uses an empty {@link com.whosly.gateway.adapter.protocol.RoutingContext} and the
- * duplex path forwards PreLogin/Login7/tabular bytes verbatim. P1 may add
- * observation of login user/db when parseable; deeper tokens / masking / cancel
- * are deferred (see {@code docs/SQLSERVER_TDS_PLAN.md}).</p>
+ * <p><b>Maturity (honest):</b> P0 transparent {@link DuplexRelay} plus P1-lite
+ * cleartext observation of Login7 identity and SQL_BATCH text when the stream is
+ * not encrypted. This is <em>not</em> MySQL/PostgreSQL parity — no result-set
+ * masking, no Attention/cancel, no deep token decode, no protocol session reset,
+ * no Login7-driven routing. See {@code docs/SQLSERVER_TDS_PLAN.md}.</p>
  *
- * <p>Reuse of pool / TLS terminate / routing / {@code BackendSessionReset} SPI
- * comes from {@link AbstractProtocolAdapter}; reset defaults to
- * {@link com.whosly.gateway.adapter.protocol.BackendSessionReset#none()} until a
- * SQL Server wire reset is implemented.</p>
+ * <p><b>Handshake:</b> TDS is client-first (PreLogin → Login7).
+ * {@link BackendProvider#acquire} still uses an empty
+ * {@link com.whosly.gateway.adapter.protocol.RoutingContext}; Login7 is observed
+ * on the duplex path after acquire (session labels / traffic events only; bytes
+ * forwarded unchanged).</p>
  */
 public class SqlServerProtocolAdapter extends AbstractProtocolAdapter {
 
@@ -46,8 +50,8 @@ public class SqlServerProtocolAdapter extends AbstractProtocolAdapter {
     }
 
     /**
-     * Client-first, but PreLogin carries no user/database. Empty probe until
-     * Login7 observation (P1) can fill {@code RoutingContext} safely.
+     * Client-first, but PreLogin carries no user/database. Empty probe — Login7
+     * observation runs after acquire and does not select the backend in this slice.
      */
     @Override
     protected ProbedHandshake probeClientForRouting(Socket clientSocket) {
@@ -77,9 +81,21 @@ public class SqlServerProtocolAdapter extends AbstractProtocolAdapter {
         try {
             log.info("SQL Server proxy session {} connected {} to target {}:{} (routing={})",
                     sessionId, clientSocket.getRemoteSocketAddress(), targetHost, targetPort, probed.context());
-            // P0: transparent duplex byte relay. Framing helpers exist for tests /
-            // future observation; no interceptor pipeline yet (errors passthrough).
-            new DuplexRelay(sessionId)
+            SqlServerDatabaseEventExtractor extractor =
+                    new SqlServerDatabaseEventExtractor(PROTOCOL_NAME, sessionId, session);
+            DatabaseTrafficInspector trafficInspector = new DatabaseTrafficInspector(
+                    extractor::inspect,
+                    databaseTrafficObserver,
+                    databaseRiskPolicy,
+                    session,
+                    new StatementClassifier(sqlParser),
+                    extractor::isOpaqueTunnel,
+                    isRequireCleartextInspection(),
+                    getRuntimeMetrics());
+            // No TDS result-set masking yet (deferred). Observation + risk only.
+            MessagePipeline pipeline = MessagePipeline.of(trafficInspector);
+            // No TDS-native error responder yet — policy deny closes the socket.
+            new DuplexRelay(sessionId, pipeline, null, rewriteLimits)
                     .relay(clientSocket, targetSocket, probed.replayToBackend());
         } catch (IOException e) {
             log.warn("SQL Server proxy session {} closed: {}", sessionId, e.getMessage());
@@ -95,7 +111,7 @@ public class SqlServerProtocolAdapter extends AbstractProtocolAdapter {
     @Override
     protected void rejectClientConnection(Socket clientSocket) {
         log.warn("Rejecting SQL Server client connection from {}", clientSocket.getRemoteSocketAddress());
-        // P0: no forged TDS ERROR token yet — close quietly (fail-closed for limit).
+        // No forged TDS ERROR token yet — close quietly (fail-closed for limit).
         closeQuietly(clientSocket);
     }
 

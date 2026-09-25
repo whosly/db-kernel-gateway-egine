@@ -96,7 +96,7 @@ public class InstanceSqlExecuteService {
         // SQL Server: only if driver present
         if (isSqlServer(dbType) && !isDriverPresent("com.microsoft.sqlserver.jdbc.SQLServerDriver")) {
             throw new IllegalArgumentException(
-                    "当前 classpath 无 SQL Server JDBC 驱动，无法在管控台执行 SQL（可用：mysql / postgresql）");
+                    "当前 classpath 无 SQL Server JDBC 驱动（mssql-jdbc），无法在管控台经代理执行 SQL；请确认依赖已打包。线协议类型可用：mysql / postgresql / sqlserver");
         }
 
         boolean viaProxy = usesWireProxy(dbType);
@@ -313,7 +313,7 @@ public class InstanceSqlExecuteService {
                 // ok (sqlserver gated by driver check above)
             }
             default -> throw new IllegalArgumentException(
-                    "暂不支持对该 dbType 执行管控台 SQL：" + dbType + "（可用：mysql / postgresql）");
+                    "暂不支持对该 dbType 执行管控台 SQL：" + dbType + "（可用：mysql / postgresql / sqlserver）");
         }
     }
 

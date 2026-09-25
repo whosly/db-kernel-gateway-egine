@@ -22,7 +22,7 @@
 | 主题 | 状态 | 摘要 |
 |---|---|---|
 | MySQL / PG 透明转发 | **done** | 阻塞 `ServerSocket` + 双工 `DuplexRelay` 逐字节转发 |
-| SQL Server（TDS）透明转发 | **partial（P0）** | `SqlServerProtocolAdapter` + framing；无观测/脱敏；计划 [`SQLSERVER_TDS_PLAN.md`](SQLSERVER_TDS_PLAN.md) |
+| SQL Server（TDS）透明转发 | **partial（P0 + P1-lite 观测）** | `SqlServerProtocolAdapter` + framing + **明文** Login7/SQL_BATCH 观测；**无**脱敏/cancel/深 token/协议 reset；计划 [`SQLSERVER_TDS_PLAN.md`](SQLSERVER_TDS_PLAN.md) |
 | 明文观测 / 状态机 | **partial** | 命令/消息抽取与会话状态齐全；TLS/压缩后 opaque |
 | 结果集脱敏 | **partial** | MySQL 文本+二进制、PG 已接线；类型边界见 README；无规则时透明 |
 | 审计 spool / JDBC ship | **partial（improved）** | 实现齐全；专用单测（P0-3）；**管控台可只读浏览** spool/环/可选 JDBC（`GET /console/api/audit/spool`）；默认关闭 |
@@ -99,7 +99,7 @@ Spring 实际读取的键（`@Value`）与默认 `application.yml`、模板一�
 | P2-4 | Metrics 出口 | **partial（improved）** | 每 listener 独立 metrics；overview 求和 + `legacyMetrics`；**E lite**：`MetricsHistorySampler` + `GET …/metrics/history` + Overview SVG 火花图（内存环） | 外部 Prometheus/Grafana 非必需 | 可选后续接 Micrometer；告警阈值见 `docs/OPS.md` |
 | P2-5 | 审计测试与运维手册 | **partial（improved）** | P0-3 单测已有；**`docs/OPS.md`** 开启清单 / 告警清单；管控台 **spool 内容浏览**（§18）；README 运维段索引 | JDBC 审计真库验收仍缺 |
 | P2-6 | 集成测试在 CI 可复现 | **partial（improved）** | 跳过策略写入 `integration-test.properties` + OPS；`-Pintegration-test` 无 props → `assumeTrue` skip；`-Pintegration-testcontainers` **stub only** | 真 Testcontainers 接线另开；默认 `mvn test` 仍不需 Docker |
-| P2-7 | 多库扩展点 / Oracle·SQL Server | **in-progress / partial（SQL Server P0）** | 第三库定为 **SQL Server TDS**（非 Oracle）。`SqlServerProtocolAdapter` + `sqlserver`/`mssql` 注册 + TDS framing + 透明 `DuplexRelay`；模板 `application-sqlserver-template.yml`（31433→1433）；计划见 [`SQLSERVER_TDS_PLAN.md`](SQLSERVER_TDS_PLAN.md)。Oracle 仍 stub。P0 **无** Login7 观测/脱敏/协议 reset | P1 观测与 Docker 冒烟；P2 深消息/脱敏/cancel；Oracle 另开 |
+| P2-7 | 多库扩展点 / Oracle·SQL Server | **in-progress / partial（SQL Server P0 + P1-lite）** | 第三库定为 **SQL Server TDS**（非 Oracle）。`SqlServerProtocolAdapter` + `sqlserver`/`mssql` 注册 + TDS framing + 透明 `DuplexRelay` + **P1-lite 明文** Login7/SQL_BATCH 观测（会话标签/事件；不驱动路由）；模板 `application-sqlserver-template.yml`（31433→1433）；管控台 SQL 工作台在 classpath 含 `mssql-jdbc` 时可经 listenPort 执行。Oracle 仍 stub。**仍无** 脱敏/Attention cancel/深 token/协议 reset/Login7 路由 | P1 余量（ERROR token、Docker 冒烟）；P2 深消息/脱敏/cancel；Oracle 另开 |
 
 
 ### 4.1 TLS / 明文强制（产品策略，P1-1）
@@ -122,7 +122,7 @@ Spring 实际读取的键（`@Value`）与默认 `application.yml`、模板一�
 |---|---|---|---|
 | **PostgreSQL** | **有**（cleartext StartupMessage 的 `user` / `database`） | `PostgreSQLStartupRouting` peek 首包 → `acquire(context)` → `DuplexRelay` 前缀 replay 原字节 | 客户端先发；SSLRequest/CancelRequest 无身份 → empty + replay |
 | **MySQL** | **无**（恒 `RoutingContext.empty()`） | 先连 fallback/默认后端发 greeting，再中继；Handshake Response 仅观测（`MySqlHandshakeResponseRouting`） | server-first；伪造 Initial Handshake 违反透明规则；延后重连会破坏基于 scramble 的认证 |
-| **SQL Server（TDS）** | P0 透明中继；身份 **无**（空 `RoutingContext`） | `SqlServerProtocolAdapter` 先 `acquire(empty)` 再双工；PreLogin 无 user/db；Login7 观测属 P1 | 见 [`SQLSERVER_TDS_PLAN.md`](SQLSERVER_TDS_PLAN.md) |
+| **SQL Server（TDS）** | P0 透明中继；路由身份仍 **空** `RoutingContext`；P1-lite 可在双工路径观测 Login7 用户/库（标签/事件） | `SqlServerProtocolAdapter` 先 `acquire(empty)` 再双工；PreLogin 无 user/db；Login7 **不**驱动选路 | 见 [`SQLSERVER_TDS_PLAN.md`](SQLSERVER_TDS_PLAN.md) |
 | **Oracle** | 未实现 wire | stub；应实现同一 `RoutingHandshakeProbe` | 扩展点已预留 |
 
 **配置含义**：`gateway.routing.rules` 的 `match-database` / `match-username` 对 **PostgreSQL cleartext startup** 在首连时生效；对 **MySQL** 首连仍走 fallback（规则不参与初始选路）。SSL/加密协商后的 PG opaque 路径同样看不到 StartupMessage 参数，走 fallback。
@@ -132,7 +132,7 @@ Spring 实际读取的键（`@Value`）与默认 `application.yml`、模板一�
 | 项 | 现状 |
 |---|---|
 | 配置 | `gateway.instances[]` 非空 → 每条 enabled+creatable 建独立 `ProtocolAdapter`；空 → 合成 `id=default` |
-| 可创建类型 | MySQL / PostgreSQL / SQL Server（P0）；Oracle → `UNSUPPORTED`，不建 adapter |
+| 可创建类型 | MySQL / PostgreSQL / SQL Server（P0 + P1-lite 观测）；Oracle → `UNSUPPORTED`，不建 adapter |
 | 端口冲突 | 同 listenPort 的两条 enabled 实例 → 启动期 `IllegalStateException` fail-fast |
 | legacy `/gateway/*` | 映射 runtime legacy adapter（proxy-* 匹配 → `default` → 第一个 bound） |
 | 指标 | 实例 API = 该 listener 计数；`/gateway/metrics` = legacy 计数（**不是**全实例求和） |

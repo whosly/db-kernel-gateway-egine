@@ -1,6 +1,6 @@
 # 数据库内核网关引擎
 
-基于 **Java 17** 的透明数据库协议网关：客户端连网关端口，网关把 **MySQL / PostgreSQL** wire 流量转发到真实目标库，并在**明文阶段**提供 SQL 观测、可选审计留痕与结果集脱敏等扩展点。第三协议 **SQL Server（TDS）** 处于 **P0 脚手架 / 透明中继**（见 [`docs/SQLSERVER_TDS_PLAN.md`](docs/SQLSERVER_TDS_PLAN.md)），**不是**完整观测/脱敏实现。
+基于 **Java 17** 的透明数据库协议网关：客户端连网关端口，网关把 **MySQL / PostgreSQL** wire 流量转发到真实目标库，并在**明文阶段**提供 SQL 观测、可选审计留痕与结果集脱敏等扩展点。第三协议 **SQL Server（TDS）** 为 **P0 透明中继 + P1-lite 明文观测**（Login7/SQL_BATCH；见 [`docs/SQLSERVER_TDS_PLAN.md`](docs/SQLSERVER_TDS_PLAN.md)），**不是**与 MySQL/PostgreSQL 对等的完整观测/脱敏/cancel 实现。
 
 > 网关不伪造握手能力、不校验也不保存客户端明文密码；认证与结果由目标库完成。  
 > 能力边界以本 README「功能清单」与 [`docs/STATUS_AND_GAPS.md`](docs/STATUS_AND_GAPS.md) 为准——规划中的能力不会写成「已实现」。
@@ -70,7 +70,7 @@
 | 连接池化 | **已接线·默认关** | `gateway.pool.enabled`；`reset-mode=none\|protocol`；protocol=MySQL `COM_RESET_CONNECTION` / PG `DISCARD ALL` |
 | Actuator / HTTP 指标出口 | **已接线·内存计数** | `/gateway/metrics` + `/actuator/gateway`；无远程 Micrometer |
 | 非交互启动 | **已实现** | `Application` 自动 start；`gateway.cli.interactive` 默认 false |
-| SQL Server（TDS）透明中继 | **部分（P0 脚手架）** | `SqlServerProtocolAdapter` 注册 `sqlserver`/`mssql`；双工字节转发 + TDS framing 单测；**无** Login7 观测 / 脱敏 / 协议 reset / 真库集成证明。计划：[`docs/SQLSERVER_TDS_PLAN.md`](docs/SQLSERVER_TDS_PLAN.md) |
+| SQL Server（TDS）透明中继 | **部分（P0 + P1-lite）** | `SqlServerProtocolAdapter` 注册 `sqlserver`/`mssql`；双工字节转发 + TDS framing；**明文** Login7/SQL_BATCH 观测（非路由）。**无** 脱敏 / Attention cancel / 深 token / 协议 reset / 真库集成证明。计划：[`docs/SQLSERVER_TDS_PLAN.md`](docs/SQLSERVER_TDS_PLAN.md) |
 | Oracle | **未实现** | stub：`gateway.proxy-db-type=oracle` 启动失败并提示 |
 
 > 主流代理在数据平面上也不靠「跨线程共享可变协议状态」保证正确——本仓库同样让每条连接的协议状态在任一时刻只属于一个执行体。
@@ -93,7 +93,7 @@
 4. 设置 `gateway.proxy-db-type=mydb`。池/TLS/路由等治理由基类继承，无需改 `PooledBackendProvider` / `RoutingBackendProvider`。
 5. 身份感知路由：在 `acquire` 前填充 `RoutingContext`（database/username）；未填充时走默认 failover 列表。
 
-内置：`mysql`、`postgresql`（别名 `postgres`）、`sqlserver`（别名 `mssql`，**P0 透明中继**）。预留 stub：`oracle` — 选择后启动失败并提示未实现。SQL Server 阶段见 [`docs/SQLSERVER_TDS_PLAN.md`](docs/SQLSERVER_TDS_PLAN.md)。
+内置：`mysql`、`postgresql`（别名 `postgres`）、`sqlserver`（别名 `mssql`，**P0 中继 + P1-lite 观测**）。预留 stub：`oracle` — 选择后启动失败并提示未实现。SQL Server 阶段见 [`docs/SQLSERVER_TDS_PLAN.md`](docs/SQLSERVER_TDS_PLAN.md)。
 
 ### 启用协议 reset
 
@@ -232,9 +232,11 @@ psql client -> gateway:35433 -> target postgresql (:5432 等)
 ![PostgreSQL gateway flow](assets/postgresql-gateway-flow.gif)
 
 
-## 快速开始 · SQL Server（P0）
+## 快速开始 · SQL Server（P0 + P1-lite 观测）
 
-> **诚实边界**：P0 提供可启动的透明 TDS 双工中继与 framing 单测，**不是**完整协议观测/脱敏产品。阶段与非目标见 [`docs/SQLSERVER_TDS_PLAN.md`](docs/SQLSERVER_TDS_PLAN.md)。
+> **诚实边界**：可启动的透明 TDS 双工中继 + **明文** Login7/SQL_BATCH 观测；**不是** MySQL/PG 对等产品（无结果集脱敏、无 Attention/cancel、无深 token、无协议 reset、Login7 不参与路由）。阶段见 [`docs/SQLSERVER_TDS_PLAN.md`](docs/SQLSERVER_TDS_PLAN.md)。
+>
+> **管控台 SQL 工作台**：classpath 含 `mssql-jdbc` 时，RUNNING 实例可经 **proxy listenPort** 执行 SQL（与 MySQL/PG 同路径）。
 
 ```bash
 cp src/main/resources/application-sqlserver-template.yml src/main/resources/application-dev.yml

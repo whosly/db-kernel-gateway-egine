@@ -64,7 +64,9 @@
 
 ## SQL Server 本地实验室（可选）
 
-> 计划与阶段见 [`SQLSERVER_TDS_PLAN.md`](SQLSERVER_TDS_PLAN.md)。P0 为透明 TDS 中继脚手架；**勿**把生产 SA 密码写入已提交文件。
+> 计划与阶段见 [`SQLSERVER_TDS_PLAN.md`](SQLSERVER_TDS_PLAN.md)。P0 透明中继 + P1-lite 明文 Login7/SQL_BATCH 观测；**勿**把生产 SA 密码写入已提交文件。
+>
+> 管控台 SQL 工作台：实例 RUNNING 后，JDBC 经网关 **31433**（或实例 listenPort）执行；依赖 `mssql-jdbc`（默认已打包）。
 
 | 项 | 值 |
 |---|---|

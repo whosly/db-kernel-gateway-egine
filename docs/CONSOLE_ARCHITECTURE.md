@@ -837,7 +837,7 @@ GET /console/api/audit/status
 | 风控 | 执行前管控台层 `MutableDatabaseRiskPolicy`（defense in depth）；代理数据面亦有风控 |
 | 超时 | JDBC `Statement.setQueryTimeout`；超时取消 |
 | 安全 | 不记/不回密码；单元格字符串截断（4KB）；审计 `sql.execute`（语句截断） |
-| 类型 | MySQL / MariaDB / PostgreSQL / SQL Server（有驱动）；h2 lab 直连；SQL Server 无驱动则 **400** |
+| 类型 | MySQL / MariaDB / PostgreSQL / SQL Server（`mssql-jdbc` 已入默认依赖；缺失时仍 **400**）；h2 lab 直连；经 **listenPort** 代理（须 RUNNING） |
 | 错误 | 无密码/未启动/不支持类型 → 400；连接失败 → 502；未知实例 → 400 |
 | UI | 顶栏「SQL 工作台」路由 `/sql`；标明经代理口 + 须启动；中文文案 |
 

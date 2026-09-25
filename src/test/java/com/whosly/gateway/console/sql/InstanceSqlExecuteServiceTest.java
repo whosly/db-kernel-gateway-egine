@@ -149,12 +149,20 @@ class InstanceSqlExecuteServiceTest {
         String pg = InstanceSqlExecuteService.buildProxyJdbcUrl(
                 "postgresql", "10.0.0.5", 35433, "testdb");
         assertThat(pg).isEqualTo("jdbc:postgresql://10.0.0.5:35433/testdb");
+
+        String mssql = InstanceSqlExecuteService.buildProxyJdbcUrl(
+                "sqlserver", "0.0.0.0", 31433, "master");
+        assertThat(mssql).contains("jdbc:sqlserver://127.0.0.1:31433");
+        assertThat(mssql).contains("databaseName=master");
+        assertThat(mssql).doesNotContain(":1433");
     }
 
     @Test
     void usesWireProxyForMysqlNotH2() {
         assertThat(InstanceSqlExecuteService.usesWireProxy("mysql")).isTrue();
         assertThat(InstanceSqlExecuteService.usesWireProxy("postgresql")).isTrue();
+        assertThat(InstanceSqlExecuteService.usesWireProxy("sqlserver")).isTrue();
+        assertThat(InstanceSqlExecuteService.usesWireProxy("mssql")).isTrue();
         assertThat(InstanceSqlExecuteService.usesWireProxy("h2")).isFalse();
     }
 }
