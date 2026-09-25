@@ -21,9 +21,26 @@ function authHeaders(): Record<string, string> {
   return { Authorization: `Bearer ${token}` }
 }
 
+function csrfHeaders(): Record<string, string> {
+  if (typeof document === 'undefined') return {}
+  const match = document.cookie.match(/(?:^|; )XSRF-TOKEN=([^;]*)/)
+  if (!match) return {}
+  try {
+    return { 'X-XSRF-TOKEN': decodeURIComponent(match[1]) }
+  } catch {
+    return { 'X-XSRF-TOKEN': match[1] }
+  }
+}
+
+let onUnauthorized: (() => void) | null = null
+export function setUnauthorizedHandler(handler: (() => void) | null) {
+  onUnauthorized = handler
+}
+
 export async function apiGet<T>(path: string): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
-    headers: { Accept: 'application/json', ...authHeaders() },
+    credentials: 'include',
+    headers: { Accept: 'application/json', ...authHeaders(), ...csrfHeaders() },
   })
   return parse<T>(res)
 }
@@ -31,10 +48,12 @@ export async function apiGet<T>(path: string): Promise<T> {
 export async function apiPost<T>(path: string, body?: unknown): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     method: 'POST',
+    credentials: 'include',
     headers: {
       Accept: 'application/json',
       'Content-Type': 'application/json',
       ...authHeaders(),
+      ...csrfHeaders(),
     },
     body: body === undefined ? undefined : JSON.stringify(body),
   })
@@ -44,10 +63,12 @@ export async function apiPost<T>(path: string, body?: unknown): Promise<T> {
 export async function apiPut<T>(path: string, body?: unknown): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     method: 'PUT',
+    credentials: 'include',
     headers: {
       Accept: 'application/json',
       'Content-Type': 'application/json',
       ...authHeaders(),
+      ...csrfHeaders(),
     },
     body: body === undefined ? undefined : JSON.stringify(body),
   })
@@ -57,7 +78,8 @@ export async function apiPut<T>(path: string, body?: unknown): Promise<T> {
 export async function apiDelete<T>(path: string): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     method: 'DELETE',
-    headers: { Accept: 'application/json', ...authHeaders() },
+    credentials: 'include',
+    headers: { Accept: 'application/json', ...authHeaders(), ...csrfHeaders() },
   })
   return parse<T>(res)
 }
@@ -73,6 +95,9 @@ async function parse<T>(res: Response): Promise<T> {
     }
   }
   if (!res.ok) {
+    if (res.status === 401 && onUnauthorized) {
+      onUnauthorized()
+    }
     const msg =
       data && typeof data === 'object' && data !== null && 'message' in data
         ? String((data as { message: unknown }).message)
@@ -81,3 +106,4 @@ async function parse<T>(res: Response): Promise<T> {
   }
   return data as T
 }
+

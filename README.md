@@ -377,7 +377,9 @@ mvn -Pintegration-test test
 | 会话 | `GET …/instances/{id}/sessions`；`DELETE …/sessions/{connectionId}`（关客户端腿） |
 | 健康探测 | `POST|GET …/instances/{id}/health-check`（TCP + 可选 JDBC，~3s） |
 | 导出 / 导入 | `GET …/instances/export`、`GET …/config/export`（无密码）；`POST …/instances/import` |
-| SQL 工作台 | `POST …/instances/{id}/sql/execute`（经实例代理 listenPort；须 RUNNING；脱敏可验证；h2 lab 直连；单语句 + 风控） |
+| SQL IDE | 对象树 `GET …/schema/catalog`；列 `…/schema/columns`；执行 `POST …/sql/execute`（经代理）；历史/片段 `/sql/history` `/sql/snippets`；多 Tab · CSV/JSON · EXPLAIN |
+| 鉴权 | `gateway.console.auth.mode=open\|token\|form\|oidc`（默认 auto：有 token→token，否则 open）；form 用户 `gateway.console.auth.users`；角色 CONSOLE_ADMIN/VIEWER |
+| HTTPS | Spring `server.ssl.*`；模板 `application-console-https-template.yml`（管控台 HTTP 服务 TLS，勿与 `gateway.tls.*` 协议代理 TLS 混淆） |
 | 最近语句 | `GET …/instances/{id}/recent-statements`（内存环，重启丢失） |
 | 脱敏规则 API | `GET/POST/PUT/DELETE /console/api/instances/{id}/masking-rules`（协议无关） |
 | 列提示 | `GET /console/api/instances/{id}/schema/columns?table=`（JDBC metadata；失败 502） |

@@ -88,4 +88,56 @@ class InstanceSchemaColumnsServiceTest {
         assertThatThrownBy(() -> InstanceSchemaColumnsService.buildJdbcUrl("oracle", "h", 1, "d"))
                 .isInstanceOf(InstanceSchemaColumnsService.SchemaConnectException.class);
     }
+
+    @Test
+    void listCatalogReturnsTablesForH2Target() {
+        DriverManagerDataSource ds = new DriverManagerDataSource();
+        ds.setDriverClassName("org.h2.Driver");
+        ds.setUrl("jdbc:h2:mem:schema_catalog_target;MODE=PostgreSQL;DB_CLOSE_DELAY=-1");
+        ds.setUsername("sa");
+        ds.setPassword("");
+        JdbcTemplate target = new JdbcTemplate(ds);
+        target.execute("CREATE TABLE catalog_users (id INT, email VARCHAR(100))");
+
+        DriverManagerDataSource control = new DriverManagerDataSource();
+        control.setDriverClassName("org.h2.Driver");
+        control.setUrl("jdbc:h2:mem:schema_catalog_control;MODE=PostgreSQL;DB_CLOSE_DELAY=-1");
+        control.setUsername("sa");
+        control.setPassword("");
+        ConsoleInstanceStore store = new ConsoleInstanceStore(new JdbcTemplate(control));
+        Instant now = Instant.now();
+        store.upsert(new ConsoleInstanceRecord(
+                "h2-cat", "catalog", "h2", "0.0.0.0", 9, true,
+                "127.0.0.1", 0, "jdbc:h2:mem:schema_catalog_target;MODE=PostgreSQL;DB_CLOSE_DELAY=-1",
+                "sa", "",
+                now, now));
+
+        ManagedListener listener = new ManagedListener(
+                "h2-cat", "catalog", "h2", "0.0.0.0", 9, true, true,
+                true, "127.0.0.1", 0,
+                "jdbc:h2:mem:schema_catalog_target;MODE=PostgreSQL;DB_CLOSE_DELAY=-1",
+                "sa", null, new GatewayRuntimeMetrics(), "console");
+
+        GatewayListenerRuntime runtime = mock(GatewayListenerRuntime.class);
+        when(runtime.find("h2-cat")).thenReturn(Optional.of(listener));
+
+        GatewayConfig cfg = new GatewayConfig();
+        ReflectionTestUtils.setField(cfg, "targetPassword", "");
+        ReflectionTestUtils.setField(cfg, "targetUsername", "sa");
+        ReflectionTestUtils.setField(cfg, "targetHost", "127.0.0.1");
+        ReflectionTestUtils.setField(cfg, "targetPort", 0);
+        ReflectionTestUtils.setField(cfg, "targetDatabase", "");
+
+        InstanceSchemaColumnsService service =
+                new InstanceSchemaColumnsService(runtime, Optional.of(store), cfg);
+
+        Map<String, Object> body = service.listCatalog("h2-cat");
+        assertThat(body.get("tableCount")).isNotNull();
+        @SuppressWarnings("unchecked")
+        var tables = (java.util.List<Map<String, Object>>) body.get("tables");
+        assertThat(tables).isNotEmpty();
+        assertThat(tables.stream().map(c -> String.valueOf(c.get("name")).toUpperCase()))
+                .anyMatch(n -> n.contains("CATALOG_USERS"));
+    }
+
 }

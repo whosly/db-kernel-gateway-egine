@@ -4,6 +4,7 @@ import InstancesView from '../views/InstancesView.vue'
 import CatalogView from '../views/CatalogView.vue'
 import OpsView from '../views/OpsView.vue'
 import SqlWorkspaceView from '../views/SqlWorkspaceView.vue'
+import LoginView from '../views/LoginView.vue'
 
 export const router = createRouter({
   history: createWebHistory('/console/'),
@@ -13,5 +14,6 @@ export const router = createRouter({
     { path: '/catalog', name: 'catalog', component: CatalogView, meta: { title: '类型目录' } },
     { path: '/ops', name: 'ops', component: OpsView, meta: { title: '运维 / 安全' } },
     { path: '/sql', name: 'sql', component: SqlWorkspaceView, meta: { title: 'SQL 工作台' } },
+    { path: '/login', name: 'login', component: LoginView, meta: { title: '登录', public: true } },
   ],
 })

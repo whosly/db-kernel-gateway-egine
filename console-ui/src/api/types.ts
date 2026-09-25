@@ -291,3 +291,47 @@ export interface RiskPolicy {
   ok?: boolean
   message?: string
 }
+
+export interface SchemaCatalogResponse {
+  instanceId: string
+  dbType: string
+  schemas: { name: string }[]
+  tables: { schema: string; name: string; type?: string }[]
+  schemaCount?: number
+  tableCount?: number
+  note?: string
+}
+
+export interface SqlHistoryEntry {
+  id: string
+  instanceId?: string | null
+  sql: string
+  ok: boolean
+  durationMs?: number | null
+  rowCount?: number | null
+  createdAt?: string | null
+  actor?: string | null
+}
+
+export interface SqlSnippet {
+  id: string
+  name: string
+  sql: string
+  createdAt?: string | null
+  updatedAt?: string | null
+}
+
+export interface AuthModeResponse {
+  mode: string
+  formLogin?: boolean
+  oidc?: boolean
+  token?: boolean
+  open?: boolean
+}
+
+export interface AuthMeResponse {
+  authenticated: boolean
+  username?: string | null
+  roles?: string[]
+  mode?: string
+}

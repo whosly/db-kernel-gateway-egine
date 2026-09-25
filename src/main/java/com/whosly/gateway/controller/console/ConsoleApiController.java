@@ -19,6 +19,10 @@ import com.whosly.gateway.console.persist.ConsoleAuditStore.ConsoleAuditRecord;
 import com.whosly.gateway.console.persist.MaskingRuleRecord;
 import com.whosly.gateway.console.schema.InstanceSchemaColumnsService;
 import com.whosly.gateway.console.schema.InstanceSchemaColumnsService.SchemaConnectException;
+import com.whosly.gateway.console.persist.ConsoleSqlHistoryStore;
+import com.whosly.gateway.console.persist.ConsoleSqlHistoryStore.SqlHistoryRecord;
+import com.whosly.gateway.console.persist.ConsoleSqlSnippetStore;
+import com.whosly.gateway.console.persist.ConsoleSqlSnippetStore.SqlSnippetRecord;
 import com.whosly.gateway.console.security.ConsoleAuditService;
 import com.whosly.gateway.console.security.ConsoleMaskingKeyService;
 import com.whosly.gateway.console.security.RiskPolicyService;
@@ -70,6 +74,8 @@ public class ConsoleApiController {
     private final RiskPolicyService riskPolicyService;
     private final MetricsHistorySampler metricsHistorySampler;
     private final InstanceSqlExecuteService sqlExecuteService;
+    private final ConsoleSqlHistoryStore sqlHistoryStore;
+    private final ConsoleSqlSnippetStore sqlSnippetStore;
 
     /** Test-friendly constructor (security extras optional). */
     public ConsoleApiController(SupportedDatabaseCatalog catalog,
@@ -78,7 +84,7 @@ public class ConsoleApiController {
                                 GatewayRuntimeMetrics runtimeMetrics,
                                 GatewayConfig gatewayConfig) {
         this(catalog, instanceRegistry, protocolAdapter, runtimeMetrics, gatewayConfig,
-                null, null, null, null, null, null, null, null, null);
+                null, null, null, null, null, null, null, null, null, null, null);
     }
 
     @Autowired
@@ -95,7 +101,9 @@ public class ConsoleApiController {
                                 @Autowired(required = false) GatewayListenerRuntime listenerRuntime,
                                 @Autowired(required = false) RiskPolicyService riskPolicyService,
                                 @Autowired(required = false) MetricsHistorySampler metricsHistorySampler,
-                                @Autowired(required = false) InstanceSqlExecuteService sqlExecuteService) {
+                                @Autowired(required = false) InstanceSqlExecuteService sqlExecuteService,
+                                @Autowired(required = false) ConsoleSqlHistoryStore sqlHistoryStore,
+                                @Autowired(required = false) ConsoleSqlSnippetStore sqlSnippetStore) {
         this.catalog = catalog;
         this.instanceRegistry = instanceRegistry;
         this.protocolAdapter = protocolAdapter;
@@ -110,6 +118,8 @@ public class ConsoleApiController {
         this.riskPolicyService = riskPolicyService;
         this.metricsHistorySampler = metricsHistorySampler;
         this.sqlExecuteService = sqlExecuteService;
+        this.sqlHistoryStore = sqlHistoryStore;
+        this.sqlSnippetStore = sqlSnippetStore;
     }
 
     @GetMapping("/supported-databases")
@@ -317,7 +327,14 @@ public class ConsoleApiController {
         if (body == null) {
             throw new IllegalArgumentException("request body is required");
         }
-        Map<String, Object> result = sqlExecuteService.execute(id, body.sql(), body.maxRows(), body.timeoutMs());
+        Map<String, Object> result;
+        try {
+            result = sqlExecuteService.execute(id, body.sql(), body.maxRows(), body.timeoutMs());
+            recordSqlHistory(id, body.sql(), true, result);
+        } catch (RuntimeException ex) {
+            recordSqlHistoryFailure(id, body.sql(), ex);
+            throw ex;
+        }
         String truncatedSql = InstanceSqlExecuteService.truncateForAudit(body.sql(), 200);
         if (gatewayConfig.isAuditMaskStatements() && truncatedSql.length() > 80) {
             truncatedSql = truncatedSql.substring(0, 80) + "…";
@@ -595,13 +612,128 @@ public class ConsoleApiController {
 
     // ---- Schema column hints (Phase A+ leftover) ----
 
-    @GetMapping("/instances/{id}/schema/columns")
-    public Map<String, Object> schemaColumns(@PathVariable("id") String id,
-                                             @RequestParam(value = "table", required = false) String table) {
+    @GetMapping("/instances/{id}/schema/catalog")
+    public Map<String, Object> schemaCatalog(@PathVariable("id") String id) {
         if (schemaColumnsService == null) {
             throw new IllegalStateException("Schema columns service is not available");
         }
-        return schemaColumnsService.listColumns(id, table);
+        return schemaColumnsService.listCatalog(id);
+    }
+
+    @GetMapping("/instances/{id}/schema/columns")
+    public Map<String, Object> schemaColumns(@PathVariable("id") String id,
+                                             @RequestParam(value = "table", required = false) String table,
+                                             @RequestParam(value = "schema", required = false) String schema) {
+        if (schemaColumnsService == null) {
+            throw new IllegalStateException("Schema columns service is not available");
+        }
+        return schemaColumnsService.listColumns(id, table, schema);
+    }
+
+    // ---- SQL IDE: history + snippets ----
+
+    @GetMapping("/sql/history")
+    public Map<String, Object> sqlHistory(
+            @RequestParam(value = "instanceId", required = false) String instanceId,
+            @RequestParam(value = "limit", defaultValue = "50") int limit) {
+        if (sqlHistoryStore == null) {
+            throw new IllegalStateException("SQL history store is not available");
+        }
+        List<SqlHistoryRecord> rows = sqlHistoryStore.list(instanceId, limit);
+        List<Map<String, Object>> entries = new ArrayList<>();
+        for (SqlHistoryRecord r : rows) {
+            Map<String, Object> e = new LinkedHashMap<>();
+            e.put("id", r.id());
+            e.put("instanceId", r.instanceId());
+            e.put("sql", r.sqlText());
+            e.put("ok", r.ok());
+            e.put("durationMs", r.durationMs());
+            e.put("rowCount", r.rowCount());
+            e.put("createdAt", r.createdAt() != null ? r.createdAt().toString() : null);
+            e.put("actor", r.actor());
+            entries.add(e);
+        }
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("entries", entries);
+        body.put("count", entries.size());
+        body.put("cap", ConsoleSqlHistoryStore.MAX_ROWS);
+        return body;
+    }
+
+    @DeleteMapping("/sql/history")
+    public Map<String, Object> clearSqlHistory(@RequestParam(value = "id", required = false) String id) {
+        if (sqlHistoryStore == null) {
+            throw new IllegalStateException("SQL history store is not available");
+        }
+        Map<String, Object> body = new LinkedHashMap<>();
+        if (hasText(id)) {
+            boolean ok = sqlHistoryStore.deleteById(id.trim());
+            body.put("ok", ok);
+            body.put("deleted", ok ? 1 : 0);
+        } else {
+            int n = sqlHistoryStore.deleteAll();
+            body.put("ok", true);
+            body.put("deleted", n);
+        }
+        return body;
+    }
+
+    @GetMapping("/sql/snippets")
+    public Map<String, Object> listSnippets() {
+        if (sqlSnippetStore == null) {
+            throw new IllegalStateException("SQL snippet store is not available");
+        }
+        List<Map<String, Object>> entries = new ArrayList<>();
+        for (SqlSnippetRecord r : sqlSnippetStore.listAll()) {
+            entries.add(snippetToMap(r));
+        }
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("snippets", entries);
+        body.put("count", entries.size());
+        return body;
+    }
+
+    @PostMapping("/sql/snippets")
+    @ResponseStatus(HttpStatus.CREATED)
+    public Map<String, Object> createSnippet(@RequestBody SqlSnippetBody body) {
+        if (sqlSnippetStore == null) {
+            throw new IllegalStateException("SQL snippet store is not available");
+        }
+        if (body == null) {
+            throw new IllegalArgumentException("request body is required");
+        }
+        SqlSnippetRecord saved = sqlSnippetStore.insert(body.name(), body.sql());
+        audit("sql.snippet.create", null, ConsoleAuditService.detail("id", saved.id(), "name", saved.name()));
+        return snippetToMap(saved);
+    }
+
+    @PutMapping("/sql/snippets/{id}")
+    public Map<String, Object> updateSnippet(@PathVariable("id") String id, @RequestBody SqlSnippetBody body) {
+        if (sqlSnippetStore == null) {
+            throw new IllegalStateException("SQL snippet store is not available");
+        }
+        if (body == null) {
+            throw new IllegalArgumentException("request body is required");
+        }
+        SqlSnippetRecord saved = sqlSnippetStore.update(id, body.name(), body.sql());
+        audit("sql.snippet.update", null, ConsoleAuditService.detail("id", saved.id(), "name", saved.name()));
+        return snippetToMap(saved);
+    }
+
+    @DeleteMapping("/sql/snippets/{id}")
+    public Map<String, Object> deleteSnippet(@PathVariable("id") String id) {
+        if (sqlSnippetStore == null) {
+            throw new IllegalStateException("SQL snippet store is not available");
+        }
+        boolean ok = sqlSnippetStore.delete(id);
+        if (!ok) {
+            throw new IllegalArgumentException("Unknown snippet id: " + id);
+        }
+        audit("sql.snippet.delete", null, ConsoleAuditService.detail("id", id));
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("ok", true);
+        body.put("id", id);
+        return body;
     }
 
     // ---- Security: masking key + audit ----
@@ -825,6 +957,41 @@ public class ConsoleApiController {
                 null);
     }
 
+
+    private void recordSqlHistory(String instanceId, String sql, boolean ok, Map<String, Object> result) {
+        if (sqlHistoryStore == null) {
+            return;
+        }
+        try {
+            Long duration = result.get("durationMs") instanceof Number n ? n.longValue() : null;
+            Integer rows = result.get("rowCount") instanceof Number n ? n.intValue() : null;
+            sqlHistoryStore.insert(instanceId, sql, ok, duration, rows, "console");
+        } catch (Exception e) {
+            // history must not break execute
+        }
+    }
+
+    private void recordSqlHistoryFailure(String instanceId, String sql, RuntimeException ex) {
+        if (sqlHistoryStore == null) {
+            return;
+        }
+        try {
+            sqlHistoryStore.insert(instanceId, sql, false, null, null, "console");
+        } catch (Exception ignored) {
+            // ignore
+        }
+    }
+
+    private static Map<String, Object> snippetToMap(SqlSnippetRecord r) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("id", r.id());
+        m.put("name", r.name());
+        m.put("sql", r.sqlText());
+        m.put("createdAt", r.createdAt() != null ? r.createdAt().toString() : null);
+        m.put("updatedAt", r.updatedAt() != null ? r.updatedAt().toString() : null);
+        return m;
+    }
+
     private void audit(String action, String instanceId, Map<String, ?> detail) {
         if (auditService != null) {
             auditService.record(action, instanceId, detail);
@@ -950,6 +1117,12 @@ public class ConsoleApiController {
             String sql,
             Integer maxRows,
             Integer timeoutMs
+    ) {
+    }
+
+    public record SqlSnippetBody(
+            String name,
+            String sql
     ) {
     }
 }

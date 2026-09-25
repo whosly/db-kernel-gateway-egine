@@ -46,6 +46,10 @@ public class InstanceSchemaColumnsService {
     }
 
     public Map<String, Object> listColumns(String instanceId, String tableFilter) {
+        return listColumns(instanceId, tableFilter, null);
+    }
+
+    public Map<String, Object> listColumns(String instanceId, String tableFilter, String schemaFilter) {
         ManagedListener listener = listenerRuntime.find(instanceId)
                 .orElseThrow(() -> new IllegalArgumentException("Unknown gateway instance id: " + instanceId));
 
@@ -55,27 +59,19 @@ public class InstanceSchemaColumnsService {
         }
         String jdbcUrl = buildJdbcUrl(listener.dbType(), creds.host(), creds.port(), creds.database());
         List<Map<String, Object>> columns = new ArrayList<>();
-        Properties props = new Properties();
-        if (hasText(creds.username())) {
-            props.setProperty("user", creds.username());
-        }
-        if (creds.password() != null) {
-            props.setProperty("password", creds.password());
-        }
-        // Short connect timeouts where drivers honor them
-        props.setProperty("connectTimeout", "5000");
-        props.setProperty("loginTimeout", "5");
+        Properties props = connectProps(creds);
 
         try (Connection conn = DriverManager.getConnection(jdbcUrl, props)) {
             DatabaseMetaData meta = conn.getMetaData();
             String catalog = conn.getCatalog();
-            String schema = null;
+            String schema = hasText(schemaFilter) ? schemaFilter.trim() : null;
             String tablePattern = hasText(tableFilter) ? tableFilter.trim() : "%";
             try (ResultSet rs = meta.getColumns(catalog, schema, tablePattern, "%")) {
                 while (rs.next() && columns.size() < MAX_COLUMNS) {
                     Map<String, Object> col = new LinkedHashMap<>();
                     col.put("name", rs.getString("COLUMN_NAME"));
                     col.put("table", rs.getString("TABLE_NAME"));
+                    col.put("schema", rs.getString("TABLE_SCHEM"));
                     col.put("nullable", rs.getInt("NULLABLE") != DatabaseMetaData.columnNoNulls);
                     col.put("typeName", rs.getString("TYPE_NAME"));
                     columns.add(col);
@@ -90,9 +86,103 @@ public class InstanceSchemaColumnsService {
         body.put("instanceId", listener.id());
         body.put("dbType", listener.dbType());
         body.put("table", hasText(tableFilter) ? tableFilter.trim() : null);
+        body.put("schema", hasText(schemaFilter) ? schemaFilter.trim() : null);
         body.put("columns", columns);
         body.put("count", columns.size());
         return body;
+    }
+
+    /**
+     * Protocol-agnostic schema/table catalog via JDBC metadata (direct target).
+     * Tree is metadata-only; SQL execute stays via proxy listenPort.
+     */
+    public Map<String, Object> listCatalog(String instanceId) {
+        ManagedListener listener = listenerRuntime.find(instanceId)
+                .orElseThrow(() -> new IllegalArgumentException("Unknown gateway instance id: " + instanceId));
+
+        TargetCreds creds = resolveCreds(listener);
+        if (!hasText(creds.password()) && !hasText(creds.username())) {
+            throw new SchemaConnectException("实例未配置目标凭据，无法拉取 schema catalog");
+        }
+        String jdbcUrl = buildJdbcUrl(listener.dbType(), creds.host(), creds.port(), creds.database());
+        Properties props = connectProps(creds);
+
+        List<Map<String, Object>> schemas = new ArrayList<>();
+        List<Map<String, Object>> tables = new ArrayList<>();
+        final int maxSchemas = 500;
+        final int maxTables = 5000;
+
+        try (Connection conn = DriverManager.getConnection(jdbcUrl, props)) {
+            DatabaseMetaData meta = conn.getMetaData();
+            String catalog = conn.getCatalog();
+            java.util.LinkedHashSet<String> schemaNames = new java.util.LinkedHashSet<>();
+
+            try (ResultSet rs = meta.getSchemas()) {
+                while (rs.next() && schemaNames.size() < maxSchemas) {
+                    String name = rs.getString("TABLE_SCHEM");
+                    if (hasText(name)) {
+                        schemaNames.add(name);
+                    }
+                }
+            } catch (SQLException e) {
+                log.debug("getSchemas unavailable for {}: {}", listener.dbType(), e.getMessage());
+            }
+
+            // MySQL often exposes catalogs as "schemas" for tooling; fall back to catalog name
+            if (schemaNames.isEmpty() && hasText(catalog)) {
+                schemaNames.add(catalog);
+            }
+            if (schemaNames.isEmpty()) {
+                schemaNames.add("");
+            }
+
+            for (String s : schemaNames) {
+                Map<String, Object> row = new LinkedHashMap<>();
+                row.put("name", s == null || s.isEmpty() ? "(default)" : s);
+                schemas.add(row);
+            }
+
+            String[] types = new String[]{"TABLE", "VIEW", "BASE TABLE"};
+            try (ResultSet rs = meta.getTables(catalog, null, "%", types)) {
+                while (rs.next() && tables.size() < maxTables) {
+                    Map<String, Object> t = new LinkedHashMap<>();
+                    String schem = rs.getString("TABLE_SCHEM");
+                    if (!hasText(schem)) {
+                        schem = rs.getString("TABLE_CAT");
+                    }
+                    t.put("schema", hasText(schem) ? schem : "");
+                    t.put("name", rs.getString("TABLE_NAME"));
+                    t.put("type", rs.getString("TABLE_TYPE"));
+                    tables.add(t);
+                }
+            }
+        } catch (SQLException e) {
+            log.warn("Schema catalog fetch failed for instance '{}': {}", instanceId, e.getMessage());
+            throw new SchemaConnectException("连接目标库拉取 schema catalog 失败：" + e.getMessage(), e);
+        }
+
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("instanceId", listener.id());
+        body.put("dbType", listener.dbType());
+        body.put("schemas", schemas);
+        body.put("tables", tables);
+        body.put("schemaCount", schemas.size());
+        body.put("tableCount", tables.size());
+        body.put("note", "直连目标 JDBC 元数据；SQL 执行仍经代理 listenPort");
+        return body;
+    }
+
+    private static Properties connectProps(TargetCreds creds) {
+        Properties props = new Properties();
+        if (hasText(creds.username())) {
+            props.setProperty("user", creds.username());
+        }
+        if (creds.password() != null) {
+            props.setProperty("password", creds.password());
+        }
+        props.setProperty("connectTimeout", "5000");
+        props.setProperty("loginTimeout", "5");
+        return props;
     }
 
     private TargetCreds resolveCreds(ManagedListener listener) {

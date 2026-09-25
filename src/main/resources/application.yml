@@ -34,6 +34,23 @@ gateway:
     api-token: ${GATEWAY_CONSOLE_API_TOKEN:}
     # Optional read-only token (GET/HEAD only). Writes still need api-token when set.
     read-token: ${GATEWAY_CONSOLE_READ_TOKEN:}
+
+    # Auth: open | token | form | oidc (blank = auto: token if api-token/read-token set, else open)
+    auth:
+      mode: ${GATEWAY_CONSOLE_AUTH_MODE:}
+      # form users (plaintext lab passwords; prefer env in real deploys)
+      # users:
+      #   - username: admin
+      #     password: admin
+      #     roles: CONSOLE_ADMIN
+      #   - username: viewer
+      #     password: viewer
+      #     roles: CONSOLE_VIEWER
+      oidc:
+        issuer-uri: ${GATEWAY_CONSOLE_OIDC_ISSUER:}
+        client-id: ${GATEWAY_CONSOLE_OIDC_CLIENT_ID:}
+        client-secret: ${GATEWAY_CONSOLE_OIDC_CLIENT_SECRET:}
+        scopes: openid,profile,email
     metrics-history:
       interval-seconds: ${GATEWAY_CONSOLE_METRICS_INTERVAL:5}
       capacity: ${GATEWAY_CONSOLE_METRICS_CAPACITY:120}

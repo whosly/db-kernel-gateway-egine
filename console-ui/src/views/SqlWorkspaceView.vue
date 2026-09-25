@@ -1,37 +1,215 @@
 <script setup lang="ts">
-import { computed, inject, onMounted, ref } from 'vue'
-import { executeSql, listInstances } from '../api/consoleApi'
-import type { GatewayInstance, SqlExecuteResult } from '../api/types'
+import { computed, inject, onMounted, ref, watch } from 'vue'
+import {
+  clearSqlHistory,
+  createSqlSnippet,
+  deleteSqlSnippet,
+  executeSql,
+  getSchemaCatalog,
+  getSchemaColumns,
+  listInstances,
+  listSqlHistory,
+  listSqlSnippets,
+} from '../api/consoleApi'
+import type {
+  GatewayInstance,
+  SchemaCatalogResponse,
+  SqlExecuteResult,
+  SqlHistoryEntry,
+  SqlSnippet,
+} from '../api/types'
 
 const toast = inject<(m: string) => void>('toast', () => {})
+
+interface EditorTab {
+  id: string
+  title: string
+  sql: string
+}
+
+const STORAGE_KEY = 'console.sql.tabs.v1'
+
 const instances = ref<GatewayInstance[]>([])
 const instanceId = ref('')
-const sql = ref('SELECT 1')
 const maxRows = ref(200)
 const running = ref(false)
 const error = ref<string | null>(null)
 const result = ref<SqlExecuteResult | null>(null)
 
+const tabs = ref<EditorTab[]>([
+  { id: 't1', title: '查询 1', sql: 'SELECT 1' },
+  { id: 't2', title: '查询 2', sql: '' },
+  { id: 't3', title: '查询 3', sql: '' },
+])
+const activeTabId = ref('t1')
+const activeTab = computed(() => tabs.value.find((t) => t.id === activeTabId.value) || tabs.value[0])
+
+const catalog = ref<SchemaCatalogResponse | null>(null)
+const catalogLoading = ref(false)
+const catalogError = ref<string | null>(null)
+const expandedSchemas = ref<Record<string, boolean>>({})
+const expandedTables = ref<
+  Record<string, { loading?: boolean; columns?: { name: string; typeName?: string }[] }>
+>({})
+
+const history = ref<SqlHistoryEntry[]>([])
+const snippets = ref<SqlSnippet[]>([])
+const snippetName = ref('')
+const sidePanel = ref<'tree' | 'history' | 'snippets'>('tree')
+
 const selected = computed(() => instances.value.find((i) => i.id === instanceId.value) || null)
+
+const tablesBySchema = computed(() => {
+  const map: Record<string, { schema: string; name: string; type?: string }[]> = {}
+  if (!catalog.value) return map
+  for (const t of catalog.value.tables || []) {
+    const s = t.schema || '(default)'
+    if (!map[s]) map[s] = []
+    map[s].push(t)
+  }
+  return map
+})
+
+function loadTabsFromStorage() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY)
+    if (!raw) return
+    const parsed = JSON.parse(raw) as { tabs?: EditorTab[]; activeTabId?: string }
+    if (parsed.tabs?.length) {
+      tabs.value = parsed.tabs.slice(0, 8)
+      activeTabId.value = parsed.activeTabId || tabs.value[0].id
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
+function persistTabs() {
+  try {
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify({ tabs: tabs.value, activeTabId: activeTabId.value }),
+    )
+  } catch {
+    /* ignore */
+  }
+}
+
+watch([tabs, activeTabId], persistTabs, { deep: true })
 
 async function loadInstances() {
   try {
     const body = await listInstances()
     instances.value = body.instances || []
-    if (!instanceId.value && instances.value.length) {
-      instanceId.value = instances.value[0].id
-    }
+    if (!instanceId.value && instances.value.length) instanceId.value = instances.value[0].id
   } catch (e) {
     toast(e instanceof Error ? e.message : String(e))
   }
 }
 
-async function run() {
+async function loadCatalog() {
+  if (!instanceId.value) return
+  catalogLoading.value = true
+  catalogError.value = null
+  try {
+    catalog.value = await getSchemaCatalog(instanceId.value)
+    expandedSchemas.value = {}
+    expandedTables.value = {}
+  } catch (e) {
+    catalogError.value = e instanceof Error ? e.message : String(e)
+    catalog.value = null
+  } finally {
+    catalogLoading.value = false
+  }
+}
+
+async function loadHistory() {
+  try {
+    const body = await listSqlHistory(instanceId.value || undefined, 50)
+    history.value = body.entries || []
+  } catch {
+    history.value = []
+  }
+}
+
+async function loadSnippets() {
+  try {
+    const body = await listSqlSnippets()
+    snippets.value = body.snippets || []
+  } catch {
+    snippets.value = []
+  }
+}
+
+watch(instanceId, () => {
+  loadCatalog()
+  loadHistory()
+})
+
+function quoteIdent(dbType: string | undefined, name: string): string {
+  const t = (dbType || '').toLowerCase()
+  if (t.includes('mysql') || t.includes('mariadb')) return `\`${name.replace(/`/g, '``')}\``
+  if (t.includes('sqlserver') || t.includes('mssql')) return `[${name.replace(/]/g, ']]')}]`
+  return `"${name.replace(/"/g, '""')}"`
+}
+
+function insertSql(fragment: string) {
+  const tab = activeTab.value
+  if (!tab) return
+  const cur = tab.sql || ''
+  tab.sql = cur && !cur.endsWith('\n') ? `${cur}\n${fragment}` : `${cur}${fragment}`
+}
+
+function onTableClick(schema: string, table: string) {
+  const db = selected.value?.dbType
+  const s = schema && schema !== '(default)' ? `${quoteIdent(db, schema)}.` : ''
+  insertSql(`SELECT * FROM ${s}${quoteIdent(db, table)} LIMIT 100;`)
+  toast(`已插入 SELECT · ${schema}.${table}`)
+}
+
+async function toggleTable(schema: string, table: string) {
+  const key = `${schema}.${table}`
+  if (expandedTables.value[key]?.columns) {
+    const copy = { ...expandedTables.value }
+    delete copy[key]
+    expandedTables.value = copy
+    return
+  }
+  expandedTables.value = { ...expandedTables.value, [key]: { loading: true } }
+  try {
+    const schemaParam = schema === '(default)' ? undefined : schema
+    const body = await getSchemaColumns(instanceId.value, table, schemaParam)
+    expandedTables.value = {
+      ...expandedTables.value,
+      [key]: {
+        columns: (body.columns || []).map((c) => ({ name: c.name, typeName: c.typeName })),
+      },
+    }
+  } catch (e) {
+    expandedTables.value = { ...expandedTables.value, [key]: { columns: [] } }
+    toast(e instanceof Error ? e.message : String(e))
+  }
+}
+
+function addTab() {
+  const id = `t${Date.now()}`
+  tabs.value.push({ id, title: `查询 ${tabs.value.length + 1}`, sql: '' })
+  activeTabId.value = id
+}
+
+function closeTab(id: string) {
+  if (tabs.value.length <= 1) return
+  tabs.value = tabs.value.filter((t) => t.id !== id)
+  if (activeTabId.value === id) activeTabId.value = tabs.value[0].id
+}
+
+async function run(sqlOverride?: string) {
   if (!instanceId.value) {
     toast('请先选择网关实例')
     return
   }
-  if (!sql.value.trim()) {
+  const sql = (sqlOverride ?? activeTab.value?.sql ?? '').trim()
+  if (!sql) {
     toast('请输入 SQL')
     return
   }
@@ -40,15 +218,31 @@ async function run() {
   result.value = null
   try {
     result.value = await executeSql(instanceId.value, {
-      sql: sql.value,
+      sql,
       maxRows: Number(maxRows.value) || 200,
     })
     toast(result.value.message || `完成 · ${result.value.durationMs}ms`)
+    loadHistory()
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e)
+    loadHistory()
   } finally {
     running.value = false
   }
+}
+
+function runExplain() {
+  const db = (selected.value?.dbType || '').toLowerCase()
+  const sql = (activeTab.value?.sql || '').trim().replace(/;$/, '')
+  if (!sql) {
+    toast('请输入 SQL')
+    return
+  }
+  if (db.includes('sqlserver') || db.includes('mssql')) {
+    toast('SQL Server 暂不支持一键 EXPLAIN 包装')
+    return
+  }
+  run(`EXPLAIN ${sql}`)
 }
 
 function onKey(e: KeyboardEvent) {
@@ -58,15 +252,98 @@ function onKey(e: KeyboardEvent) {
   }
 }
 
-onMounted(loadInstances)
+function exportCsv() {
+  if (!result.value?.columns?.length) {
+    toast('无结果可导出')
+    return
+  }
+  const cols = result.value.columns
+  const lines = [cols.map(csvEscape).join(',')]
+  for (const row of result.value.rows || []) {
+    lines.push(row.map((c) => csvEscape(c == null ? '' : String(c))).join(','))
+  }
+  downloadBlob(lines.join('\n'), `sql-result-${Date.now()}.csv`, 'text/csv;charset=utf-8')
+}
+
+function exportJson() {
+  if (!result.value) {
+    toast('无结果可导出')
+    return
+  }
+  downloadBlob(JSON.stringify(result.value, null, 2), `sql-result-${Date.now()}.json`, 'application/json')
+}
+
+function csvEscape(v: string) {
+  if (/[",\n]/.test(v)) return `"${v.replace(/"/g, '""')}"`
+  return v
+}
+
+function downloadBlob(text: string, filename: string, type: string) {
+  const blob = new Blob([text], { type })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = filename
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
+async function saveSnippet() {
+  const name = snippetName.value.trim() || activeTab.value?.title || '未命名'
+  const sql = activeTab.value?.sql || ''
+  if (!sql.trim()) {
+    toast('当前 Tab 无 SQL')
+    return
+  }
+  try {
+    await createSqlSnippet({ name, sql })
+    snippetName.value = ''
+    toast('片段已保存')
+    loadSnippets()
+  } catch (e) {
+    toast(e instanceof Error ? e.message : String(e))
+  }
+}
+
+function loadSnippet(s: SqlSnippet) {
+  if (activeTab.value) {
+    activeTab.value.sql = s.sql
+    activeTab.value.title = s.name
+  }
+  toast(`已加载片段：${s.name}`)
+}
+
+async function removeSnippet(id: string) {
+  try {
+    await deleteSqlSnippet(id)
+    loadSnippets()
+  } catch (e) {
+    toast(e instanceof Error ? e.message : String(e))
+  }
+}
+
+async function clearHistory() {
+  try {
+    await clearSqlHistory()
+    loadHistory()
+    toast('历史已清空')
+  } catch (e) {
+    toast(e instanceof Error ? e.message : String(e))
+  }
+}
+
+onMounted(async () => {
+  loadTabsFromStorage()
+  await loadInstances()
+  await Promise.all([loadCatalog(), loadHistory(), loadSnippets()])
+})
 </script>
 
 <template>
-  <div class="sql-ws">
+  <div class="sql-ide">
     <p class="lead">
-      SQL 工作台挂在<strong>网关实例</strong>上：服务端 JDBC 经该实例的<strong>代理监听口</strong>
-      （listenPort）执行，与业务客户端同路径——已配置的<strong>脱敏规则</strong>、流量观测与数据面风控会生效。
-      实例须先<strong>启动</strong>；列提示仍直连目标库。受管控台风控约束；仅单条语句。
+      SQL IDE 挂在<strong>网关实例</strong>上：执行经<strong>代理 listenPort</strong>（脱敏/观测/风控生效）；
+      左侧对象树为<strong>直连目标 JDBC 元数据</strong>。多 Tab · 历史 · 片段 · 导出 · EXPLAIN。
     </p>
 
     <div class="bar">
@@ -83,68 +360,180 @@ onMounted(loadInstances)
         maxRows
         <input v-model.number="maxRows" type="number" min="1" max="1000" />
       </label>
-      <button class="primary" :disabled="running || !instanceId" @click="run">
+      <button class="primary" :disabled="running || !instanceId" @click="run()">
         {{ running ? '执行中…' : '运行 (Ctrl/⌘+Enter)' }}
       </button>
+      <button type="button" :disabled="running || !instanceId" @click="runExplain">EXPLAIN</button>
+      <button type="button" :disabled="!result" @click="exportCsv">导出 CSV</button>
+      <button type="button" :disabled="!result" @click="exportJson">导出 JSON</button>
       <button type="button" @click="loadInstances">刷新实例</button>
     </div>
 
-    <div v-if="!instances.length" class="empty">暂无网关实例。请先在「网关实例」页创建或导入。</div>
-    <div v-else-if="!instanceId" class="empty">请选择一个网关实例以执行 SQL。</div>
+    <div v-if="selected" class="meta muted">
+      代理 {{ selected.listenHost }}:{{ selected.listenPort }}
+      · 状态 {{ selected.status }}
+      · 目标 {{ selected.targetHost }}:{{ selected.targetPort }}
+      · 库 {{ selected.targetDatabase || '—' }}
+      · 密码 {{ selected.passwordConfigured ? '已配置' : '未配置' }}
+    </div>
 
-    <template v-else>
-      <p v-if="selected" class="meta muted">
-        代理 {{ selected.listenHost }}:{{ selected.listenPort }}
-        · 状态 {{ selected.status }}
-        · 目标 {{ selected.targetHost }}:{{ selected.targetPort }}
-        · 库 {{ selected.targetDatabase || '—' }}
-        · 密码 {{ selected.passwordConfigured ? '已配置' : '未配置（需先编辑实例）' }}
-        · 来源 {{ selected.source === 'console' ? '管控台' : 'YAML' }}
-      </p>
-      <textarea
-        v-model="sql"
-        class="editor"
-        rows="10"
-        spellcheck="false"
-        placeholder="输入单条 SQL…"
-        @keydown="onKey"
-      />
-      <p v-if="error" class="err">{{ error }}</p>
-      <div v-if="result" class="result">
-        <div class="result-head">
-          <span>{{ result.rowCount }} 行</span>
-          <span>{{ result.durationMs }} ms</span>
-          <span v-if="result.truncated" class="warn">已截断</span>
-          <span v-if="result.updateCount != null">updateCount={{ result.updateCount }}</span>
-          <span v-if="result.viaProxy" class="ok-tag">经代理 {{ result.proxyHost }}:{{ result.proxyPort }}</span>
-          <span class="muted tiny">{{ result.note }}</span>
+    <div class="ide-grid">
+      <aside class="side">
+        <div class="side-tabs">
+          <button type="button" :class="{ on: sidePanel === 'tree' }" @click="sidePanel = 'tree'">对象树</button>
+          <button type="button" :class="{ on: sidePanel === 'history' }" @click="sidePanel = 'history'">历史</button>
+          <button type="button" :class="{ on: sidePanel === 'snippets' }" @click="sidePanel = 'snippets'">片段</button>
         </div>
-        <p v-for="(w, i) in result.warnings || []" :key="i" class="muted tiny">{{ w }}</p>
-        <div class="table-wrap">
-          <table v-if="result.columns.length">
-            <thead>
-              <tr>
-                <th v-for="c in result.columns" :key="c">{{ c }}</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="(row, ri) in result.rows" :key="ri">
-                <td v-for="(cell, ci) in row" :key="ci">
-                  <span v-if="cell === null" class="null">NULL</span>
-                  <span v-else>{{ cell }}</span>
-                </td>
-              </tr>
-            </tbody>
-          </table>
-          <p v-else class="muted">无结果集</p>
+
+        <div v-if="sidePanel === 'tree'" class="panel">
+          <div class="panel-head">
+            <span>Schema</span>
+            <button class="link" type="button" :disabled="!instanceId || catalogLoading" @click="loadCatalog">
+              {{ catalogLoading ? '加载中…' : '刷新' }}
+            </button>
+          </div>
+          <p v-if="catalogError" class="err tiny">{{ catalogError }}</p>
+          <p v-else-if="!catalog" class="muted tiny">选择实例后加载对象树</p>
+          <ul v-else class="tree">
+            <li v-for="(tables, schema) in tablesBySchema" :key="String(schema)">
+              <button
+                class="tree-node"
+                type="button"
+                @click="expandedSchemas[String(schema)] = !expandedSchemas[String(schema)]"
+              >
+                {{ expandedSchemas[String(schema)] ? '▼' : '▶' }} {{ schema }}
+                <span class="muted tiny">({{ tables.length }})</span>
+              </button>
+              <ul v-if="expandedSchemas[String(schema)]">
+                <li v-for="t in tables" :key="t.schema + '.' + t.name">
+                  <div class="tree-row">
+                    <button class="tree-node" type="button" @click="toggleTable(String(schema), t.name)">
+                      {{ expandedTables[`${schema}.${t.name}`]?.columns ? '▼' : '▶' }}
+                    </button>
+                    <button class="tree-link" type="button" @click="onTableClick(String(schema), t.name)">
+                      {{ t.name }}
+                    </button>
+                  </div>
+                  <ul v-if="expandedTables[`${schema}.${t.name}`]?.columns" class="cols">
+                    <li v-for="c in expandedTables[`${schema}.${t.name}`]!.columns" :key="c.name">
+                      <button
+                        class="tree-link tiny"
+                        type="button"
+                        @click="insertSql(quoteIdent(selected?.dbType, c.name))"
+                      >
+                        {{ c.name }}
+                        <span class="muted">{{ c.typeName }}</span>
+                      </button>
+                    </li>
+                  </ul>
+                </li>
+              </ul>
+            </li>
+          </ul>
+          <p v-if="catalog?.note" class="muted tiny">{{ catalog.note }}</p>
         </div>
-      </div>
-    </template>
+
+        <div v-else-if="sidePanel === 'history'" class="panel">
+          <div class="panel-head">
+            <span>执行历史</span>
+            <button class="link" type="button" @click="clearHistory">清空</button>
+          </div>
+          <ul class="list">
+            <li v-for="h in history" :key="h.id">
+              <button class="list-item" type="button" @click="insertSql(h.sql)">
+                <span :class="h.ok ? 'ok-tag' : 'err'">{{ h.ok ? 'OK' : 'ERR' }}</span>
+                <span class="sql-preview">{{ h.sql }}</span>
+                <span class="muted tiny">{{ h.durationMs ?? '—' }}ms · {{ h.rowCount ?? '—' }} 行</span>
+              </button>
+            </li>
+            <li v-if="!history.length" class="muted tiny">暂无历史</li>
+          </ul>
+        </div>
+
+        <div v-else class="panel">
+          <div class="panel-head"><span>已存片段</span></div>
+          <div class="snippet-save">
+            <input v-model="snippetName" placeholder="片段名称" />
+            <button type="button" @click="saveSnippet">保存当前 Tab</button>
+          </div>
+          <ul class="list">
+            <li v-for="s in snippets" :key="s.id" class="snippet-row">
+              <button class="list-item" type="button" @click="loadSnippet(s)">
+                <strong>{{ s.name }}</strong>
+                <span class="sql-preview">{{ s.sql }}</span>
+              </button>
+              <button class="link danger" type="button" @click="removeSnippet(s.id)">删</button>
+            </li>
+            <li v-if="!snippets.length" class="muted tiny">暂无片段</li>
+          </ul>
+        </div>
+      </aside>
+
+      <section class="main">
+        <div class="tabs">
+          <button
+            v-for="t in tabs"
+            :key="t.id"
+            type="button"
+            class="tab"
+            :class="{ on: t.id === activeTabId }"
+            @click="activeTabId = t.id"
+          >
+            {{ t.title }}
+            <span v-if="tabs.length > 1" class="x" @click.stop="closeTab(t.id)">×</span>
+          </button>
+          <button type="button" class="tab add" @click="addTab">+</button>
+        </div>
+
+        <textarea
+          v-if="activeTab"
+          v-model="activeTab.sql"
+          class="editor"
+          rows="12"
+          spellcheck="false"
+          placeholder="输入单条 SQL…"
+          @keydown="onKey"
+        />
+
+        <p v-if="error" class="err">{{ error }}</p>
+        <div v-if="result" class="result">
+          <div class="result-head">
+            <span>{{ result.rowCount }} 行</span>
+            <span>{{ result.durationMs }} ms</span>
+            <span v-if="result.truncated" class="warn">已截断</span>
+            <span v-if="result.updateCount != null">updateCount={{ result.updateCount }}</span>
+            <span v-if="result.viaProxy" class="ok-tag">
+              经代理 {{ result.proxyHost }}:{{ result.proxyPort }}
+            </span>
+            <span class="muted tiny">{{ result.note }}</span>
+          </div>
+          <p v-for="(w, i) in result.warnings || []" :key="i" class="muted tiny">{{ w }}</p>
+          <div class="table-wrap">
+            <table v-if="result.columns.length">
+              <thead>
+                <tr>
+                  <th v-for="c in result.columns" :key="c">{{ c }}</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="(row, ri) in result.rows" :key="ri">
+                  <td v-for="(cell, ci) in row" :key="ci">
+                    <span v-if="cell === null" class="null">NULL</span>
+                    <span v-else>{{ cell }}</span>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+            <p v-else class="muted">无结果集</p>
+          </div>
+        </div>
+      </section>
+    </div>
   </div>
 </template>
 
 <style scoped>
-.lead { color: var(--text-muted); max-width: 52rem; }
+.lead { color: var(--text-muted); max-width: 56rem; }
 .bar {
   display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: flex-end;
   margin: 1rem 0; padding: 0.75rem;
@@ -153,17 +542,51 @@ onMounted(loadInstances)
 .bar label { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.8rem; color: var(--text-muted); }
 .bar select { min-width: 18rem; }
 .bar input[type='number'] { width: 6rem; }
+.ide-grid { display: grid; grid-template-columns: 260px 1fr; gap: 0.75rem; min-height: 28rem; }
+@media (max-width: 960px) { .ide-grid { grid-template-columns: 1fr; } }
+.side {
+  border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--bg-elevated); display: flex; flex-direction: column; max-height: 70vh;
+}
+.side-tabs { display: flex; border-bottom: 1px solid var(--border); }
+.side-tabs button {
+  flex: 1; padding: 0.45rem; background: transparent; border: 0; color: var(--text-muted); cursor: pointer;
+}
+.side-tabs button.on { color: var(--text); background: var(--accent-soft, rgba(59,130,246,.15)); }
+.panel { padding: 0.5rem; overflow: auto; flex: 1; }
+.panel-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.35rem; }
+.tree, .cols, .list { list-style: none; padding: 0; margin: 0; }
+.tree ul { list-style: none; padding-left: 0.85rem; margin: 0; }
+.tree-node, .tree-link, .list-item, .link {
+  background: none; border: 0; color: var(--text); cursor: pointer; text-align: left;
+}
+.tree-node, .tree-link { padding: 0.15rem 0; font-size: 0.82rem; }
+.tree-row { display: flex; gap: 0.15rem; align-items: center; }
+.tree-link:hover, .list-item:hover { color: var(--accent, #3b82f6); }
+.list-item { display: flex; flex-direction: column; gap: 0.15rem; width: 100%; padding: 0.35rem 0; }
+.sql-preview {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.72rem; color: var(--text-muted);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 220px;
+}
+.snippet-save { display: flex; gap: 0.35rem; margin-bottom: 0.5rem; }
+.snippet-save input { flex: 1; }
+.snippet-row { display: flex; gap: 0.25rem; align-items: flex-start; }
+.tabs { display: flex; flex-wrap: wrap; gap: 0.25rem; margin-bottom: 0.35rem; }
+.tab {
+  padding: 0.35rem 0.65rem; border: 1px solid var(--border); border-radius: 6px 6px 0 0;
+  background: var(--bg-elevated); color: var(--text-muted); cursor: pointer;
+}
+.tab.on { background: var(--bg-card); color: var(--text); border-bottom-color: var(--bg-card); }
+.tab .x { margin-left: 0.35rem; opacity: 0.6; }
+.tab.add { min-width: 2rem; }
 .editor {
   width: 100%; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: 0.9rem; line-height: 1.45; padding: 0.75rem;
   background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius);
   color: var(--text); resize: vertical;
 }
-.err { color: var(--danger); margin-top: 0.75rem; }
-.empty {
-  padding: 2rem; text-align: center; color: var(--text-muted);
-  border: 1px dashed var(--border); border-radius: var(--radius); margin-top: 1rem;
-}
+.err { color: var(--danger, #ef4444); margin-top: 0.5rem; }
 .meta { margin: 0.5rem 0; }
 .result { margin-top: 1rem; }
 .result-head { display: flex; flex-wrap: wrap; gap: 0.75rem; margin-bottom: 0.5rem; font-size: 0.85rem; }
@@ -176,4 +599,5 @@ th { background: var(--bg-elevated); position: sticky; top: 0; }
 .null { color: var(--text-muted); font-style: italic; }
 .muted { color: var(--text-muted); }
 .tiny { font-size: 0.75rem; }
+.link.danger { color: var(--danger, #ef4444); }
 </style>

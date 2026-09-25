@@ -1,9 +1,12 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, inject, ref, type Ref } from 'vue'
 import { useRoute, RouterLink, RouterView } from 'vue-router'
 
 const route = useRoute()
 const title = computed(() => (route.meta.title as string) || '管控台')
+const authUser = inject<Ref<string | null>>('authUser', ref(null))
+const authMode = inject<Ref<string>>('authMode', ref('open'))
+const logout = inject<() => void>('logout', () => {})
 
 const nav = [
   { to: '/', label: '总览' },
@@ -40,6 +43,9 @@ const nav = [
       <header class="topbar">
         <h1>{{ title }}</h1>
         <span class="hint">刷新约 6s · 隐藏页暂停</span>
+        <span v-if="authUser" class="auth">{{ authUser }} · {{ authMode }}
+          <button type="button" class="link" @click="logout">退出</button>
+        </span>
       </header>
       <section class="content">
         <RouterView />
@@ -86,4 +92,6 @@ const nav = [
 .topbar h1 { margin: 0; font-size: 1.35rem; }
 .hint { color: var(--text-muted); font-size: 0.8rem; }
 .content { padding: 1rem 1.5rem 2rem; }
+.auth { margin-left: auto; font-size: 0.8rem; color: var(--text-muted); }
+.link { background:none;border:0;color:var(--accent,#3b82f6);cursor:pointer; }
 </style>

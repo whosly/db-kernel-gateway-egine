@@ -4,6 +4,8 @@ import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import com.whosly.gateway.console.security.ConsoleAuthProperties.AuthMode;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.Ordered;
 import org.springframework.core.annotation.Order;
@@ -29,21 +31,39 @@ public class ConsoleApiTokenFilter extends OncePerRequestFilter {
 
     private final String apiToken;
     private final String readToken;
+    private final AuthMode authMode;
 
     public ConsoleApiTokenFilter(
             @Value("${gateway.console.api-token:}") String apiToken,
             @Value("${gateway.console.read-token:}") String readToken) {
+        this(apiToken, readToken, null);
+    }
+
+    @Autowired
+    public ConsoleApiTokenFilter(
+            @Value("${gateway.console.api-token:}") String apiToken,
+            @Value("${gateway.console.read-token:}") String readToken,
+            @Autowired(required = false) AuthMode authMode) {
         this.apiToken = apiToken != null ? apiToken.trim() : "";
         this.readToken = readToken != null ? readToken.trim() : "";
+        this.authMode = authMode;
     }
 
     @Override
     protected boolean shouldNotFilter(HttpServletRequest request) {
+        // Only enforce in TOKEN mode (or auto-token when AuthMode bean absent + tokens set)
+        if (authMode != null && authMode != AuthMode.TOKEN) {
+            return true;
+        }
         if (apiToken.isEmpty() && readToken.isEmpty()) {
             return true;
         }
         String path = request.getRequestURI();
-        return path == null || !path.startsWith("/console/api");
+        if (path == null || !path.startsWith("/console/api")) {
+            return true;
+        }
+        // auth discovery endpoints stay open even in token mode
+        return path.startsWith("/console/api/auth/");
     }
 
     @Override

@@ -874,3 +874,11 @@ GET /console/api/audit/status
 - [x] STATUS P2-3 + README API 表同步；`mvn test` + `npm run build` 绿
 
 **结论：设计可通过 → 进入 §15 实现。**
+
+## 16. 完整 SQL IDE（MaxGUI-lite 对标）
+
+> 本轮「完整」相对 MaxGUI / ProxySQL Web 的 **轻量 IDE**，**不是** DataGrip。  
+> 协议无关：对象树 / 历史 / 片段均挂 **网关实例**；无 `/console/api/mysql/...` 品牌路径。  
+> SQL **执行**仍走 `InstanceSqlExecuteService` → 代理 `listenPort`（§15.6）；**元数据树**直连目标 JDBC（与 columns 同路径）。
+
+#

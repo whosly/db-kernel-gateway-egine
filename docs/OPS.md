@@ -76,3 +76,26 @@
 | 生产 | 另行配置；环境变量 / 密钥管理，**不**提交 git |
 
 若 SA 复杂度策略拒绝 `Aa123456.`，可改用 `Aa123456!` 并只改本地 `application-dev.yml`。本仓库执行环境默认 **不**自动 `docker run`。
+
+
+## 管控台鉴权与 HTTPS（实验室）
+
+| 模式 | 配置 | 说明 |
+|---|---|---|
+| open | `gateway.console.auth.mode=open`（或未设且无 token） | lab 默认，API 开放 |
+| token | `mode=token` 或配置 `api-token`/`read-token` | Bearer / X-Console-Token；read-token≈CONSOLE_VIEWER |
+| form | `mode=form` + `gateway.console.auth.users` | Session + Cookie CSRF；默认用户 admin/admin、viewer/viewer（若未配置 users） |
+| oidc | `mode=oidc` + `auth.oidc.issuer-uri` + client-id/secret | OAuth2 登录路径已接线；需真实 IdP；未接 IdP 时勿宣称完整 SSO |
+
+### 管控台 HTTPS（server.ssl，非 gateway.tls）
+
+```bash
+keytool -genkeypair -alias gateway-console -keyalg RSA -keysize 2048 -validity 3650 \
+  -storetype PKCS12 -keystore ./data/console-lab.p12 -storepass changeit \
+  -dname "CN=localhost,OU=lab,O=gateway,L=local,ST=lab,C=CN"
+# 复制并编辑：src/main/resources/application-console-https-template.yml
+mvn spring-boot:run -Dspring-boot.run.profiles=dev
+# https://localhost:8443/console/
+```
+
+协议代理客户端 TLS 终止仍用 `gateway.tls.*`，与管控台 HTTPS 无关。
