@@ -439,3 +439,65 @@ export interface AuthMeResponse {
   roles?: string[]
   mode?: string
 }
+
+export interface AlertThreshold {
+  id: string
+  name: string
+  metricKey: string
+  comparator: string
+  thresholdValue: number
+  windowSeconds?: number | null
+  instanceId?: string | null
+  scope?: string
+  enabled: boolean
+  severity: string
+  lastFiredAt?: string | null
+  lastValue?: number | null
+  lastFiring?: boolean
+  createdAt?: string | null
+  updatedAt?: string | null
+}
+
+export interface AlertThresholdPayload {
+  name?: string
+  metricKey: string
+  comparator: string
+  thresholdValue: number
+  windowSeconds?: number | null
+  instanceId?: string | null
+  enabled?: boolean
+  severity?: string
+}
+
+export interface AlertThresholdsResponse {
+  items: AlertThreshold[]
+  total: number
+  metricKeys?: string[]
+  comparators?: string[]
+  severities?: string[]
+  note?: string
+}
+
+export interface ActiveAlert {
+  thresholdId: string
+  name: string
+  metricKey: string
+  comparator: string
+  thresholdValue: number
+  windowSeconds?: number | null
+  instanceId?: string | null
+  scope?: string
+  severity: string
+  value: number
+  valueMode?: string
+  firedAt?: string
+  message?: string
+}
+
+export interface ActiveAlertsResponse {
+  items: ActiveAlert[]
+  total: number
+  evaluatedAt?: string | null
+  note?: string
+}
+

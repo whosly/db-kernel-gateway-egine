@@ -45,6 +45,14 @@
 | 审计 spool 写失败 / 熔断 | 应用日志 | fail-closed 会拒流量；查磁盘配额与权限 |
 | 代理端口起不来 | 启动日志 | 端口占用或配置错误 |
 
+## 管控台告警阈值（进程内）
+
+- 阈值 CRUD：`/console/api/v1/alerts/thresholds`
+- 当前触发：`GET /console/api/v1/alerts/active`（亦 `/alerts`）
+- 评估：复用 `MetricsHistorySampler` tick + 读接口懒评估；指标来自进程内环（与总览火花图同源）
+- UI：侧栏「告警」；总览有触发徽章
+- **诚实**：H2 持久化阈值与 `last_fired`；**不是** Prometheus / Alertmanager / PagerDuty
+
 ## 集成测试（P2-6 跳过策略）
 
 | 命令 | 行为 |

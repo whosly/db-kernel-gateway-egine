@@ -338,3 +338,32 @@ export function login(username: string, password: string) {
 export function logout() {
   return apiPost<{ ok: boolean; message?: string }>('/auth/logout')
 }
+
+export function listAlertThresholds() {
+  return apiGet<import('./types').AlertThresholdsResponse>('/alerts/thresholds')
+}
+
+export function getAlertThreshold(id: string) {
+  return apiGet<import('./types').AlertThreshold>(`/alerts/thresholds/${encodeURIComponent(id)}`)
+}
+
+export function createAlertThreshold(payload: import('./types').AlertThresholdPayload) {
+  return apiPost<import('./types').AlertThreshold>('/alerts/thresholds', payload)
+}
+
+export function updateAlertThreshold(id: string, payload: import('./types').AlertThresholdPayload) {
+  return apiPut<import('./types').AlertThreshold>(
+    `/alerts/thresholds/${encodeURIComponent(id)}`,
+    payload,
+  )
+}
+
+export function deleteAlertThreshold(id: string) {
+  return apiDelete<ActionResult>(`/alerts/thresholds/${encodeURIComponent(id)}`)
+}
+
+export function listActiveAlerts(refresh = true) {
+  const q = refresh ? '?refresh=true' : '?refresh=false'
+  return apiGet<import('./types').ActiveAlertsResponse>(`/alerts/active${q}`)
+}
+

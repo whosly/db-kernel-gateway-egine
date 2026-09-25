@@ -41,6 +41,8 @@ public class MetricsHistorySampler {
     private final int capacity;
 
     private final ConcurrentHashMap<String, Ring> rings = new ConcurrentHashMap<>();
+    private final java.util.concurrent.CopyOnWriteArrayList<Runnable> afterSampleListeners =
+            new java.util.concurrent.CopyOnWriteArrayList<>();
     private ScheduledExecutorService scheduler;
 
     public MetricsHistorySampler(GatewayInstanceRegistry instanceRegistry,
@@ -95,9 +97,23 @@ public class MetricsHistorySampler {
         sampleSafely();
     }
 
+    /** Register a callback invoked after each successful sample (e.g. alert evaluation). */
+    public void addAfterSampleListener(Runnable listener) {
+        if (listener != null) {
+            afterSampleListeners.add(listener);
+        }
+    }
+
     private void sampleSafely() {
         try {
             sample();
+            for (Runnable r : afterSampleListeners) {
+                try {
+                    r.run();
+                } catch (RuntimeException ex) {
+                    log.debug("After-sample listener failed: {}", ex.toString());
+                }
+            }
         } catch (RuntimeException e) {
             log.debug("Metrics sample skipped: {}", e.toString());
         }

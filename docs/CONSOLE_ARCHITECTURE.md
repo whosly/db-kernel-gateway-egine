@@ -141,6 +141,8 @@ UNBOUND      ← 仅兼容保留；creatable 配置实例不应再出现
 | GET | `/audit/operations` | 管控操作审计 `{ items, total }` |
 | GET | `/audit/traffic` | 流量审计浏览（原 `/audit/spool`） |
 | GET/POST… | `/auth/*` | 挂在 `/console/api/v1/auth` |
+| GET/POST… | `/alerts/thresholds` | 告警阈值 CRUD（H2） |
+| GET | `/alerts/active` · `/alerts` | 当前触发（sampler 评估） |
 
 **契约规则**
 
@@ -1186,3 +1188,49 @@ GET /console/api/audit/spool?limit=50&before=&source=auto|ring|spool|jdbc&protoc
 - [x] `mvn test` + `npm run build` 绿
 
 **结论：设计可通过 → 进入 §20 实现。**
+
+## 21. 管控台告警阈值（进程内 · 非 Prometheus）
+
+> 作者自检通过后实现。运维可在控制面配置阈值，并在管控台查看当前触发态。  
+> **不做** Prometheus remote / PagerDuty / 外部告警栈。
+
+### 21.1 目标
+
+| 项 | 约定 |
+|---|---|
+| 存储 | H2 表 `gateway_alert_threshold`（控制面）；CRUD 持久化 |
+| 评估源 | 活指标 + `MetricsHistorySampler` 内存环（与总览火花图同源） |
+| 评估时机 | **复用 sampler tick**（采样后回调）；`GET /alerts/active` 亦触发一次懒评估 |
+| 作用域 | `instanceId` 空 = 总览求和；非空 = 单实例 |
+| 指标键 | `active_sessions` / `deny_count` / `backend_fail` / `error_rate` 等（别名见实现）；计数器可配 `windowSeconds` 用环上增量 |
+| 触发态 | 内存当前触发列表 + H2 `last_fired_at` / `last_value` / `last_firing`（重启后可恢复「上次曾触发」痕迹，当前是否仍触发需再评估） |
+| 诚实边界 | 进程内/H2；**不是** Prometheus / Alertmanager / PagerDuty |
+
+### 21.2 API（均在 `/console/api/v1`）
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/alerts/thresholds` | `{ items, total }` |
+| POST | `/alerts/thresholds` | 创建；**201** + `Location` |
+| GET | `/alerts/thresholds/{id}` | 单条 |
+| PUT | `/alerts/thresholds/{id}` | 更新 |
+| DELETE | `/alerts/thresholds/{id}` | `{ ok, id }` |
+| GET | `/alerts/active` | 当前触发 `{ items, total, evaluatedAt, note }` |
+| GET | `/alerts` | 同 `/alerts/active`（别名） |
+
+比较符：`GT` / `GTE` / `LT` / `LTE` / `EQ`。严重级别：`INFO` / `WARN` / `CRITICAL`。
+
+### 21.3 UI
+
+- 侧栏 **告警** 页：阈值列表 / 新建编辑 / 当前触发。
+- 总览：活跃告警徽章（链到告警页）。
+
+### 21.4 自检清单（作者）
+
+- [x] H2 阈值 CRUD；非法 metric/comparator → Problem 400
+- [x] sampler tick + GET 懒评估；window 增量与 gauge 语义正确
+- [x] `last_firing` 持久化；active 列表诚实 note
+- [x] UI 中文；API 仅 `/console/api/v1`
+- [x] 单测 + `mvn test` + `npm run build` 绿；非 Prometheus
+
+**结论：§21 已实现（进程内告警；非 Prometheus / 非 PagerDuty）。**

@@ -4,8 +4,8 @@ import KpiGrid from '../components/KpiGrid.vue'
 import StatusDonut from '../components/StatusDonut.vue'
 import InstanceCard from '../components/InstanceCard.vue'
 import Sparkline from '../components/Sparkline.vue'
-import { getMetricsHistory, getOverview, startInstance, stopInstance } from '../api/consoleApi'
-import type { MetricsHistoryPoint, OverviewResponse } from '../api/types'
+import { getMetricsHistory, getOverview, listActiveAlerts, startInstance, stopInstance } from '../api/consoleApi'
+import type { ActiveAlert, MetricsHistoryPoint, OverviewResponse } from '../api/types'
 import { usePolling } from '../composables/usePolling'
 import { useRouter } from 'vue-router'
 
@@ -14,6 +14,7 @@ const router = useRouter()
 const data = ref<OverviewResponse | null>(null)
 const history = ref<MetricsHistoryPoint[]>([])
 const historyNote = ref<string | null>(null)
+const activeAlerts = ref<ActiveAlert[]>([])
 const error = ref<string | null>(null)
 
 async function load() {
@@ -22,6 +23,12 @@ async function load() {
     const hist = await getMetricsHistory(undefined, 60)
     history.value = hist.points || []
     historyNote.value = hist.note || null
+    try {
+      const alerts = await listActiveAlerts(true)
+      activeAlerts.value = alerts.items || []
+    } catch {
+      activeAlerts.value = []
+    }
     error.value = null
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e)
@@ -74,6 +81,19 @@ async function onStop(id: string) {
 <template>
   <div>
     <p v-if="error" class="err">加载失败：{{ error }}</p>
+    <div
+      v-if="activeAlerts.length"
+      class="alert-banner"
+      role="status"
+      @click="router.push('/alerts')"
+    >
+      <strong>告警触发 {{ activeAlerts.length }}</strong>
+      <span class="muted tiny">
+        {{ activeAlerts.slice(0, 3).map((a) => a.name || a.metricKey).join(' · ') }}
+        <template v-if="activeAlerts.length > 3"> …</template>
+        — 点击查看
+      </span>
+    </div>
     <KpiGrid :items="kpis" />
     <div class="row">
       <div class="panel">
@@ -143,4 +163,14 @@ h3 { margin: 0 0 0.75rem; font-size: 1rem; }
 .err { color: var(--danger); }
 .sparks { display: grid; gap: 0.65rem; }
 .spark-label { font-size: 0.8rem; color: var(--text-muted); margin-bottom: 0.2rem; }
+.alert-banner {
+  display: flex; gap: 0.75rem; align-items: baseline; flex-wrap: wrap;
+  background: rgba(239, 68, 68, 0.12);
+  border: 1px solid #ef4444;
+  border-radius: 10px;
+  padding: 0.65rem 0.9rem;
+  margin-bottom: 0.85rem;
+  cursor: pointer;
+}
+.alert-banner:hover { background: rgba(239, 68, 68, 0.18); }
 </style>

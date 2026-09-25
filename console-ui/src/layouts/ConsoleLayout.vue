@@ -13,6 +13,7 @@ const nav = [
   { to: '/instances', label: '网关实例' },
   { to: '/catalog', label: '类型目录' },
   { to: '/sql', label: 'SQL 工作台' },
+  { to: '/alerts', label: '告警' },
   { to: '/ops', label: '运维 / 安全' },
 ]
 </script>

@@ -232,6 +232,7 @@ function sourceLabel(s?: string) {
           <code>docs/OPS.md</code>。下方可浏览状态与 <strong>spool / 内存环内容</strong>（只读）。
         </li>
         <li>指标趋势：进程内环（总览页火花图）；不强制外部 Prometheus。</li>
+        <li>告警阈值：侧栏「告警」或 <code>/console/api/v1/alerts/*</code>；进程内评估，非 PagerDuty。</li>
       </ul>
     </div>
 
