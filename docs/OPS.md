@@ -18,6 +18,7 @@
 | 6d | （可选）按库/用户路由 | `gateway.routing.enabled=true` + `rules`（`match-database` / `match-username` + `endpoints`）；**PG** cleartext Startup 首连生效；**MySQL** 首连仍 fallback（server-first）；未命中回退 `target`/`backend-endpoints`；默认关 |
 | 7 | （可选）风控拒绝清单 | `gateway.risk.denied-operations` / `denied-statement-keywords` |
 | 8 | （可选）交互 CLI | 仅调试：`gateway.cli.interactive=true`（会读 `System.in`） |
+| 9 | （可选）控制面密码强制加密 | 生产：`GATEWAY_CONSOLE_SECRET_KEY_BASE64` + `GATEWAY_CONSOLE_REQUIRE_SECRET_ENCRYPTION=true`；缺钥时创建/更新带密码 → **503**，无静默明文。实验室默认关。迁移见 [`CONSOLE_ARCHITECTURE.md`](CONSOLE_ARCHITECTURE.md) §12.2 |
 
 ### HTTP / Actuator 出口（P2-3 / P2-4）
 

@@ -26,6 +26,7 @@ import com.whosly.gateway.console.persist.ConsoleSqlSnippetStore;
 import com.whosly.gateway.console.persist.ConsoleSqlSnippetStore.SqlSnippetRecord;
 import com.whosly.gateway.console.security.ConsoleAuditService;
 import com.whosly.gateway.console.security.ConsoleMaskingKeyService;
+import com.whosly.gateway.console.security.ConsoleSecretCipher;
 import com.whosly.gateway.console.security.RiskPolicyService;
 import com.whosly.gateway.runtime.GatewayListenerRuntime.CreateInstanceRequest;
 import com.whosly.gateway.runtime.GatewayListenerRuntime.UpdateInstanceRequest;
@@ -68,6 +69,7 @@ public class ConsoleApiController {
     private final GatewayConfig gatewayConfig;
     private final ConsoleAuditService auditService;
     private final ConsoleMaskingKeyService maskingKeyService;
+    private final ConsoleSecretCipher secretCipher;
     private final InstanceSchemaColumnsService schemaColumnsService;
     private final InstanceBackendHealthService healthService;
     private final RecentTrafficRing recentTrafficRing;
@@ -86,7 +88,7 @@ public class ConsoleApiController {
                                 GatewayRuntimeMetrics runtimeMetrics,
                                 GatewayConfig gatewayConfig) {
         this(catalog, instanceRegistry, protocolAdapter, runtimeMetrics, gatewayConfig,
-                null, null, null, null, null, null, null, null, null, null, null, null);
+                null, null, null, null, null, null, null, null, null, null, null, null, null);
     }
 
     @Autowired
@@ -106,7 +108,8 @@ public class ConsoleApiController {
                                 @Autowired(required = false) InstanceSqlExecuteService sqlExecuteService,
                                 @Autowired(required = false) ConsoleSqlHistoryStore sqlHistoryStore,
                                 @Autowired(required = false) ConsoleSqlSnippetStore sqlSnippetStore,
-                                @Autowired(required = false) TrafficAuditBrowseService trafficAuditBrowseService) {
+                                @Autowired(required = false) TrafficAuditBrowseService trafficAuditBrowseService,
+                                @Autowired(required = false) ConsoleSecretCipher secretCipher) {
         this.catalog = catalog;
         this.instanceRegistry = instanceRegistry;
         this.protocolAdapter = protocolAdapter;
@@ -124,6 +127,7 @@ public class ConsoleApiController {
         this.sqlHistoryStore = sqlHistoryStore;
         this.sqlSnippetStore = sqlSnippetStore;
         this.trafficAuditBrowseService = trafficAuditBrowseService;
+        this.secretCipher = secretCipher;
     }
 
     @GetMapping("/supported-databases")
@@ -408,6 +412,18 @@ public class ConsoleApiController {
         }
         body.put("runtime", runtime);
         body.put("metrics", runtimeMetrics.snapshot());
+        Map<String, Object> console = new LinkedHashMap<>();
+        console.put("secretKeyConfigured", gatewayConfig.isConsoleSecretKeyConfigured());
+        console.put("requireSecretEncryption", gatewayConfig.isConsoleRequireSecretEncryption());
+        if (secretCipher != null) {
+            console.putAll(secretCipher.status());
+        } else {
+            console.put("masterKeyConfigured", gatewayConfig.isConsoleSecretKeyConfigured());
+            console.put("allowsPlaintextWrites",
+                    !gatewayConfig.isConsoleRequireSecretEncryption()
+                            && !gatewayConfig.isConsoleSecretKeyConfigured());
+        }
+        body.put("console", console);
         return body;
     }
 
@@ -758,6 +774,29 @@ public class ConsoleApiController {
     @DeleteMapping("/security/masking-key")
     public Map<String, Object> deleteMaskingKey() {
         return requireMaskingKeyService().clearKey();
+    }
+
+    /**
+     * Control-plane password envelope status (no key material).
+     * Used by Ops / instance-create UI when require-secret-encryption is on.
+     */
+    @GetMapping("/security/secret-encryption")
+    public Map<String, Object> secretEncryptionStatus() {
+        if (secretCipher != null) {
+            return secretCipher.status();
+        }
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("masterKeyConfigured", gatewayConfig.isConsoleSecretKeyConfigured());
+        body.put("requireSecretEncryption", gatewayConfig.isConsoleRequireSecretEncryption());
+        body.put("allowsPlaintextWrites",
+                !gatewayConfig.isConsoleRequireSecretEncryption()
+                        && !gatewayConfig.isConsoleSecretKeyConfigured());
+        body.put("storageMode", gatewayConfig.isConsoleSecretKeyConfigured()
+                ? "encrypted"
+                : (gatewayConfig.isConsoleRequireSecretEncryption()
+                ? "require-encrypted-blocked" : "lab-plaintext"));
+        body.put("help", "见 gateway.console.secret-key-base64 / require-secret-encryption");
+        return body;
     }
 
     @GetMapping("/audit")

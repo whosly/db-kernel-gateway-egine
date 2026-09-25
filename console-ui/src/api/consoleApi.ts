@@ -144,6 +144,11 @@ export function deleteMaskingKey() {
   return apiDelete<import('./types').MaskingKeyStatus>('/security/masking-key')
 }
 
+export function getSecretEncryptionStatus() {
+  return apiGet<import('./types').SecretEncryptionStatus>('/security/secret-encryption')
+}
+
+
 
 export function listAudit(limit = 50, action?: string) {
   const q = new URLSearchParams({ limit: String(limit) })

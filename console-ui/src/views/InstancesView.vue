@@ -9,6 +9,7 @@ import {
   deleteInstance,
   downloadConfigExport,
   downloadInstancesExport,
+  getSecretEncryptionStatus,
   importInstances,
   listInstances,
   listSupportedDatabases,
@@ -20,6 +21,7 @@ import type {
   CatalogEntry,
   CreateInstancePayload,
   GatewayInstance,
+  SecretEncryptionStatus,
   UpdateInstancePayload,
 } from '../api/types'
 import { proxyModeBadgeClass, proxyModeHint } from '../api/proxyMode'
@@ -31,6 +33,7 @@ const catalog = ref<CatalogEntry[]>([])
 const error = ref<string | null>(null)
 const selected = ref<GatewayInstance | null>(null)
 const showCreate = ref(false)
+const secretEnc = ref<SecretEncryptionStatus | null>(null)
 const submitting = ref(false)
 const selectedIds = ref<Set<string>>(new Set())
 const filterQ = ref('')
@@ -101,6 +104,11 @@ const filtered = computed(() => {
 
 async function load() {
   try {
+    try {
+      secretEnc.value = await getSecretEncryptionStatus()
+    } catch {
+      /* optional */
+    }
     const [inst, cat] = await Promise.all([listInstances(), listSupportedDatabases()])
     instances.value = inst.instances || []
     catalog.value = cat.databases || []
@@ -355,6 +363,13 @@ async function onImportFile(ev: Event) {
           <button type="button" @click="showCreate = false">关闭</button>
         </header>
         <p class="muted">提交后写入控制面 H2，并绑定 ProtocolAdapter；enabled 时自动启动监听。</p>
+        <p v-if="secretEnc?.requireSecretEncryption && !secretEnc?.masterKeyConfigured" class="err">
+          生产加固已开启（require-secret-encryption），但控制面主密钥未配置：填写目标密码将失败（503）。
+          请先配置 <code>GATEWAY_CONSOLE_SECRET_KEY_BASE64</code>，或关闭强制加密（仅实验室）。
+        </p>
+        <p v-else-if="secretEnc && !secretEnc.masterKeyConfigured" class="muted tiny">
+          实验室模式：密码将明文写入控制面 H2（WARN）。生产请配置 secret-key-base64 并设 require-secret-encryption=true。
+        </p>
         <p v-if="portConflictHint" class="err">{{ portConflictHint }}</p>
 
         <div class="grid2">

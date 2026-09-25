@@ -77,6 +77,9 @@ public class ConsoleMaskingKeyService {
         body.put("keyId", holder.configured() ? holder.keyId() : null);
         body.put("source", holder.source().name().toLowerCase());
         body.put("consoleMasterKeyConfigured", secretCipher.isMasterKeyConfigured());
+        body.put("requireSecretEncryption", secretCipher.isRequireSecretEncryption());
+        body.put("allowsPlaintextWrites", secretCipher.allowsPlaintextWrites());
+        body.put("secretEncryption", secretCipher.status());
         return body;
     }
 

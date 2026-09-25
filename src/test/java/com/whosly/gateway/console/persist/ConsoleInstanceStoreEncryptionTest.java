@@ -10,6 +10,7 @@ import java.time.Instant;
 import java.util.Base64;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class ConsoleInstanceStoreEncryptionTest {
 
@@ -64,5 +65,41 @@ class ConsoleInstanceStoreEncryptionTest {
         // Re-open with cipher that has a key — legacy (no prefix) still readable
         ConsoleInstanceStore withKey = new ConsoleInstanceStore(jdbc, cipher);
         assertThat(withKey.findById("legacy").orElseThrow().targetPassword()).isEqualTo("plain-legacy");
+    }
+
+    @Test
+    void requireModeRejectsUpsertWithoutMasterKey() {
+        DriverManagerDataSource ds = new DriverManagerDataSource();
+        ds.setDriverClassName("org.h2.Driver");
+        ds.setUrl("jdbc:h2:mem:console-require-enc;MODE=PostgreSQL;DB_CLOSE_DELAY=-1");
+        ds.setUsername("sa");
+        ds.setPassword("");
+        ConsoleSecretCipher required = ConsoleSecretCipher.fromBase64MasterKey("", true);
+        ConsoleInstanceStore blocked = new ConsoleInstanceStore(new JdbcTemplate(ds), required);
+        Instant now = Instant.now();
+        assertThatThrownBy(() ->
+                blocked.upsert(new ConsoleInstanceRecord(
+                        "blocked", "拒", "mysql", "0.0.0.0", 2, true,
+                        "127.0.0.1", 3306, "db", "u", "plain-not-allowed",
+                        now, now)))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("require-secret-encryption");
+    }
+
+    @Test
+    void labDefaultStillAllowsPlaintextUpsert() {
+        DriverManagerDataSource ds = new DriverManagerDataSource();
+        ds.setDriverClassName("org.h2.Driver");
+        ds.setUrl("jdbc:h2:mem:console-lab-plain;MODE=PostgreSQL;DB_CLOSE_DELAY=-1");
+        ds.setUsername("sa");
+        ds.setPassword("");
+        ConsoleInstanceStore lab = new ConsoleInstanceStore(new JdbcTemplate(ds));
+        Instant now = Instant.now();
+        lab.upsert(new ConsoleInstanceRecord(
+                "lab", "实验室", "mysql", "0.0.0.0", 3, true,
+                "127.0.0.1", 3306, "db", "u", "lab-plain",
+                now, now));
+        assertThat(lab.findSealedPassword("lab").orElseThrow()).isEqualTo("lab-plain");
+        assertThat(lab.findById("lab").orElseThrow().targetPassword()).isEqualTo("lab-plain");
     }
 }

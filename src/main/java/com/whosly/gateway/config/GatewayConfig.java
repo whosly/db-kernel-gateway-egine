@@ -218,6 +218,13 @@ public class GatewayConfig implements DisposableBean {
     @Value("${gateway.console.secret-key-base64:}")
     private String consoleSecretKeyBase64;
 
+    /**
+     * Production hardening: reject plaintext password writes when master key is missing.
+     * Default false keeps open lab / docker-compose backward compatible.
+     */
+    @Value("${gateway.console.require-secret-encryption:false}")
+    private boolean consoleRequireSecretEncryption;
+
     @Value("${gateway.audit.destination:spool}")
     private String auditDestination;
 
@@ -274,7 +281,8 @@ public class GatewayConfig implements DisposableBean {
 
     @Bean
     public ConsoleSecretCipher consoleSecretCipher() {
-        return ConsoleSecretCipher.fromBase64MasterKey(consoleSecretKeyBase64);
+        return ConsoleSecretCipher.fromBase64MasterKey(
+                consoleSecretKeyBase64, consoleRequireSecretEncryption);
     }
 
     /**
@@ -597,6 +605,10 @@ public class GatewayConfig implements DisposableBean {
     public String getAuditDestination() { return auditDestination; }
     public boolean isConsoleSecretKeyConfigured() {
         return consoleSecretKeyBase64 != null && !consoleSecretKeyBase64.isBlank();
+    }
+
+    public boolean isConsoleRequireSecretEncryption() {
+        return consoleRequireSecretEncryption;
     }
     public String getProxyDbType() { return proxyDbType; }
     public int getProxyPort() { return proxyPort; }

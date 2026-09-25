@@ -188,8 +188,20 @@ export interface MaskingKeyStatus {
   keyId: string | null
   source: 'config' | 'console' | 'none' | string
   consoleMasterKeyConfigured?: boolean
+  requireSecretEncryption?: boolean
+  allowsPlaintextWrites?: boolean
+  secretEncryption?: SecretEncryptionStatus
   ok?: boolean
   message?: string
+}
+
+/** Control-plane password envelope status (no key material). */
+export interface SecretEncryptionStatus {
+  masterKeyConfigured: boolean
+  requireSecretEncryption: boolean
+  allowsPlaintextWrites: boolean
+  storageMode: 'encrypted' | 'lab-plaintext' | 'require-encrypted-blocked' | string
+  help?: string
 }
 
 export interface SchemaColumn {

@@ -9,6 +9,7 @@ import {
   getHealth,
   getMaskingKeyStatus,
   getRiskPolicy,
+  getSecretEncryptionStatus,
   listAudit,
   listAuditSpool,
   putMaskingKey,
@@ -19,6 +20,7 @@ import type {
   AuditStatus,
   MaskingKeyStatus,
   RiskPolicy,
+  SecretEncryptionStatus,
   TrafficAuditBrowseResponse,
   TrafficAuditEntry,
 } from '../api/types'
@@ -28,6 +30,7 @@ const summary = ref<Record<string, unknown> | null>(null)
 const health = ref<Record<string, unknown> | null>(null)
 const error = ref<string | null>(null)
 const keyStatus = ref<MaskingKeyStatus | null>(null)
+const secretEnc = ref<SecretEncryptionStatus | null>(null)
 const keyId = ref('default')
 const keyBase64 = ref('')
 const keyMsg = ref<string | null>(null)
@@ -96,6 +99,11 @@ async function load() {
     summary.value = await getConfigSummary()
     health.value = await getHealth()
     keyStatus.value = await getMaskingKeyStatus()
+    try {
+      secretEnc.value = await getSecretEncryptionStatus()
+    } catch {
+      secretEnc.value = (keyStatus.value?.secretEncryption as SecretEncryptionStatus) || null
+    }
     auditStatus.value = await getAuditStatus()
     const auditBody = await listAudit(30, auditActionFilter.value.trim() || undefined)
     audit.value = auditBody.entries || []
@@ -190,7 +198,8 @@ function sourceLabel(s?: string) {
           <code>gateway.masking.key-base64</code> 或下方「安全」配置
         </li>
         <li>
-          控制面密码加密：配置 <code>gateway.console.secret-key-base64</code>（32 字节 AES Base64）；缺省为实验室明文 + WARN
+          控制面密码加密：配置 <code>gateway.console.secret-key-base64</code>（32 字节 AES Base64）；缺省为实验室明文 + WARN。
+          生产加固：<code>gateway.console.require-secret-encryption=true</code> 时缺钥拒绝明文写入（503）。
         </li>
         <li>
           可选 API Token：<code>gateway.console.api-token</code>（读写）；
@@ -327,6 +336,24 @@ function sourceLabel(s?: string) {
     </div>
 
     <div class="panel">
+      <h3>安全 · 控制面密码加密</h3>
+      <p class="muted">
+        模式：
+        <strong>{{ secretEnc?.storageMode || '—' }}</strong>
+        · 主密钥 {{ secretEnc?.masterKeyConfigured ? '已配置' : '未配置' }}
+        · 强制加密 {{ secretEnc?.requireSecretEncryption ? '开' : '关（实验室可明文）' }}
+      </p>
+      <p v-if="secretEnc?.requireSecretEncryption && !secretEnc?.masterKeyConfigured" class="err">
+        已开启 require-secret-encryption，但 secret-key-base64 缺失：创建/更新带密码的实例将返回 503，不会明文落库。
+        请设置环境变量 <code>GATEWAY_CONSOLE_SECRET_KEY_BASE64</code>（<code>openssl rand -base64 32</code>）。
+      </p>
+      <p class="muted tiny">{{ secretEnc?.help }}</p>
+      <p class="muted tiny">
+        遗留明文行仍可读（WARN）；迁移：配置主密钥后编辑实例并保存（可重填密码）以改写为 <code>enc:v1:</code>。
+      </p>
+    </div>
+
+    <div class="panel">
       <h3>安全 · 脱敏密钥</h3>
       <p class="muted">
         状态：
@@ -335,6 +362,7 @@ function sourceLabel(s?: string) {
         <template v-if="keyStatus?.keyId"> · keyId={{ keyStatus.keyId }}</template>
         · 控制面主密钥
         {{ keyStatus?.consoleMasterKeyConfigured ? '已配置' : '未配置（实验室）' }}
+        <template v-if="keyStatus?.requireSecretEncryption"> · 强制加密开</template>
       </p>
       <p class="muted tiny">
         密钥永不回显。保存需已配置 <code>gateway.console.secret-key-base64</code>。清除后回退 yaml

@@ -20,6 +20,8 @@ import java.util.Optional;
  *
  * <p>{@code target_password} is sealed with {@link ConsoleSecretCipher} when a master key
  * is configured ({@code enc:v1:}…); otherwise lab plaintext with a one-time WARN.
+ * When {@code gateway.console.require-secret-encryption=true} and the key is missing,
+ * {@link ConsoleSecretCipher#sealForStorage} throws (no silent plaintext).
  * This DB is <em>not</em> the proxied business database.</p>
  */
 @Repository

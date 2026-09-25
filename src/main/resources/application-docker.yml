@@ -7,6 +7,7 @@ gateway:
   console:
     db-path: ${GATEWAY_CONSOLE_DB_PATH:/app/data/console/gateway-console}
     secret-key-base64: ${GATEWAY_CONSOLE_SECRET_KEY_BASE64:}
+    require-secret-encryption: ${GATEWAY_CONSOLE_REQUIRE_SECRET_ENCRYPTION:false}
     api-token: ${GATEWAY_CONSOLE_API_TOKEN:}
   # Process-level defaults (legacy /gateway); multi-instance below is primary.
   proxy-db-type: mysql

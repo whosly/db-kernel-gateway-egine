@@ -9,6 +9,7 @@ import type {
   RecentStatement,
   SchemaColumn,
   PoolStats,
+  SecretEncryptionStatus,
   SessionRow,
   UpdateInstancePayload,
 } from '../api/types'
@@ -23,6 +24,7 @@ import {
   listMaskingRules,
   listRecentStatements,
   listSessions,
+  getSecretEncryptionStatus,
   updateMaskingRule,
 } from '../api/consoleApi'
 
@@ -30,6 +32,7 @@ const props = defineProps<{ instance: GatewayInstance | null }>()
 const emit = defineEmits<{ close: []; delete: []; save: [UpdateInstancePayload]; clone: [] }>()
 
 const toast = inject<(m: string) => void>('toast', () => {})
+const secretEnc = ref<SecretEncryptionStatus | null>(null)
 const tab = ref<'info' | 'masking' | 'sessions' | 'recent'>('info')
 const metrics = ref<Record<string, number>>({})
 const pool = ref<PoolStats | null>(null)
@@ -125,6 +128,14 @@ const form = reactive<MaskingRulePayload>({
 })
 
 const showStrategyFields = computed(() => form.strategy)
+
+async function loadSecretEnc() {
+  try {
+    secretEnc.value = await getSecretEncryptionStatus()
+  } catch {
+    secretEnc.value = null
+  }
+}
 
 async function loadMetrics() {
   if (!props.instance) return
@@ -324,6 +335,7 @@ onMounted(() => {
   syncEditForm()
   loadMetrics()
   loadRules()
+  loadSecretEnc()
 })
 watch(
   () => props.instance?.id,
@@ -334,6 +346,7 @@ watch(
     syncEditForm()
     loadMetrics()
     loadRules()
+    loadSecretEnc()
   },
 )
 watch(tab, (v) => {
@@ -418,6 +431,9 @@ watch(tab, (v) => {
               <div class="field"><label>目标密码</label>
                 <input v-model="editForm.targetPassword" type="password" autocomplete="new-password"
                        :placeholder="instance.passwordConfigured ? '留空则保留原密码' : '未配置，可在此设置'" />
+                <p v-if="secretEnc?.requireSecretEncryption && !secretEnc?.masterKeyConfigured" class="err tiny">
+                  强制加密已开但主密钥缺失：保存带密码（含保留原密码的改写）将 503。
+                </p>
               </div>
             </div>
             <label class="check"><input v-model="editForm.enabled" type="checkbox" /> 启用</label>

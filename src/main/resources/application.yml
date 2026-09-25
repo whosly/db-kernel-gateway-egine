@@ -6,7 +6,7 @@ spring:
     name: db-kernel-gateway
   # Console control-plane DB (NOT the proxied business database).
   # Override via gateway.console.jdbc-url / username / password (see ConsoleDataSourceEnvironmentPostProcessor).
-  # Passwords sealed with gateway.console.secret-key-base64 when set (enc:v1:…); else lab plaintext + WARN.
+  # Passwords sealed with gateway.console.secret-key-base64 when set (enc:v1:…); else lab plaintext + WARN. require-secret-encryption=true rejects plaintext writes.
   datasource:
     url: jdbc:h2:file:${gateway.console.db-path:./data/gateway-console};MODE=PostgreSQL;AUTO_SERVER=FALSE;DB_CLOSE_DELAY=-1
     driver-class-name: org.h2.Driver
@@ -30,6 +30,9 @@ gateway:
     # 32-byte AES key Base64 for control-plane password/secret encryption. Empty = lab plaintext.
     # secret-key-base64: ${GATEWAY_CONSOLE_SECRET_KEY_BASE64:}
     secret-key-base64: ${GATEWAY_CONSOLE_SECRET_KEY_BASE64:}
+    # Production hardening: true → reject create/update that would store plaintext passwords (503).
+    # Default false keeps lab / docker-compose open. Pair with secret-key-base64.
+    require-secret-encryption: ${GATEWAY_CONSOLE_REQUIRE_SECRET_ENCRYPTION:false}
     # Optional API token for /console/api/** (Bearer or X-Console-Token). Blank = open (lab).
     api-token: ${GATEWAY_CONSOLE_API_TOKEN:}
     # Optional read-only token (GET/HEAD only). Writes still need api-token when set.

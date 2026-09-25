@@ -464,7 +464,7 @@ buildAdapter(instance)
 
 | 能力 | 本轮 | 说明 |
 |---|---|---|
-| 控制面密码信封加密 | ✅ | AES-GCM；主密钥 `gateway.console.secret-key-base64`（32 字节 AES，Base64） |
+| 控制面密码信封加密 | ✅ | AES-GCM；主密钥 `gateway.console.secret-key-base64`；可选 `require-secret-encryption` 拒绝明文写入 |
 | 可外置控制面 DB | ✅ | 保留 `db-path`；可选 `jdbc-url` / `username` / `password` |
 | 管控操作审计 | ✅ | H2 表 `gateway_console_audit` + SLF4J；可选列表 API |
 | 脱敏密钥管理 UI/API | ✅ | 状态查询 / 设置 / 清除；热重载；永不回传明文 |
@@ -484,15 +484,24 @@ gateway:
     # 32-byte AES key, Base64。占位示例（勿当真钥提交）：
     # secret-key-base64: ${GATEWAY_CONSOLE_SECRET_KEY_BASE64:}
     secret-key-base64: ""
+    # 生产加固：拒绝明文密码写入（默认 false，保持实验室兼容）
+    require-secret-encryption: false   # 或 ${GATEWAY_CONSOLE_REQUIRE_SECRET_ENCRYPTION:false}
 ```
 
 **存储形态**
 
 - 前缀：`enc:v1:` + Base64(`iv ‖ ciphertext ‖ tag`)，IV 12 字节，AES-GCM，tag 128 bit。
-- 写入：主密钥存在 → 明文密码加密后入库；主密钥缺失 → **实验室模式**允许明文写入并 **WARN 一次**。
-- 读取：有前缀 → 解密供运行时 bind；无前缀 → 视为遗留明文（兼容）；下次 update 时可顺带改写为密文。
-- API 仍只暴露 `passwordConfigured`，永不回传密码。
-- **加密写入缺主密钥**：返回清晰 **400/503**（消息说明需配置 `gateway.console.secret-key-base64`）。本实现：实验室模式仍允许明文落库（WARN），与「缺钥仍可 lab」一致；若运维强制加密，可另开开关（规划）。
+- 写入：主密钥存在 → 明文密码加密后入库；主密钥缺失且 **未**强制 → **实验室模式**允许明文写入并 **WARN 一次**。
+- 强制加密：`gateway.console.require-secret-encryption=true` 且主密钥缺失/无效 → 创建/更新会写入密码时返回清晰 **503**（`IllegalStateException`），**无静默明文**。空密码字段不触发。
+- 读取：有前缀 → 解密供运行时 bind；无前缀 → 视为遗留明文（兼容）；强制模式下遗留明文仍可读（一次性 WARN），但**新写入必须加密**。
+- API 仍只暴露 `passwordConfigured`，永不回传密码；状态见 `GET /console/api/security/secret-encryption`（及 masking-key / config summary 中的同名字段）。
+
+**遗留明文迁移**
+
+1. 配置 `GATEWAY_CONSOLE_SECRET_KEY_BASE64`（`openssl rand -base64 32`）。
+2. （建议）先保持 `require-secret-encryption=false`，编辑各管控台实例并保存（可重填密码；任意会 upsert 密码列的更新都会 `sealForStorage` 改写为 `enc:v1:`）。
+3. 再设 `require-secret-encryption=true`（或 env `GATEWAY_CONSOLE_REQUIRE_SECRET_ENCRYPTION=true`）。
+4. 脱敏密钥 PUT 始终要求主密钥（与本开关无关）。
 
 **组件**：`ConsoleSecretCipher`（控制面专用，与结果集 `MaskingCipher` 分离）。
 

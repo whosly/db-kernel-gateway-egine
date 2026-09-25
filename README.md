@@ -391,7 +391,7 @@ mvn -Pintegration-test test
 | 指标时序 | `GET /console/api/metrics/history?instanceId=&limit=`（进程内环；总览火花图） |
 | 风控 | `GET/PUT /console/api/risk-policy`（H2 覆盖 + 热挂；空=allow-all） |
 | 连接池 | 实例 `metrics`/`status` 含 `pool.{enabled,idleCount,maxIdle}` |
-| 控制面加密 | `gateway.console.secret-key-base64`（32 字节 AES Base64）→ 密码/密钥 `enc:v1:`；缺省实验室明文 |
+| 控制面加密 | `gateway.console.secret-key-base64`（32 字节 AES Base64）→ 密码/密钥 `enc:v1:`；缺省实验室明文；生产 `require-secret-encryption=true` 缺钥拒写（503） |
 | 可选 API Token | `gateway.console.api-token`（读写）；`gateway.console.read-token`（仅 GET）；`Authorization: Bearer` 或 `X-Console-Token` |
 | 设计 | [`docs/CONSOLE_ARCHITECTURE.md`](docs/CONSOLE_ARCHITECTURE.md) §11–§15 · [`CONSOLE_DESIGN.md`](docs/CONSOLE_DESIGN.md) |
 
