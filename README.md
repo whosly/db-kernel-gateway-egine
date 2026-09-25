@@ -456,6 +456,18 @@ docker compose up -d --build
 相关文件：`Dockerfile`（多阶段 Temurin 17，`mvn -DskipTests package`）、`docker-compose.yml`、`.env.example`、`src/main/resources/application-docker.yml`（及 `deploy/docker/` 副本）、`.dockerignore`。  
 镜像构建跳过测试以加速；**CI / 本地请跑 `mvn test`**。Lab 密码勿用于生产。
 
+### OIDC Keycloak 实验室（可选）
+
+```bash
+docker compose -f docker-compose.keycloak.yml up -d
+cp src/main/resources/application-oidc-keycloak-template.yml src/main/resources/application-dev.yml
+mvn spring-boot:run -Dspring-boot.run.profiles=dev
+# http://localhost:8080/console/login → 「使用 SSO 登录」
+```
+
+Keycloak：`http://localhost:8081/`（admin/admin）；realm 用户见 [`deploy/keycloak/README.md`](deploy/keycloak/README.md)。  
+一路径说明：[`docs/OPS.md`](docs/OPS.md)。**默认 `mvn test` 不需要 Docker。**
+
 ## 文档索引
 
 完整导航见 [`docs/README.md`](docs/README.md)。

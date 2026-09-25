@@ -54,6 +54,9 @@ class ConsoleOidcClientConfigTest {
                 .isEqualTo("http://localhost:8081/realms/gateway/protocol/openid-connect/token");
         assertThat(reg.getProviderDetails().getJwkSetUri())
                 .isEqualTo("http://localhost:8081/realms/gateway/protocol/openid-connect/certs");
+        assertThat(reg.getRedirectUri())
+                .isEqualTo("{baseUrl}/login/oauth2/code/{registrationId}");
+        assertThat(reg.getClientId()).isEqualTo("console-client");
     }
 
     @Test

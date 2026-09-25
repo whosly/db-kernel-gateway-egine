@@ -53,9 +53,16 @@ public class ConsoleOidcRoleMapper {
         }
         String path = claimPath != null && !claimPath.isBlank() ? claimPath.trim() : "roles";
         collectStrings(resolvePath(claims, path), out);
+        // Keycloak mappers sometimes emit a literal dotted key instead of nested maps
+        if (out.isEmpty() && path.contains(".")) {
+            collectStrings(claims.get(path), out);
+        }
         // Fallbacks commonly used by Keycloak / generic IdPs when configured claim is empty
         if (out.isEmpty() && !"realm_access.roles".equals(path)) {
             collectStrings(resolvePath(claims, "realm_access.roles"), out);
+            if (out.isEmpty()) {
+                collectStrings(claims.get("realm_access.roles"), out);
+            }
         }
         if (out.isEmpty() && !"groups".equals(path)) {
             collectStrings(claims.get("groups"), out);

@@ -2,6 +2,9 @@ package com.whosly.gateway.console.security;
 
 import com.whosly.gateway.console.security.ConsoleAuthProperties.AuthMode;
 import com.whosly.gateway.console.security.ConsoleAuthProperties.UserAccount;
+import jakarta.servlet.FilterChain;
+import jakarta.servlet.ServletException;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -34,7 +37,10 @@ import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.AuthenticationSuccessHandler;
 import org.springframework.security.web.authentication.logout.LogoutSuccessHandler;
 import org.springframework.security.web.csrf.CookieCsrfTokenRepository;
+import org.springframework.security.web.csrf.CsrfFilter;
+import org.springframework.security.web.csrf.CsrfToken;
 import org.springframework.security.web.csrf.CsrfTokenRequestAttributeHandler;
+import org.springframework.web.filter.OncePerRequestFilter;
 import org.springframework.security.web.util.matcher.AntPathRequestMatcher;
 
 import java.nio.charset.StandardCharsets;
@@ -202,6 +208,8 @@ public class ConsoleSecurityConfig {
                 .logout(logout -> logout
                         .logoutUrl("/console/api/auth/logout")
                         .logoutSuccessHandler(jsonLogoutSuccess(audit)));
+        // SPA: force CSRF cookie write (Spring Security 6 deferred token)
+        http.addFilterAfter(new CsrfCookieFilter(), CsrfFilter.class);
     }
 
     private void configureOidc(HttpSecurity http,
@@ -253,6 +261,8 @@ public class ConsoleSecurityConfig {
                         .invalidateHttpSession(true)
                         .deleteCookies("JSESSIONID")
                         .logoutSuccessHandler(jsonLogoutSuccess(audit)));
+        // SPA: force CSRF cookie write after OIDC redirect so logout/API POSTs work
+        http.addFilterAfter(new CsrfCookieFilter(), CsrfFilter.class);
     }
 
     static OAuth2UserService<OidcUserRequest, OidcUser> oidcUserService(ConsoleOidcRoleMapper roleMapper) {
@@ -314,4 +324,21 @@ public class ConsoleSecurityConfig {
         }
         return out.isEmpty() ? new String[]{ROLE_VIEWER} : out.toArray(String[]::new);
     }
+
+    /**
+     * Forces {@link CsrfToken} resolution so {@link CookieCsrfTokenRepository} writes
+     * the {@code XSRF-TOKEN} cookie on every request (needed for Vue SPA after OIDC redirect).
+     */
+    static final class CsrfCookieFilter extends OncePerRequestFilter {
+        @Override
+        protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response,
+                                        FilterChain filterChain) throws ServletException, java.io.IOException {
+            CsrfToken csrfToken = (CsrfToken) request.getAttribute(CsrfToken.class.getName());
+            if (csrfToken != null) {
+                csrfToken.getToken();
+            }
+            filterChain.doFilter(request, response);
+        }
+    }
+
 }

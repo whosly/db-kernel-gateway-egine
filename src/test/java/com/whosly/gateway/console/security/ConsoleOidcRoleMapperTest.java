@@ -64,6 +64,18 @@ class ConsoleOidcRoleMapperTest {
                 .containsExactly(ConsoleOidcRoleMapper.ROLE_VIEWER);
     }
 
+
+    @Test
+    void mapsLiteralDottedClaimKeyFromKeycloakMapper() {
+        Oidc oidc = new Oidc();
+        oidc.setRoleClaim("realm_access.roles");
+        ConsoleOidcRoleMapper mapper = new ConsoleOidcRoleMapper(oidc);
+        // Some Keycloak exports put a flat claim key "realm_access.roles"
+        Map<String, Object> claims = Map.of("realm_access.roles", List.of("CONSOLE_ADMIN"));
+        assertThat(names(mapper.mapAuthorities(claims)))
+                .contains(ConsoleOidcRoleMapper.ROLE_ADMIN);
+    }
+
     @Test
     void extractRoleValuesSupportsArray() {
         Set<String> roles = ConsoleOidcRoleMapper.extractRoleValues(

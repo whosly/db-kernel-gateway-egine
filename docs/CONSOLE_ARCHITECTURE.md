@@ -971,6 +971,10 @@ Keycloak 客户端：Confidential、Standard flow、Valid redirect URI
 `http://localhost:8080/login/oauth2/code/console`（端口随管控台）。  
 客户端角色 / realm role 与 `admin-role-values` 对齐。
 
+**一键实验室**：`docker compose -f docker-compose.keycloak.yml up -d`  
+（realm import 见 `deploy/keycloak/realm-gateway.json`；操作步骤见 [OPS.md](OPS.md)「OIDC Keycloak 一路径」）。  
+Session cookie：`SameSite=Lax`（模板已设）；OIDC 回跳后 CSRF cookie 由 `CsrfCookieFilter` 写出，供 SPA POST。
+
 ### 17.6 通用 issuer（非 Keycloak）
 
 优先填齐显式四 URI；或仅填 `issuer-uri` 走 discovery（运行环境须能访问 IdP）。  
@@ -987,9 +991,10 @@ Keycloak 客户端：Confidential、Standard flow、Valid redirect URI
 - [x] 角色映射可配置；缺省 VIEWER
 - [x] LoginView SSO 按钮；成功 → `/console/`；logout 清 OIDC Session + 审计
 - [x] OPS / README / STATUS 诚实：E2E 需真实 IdP
+- [x] Keycloak Compose 实验室（realm import + 一路径文档）；默认 mvn test 不依赖 Docker
 - [x] Prometheus / Oracle / 深度 TDS **本轮不做**
 
-**结论：OIDC 可作为可激活 SSO 模式上线配置；完整联邦验收另开 IdP 联调。**
+**结论：OIDC 可激活 + Keycloak 实验室 Compose/文档已就绪；真浏览器联调在有 Docker 的机器上按 OPS 一路径验收。**
 
 ---
 

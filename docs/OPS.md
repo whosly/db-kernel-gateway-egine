@@ -89,6 +89,35 @@
 | form | `mode=form` + `gateway.console.auth.users` | Session + Cookie CSRF；默认用户 admin/admin、viewer/viewer（若未配置 users） |
 | oidc | `mode=oidc` + `auth.oidc.issuer-uri` + client-id/secret | 可激活 OAuth2 Login；显式 URI 或 `provider=keycloak` 或 issuer discovery；**E2E 需真实 IdP** |
 
+### OIDC Keycloak 一路径（Mac Docker Desktop）
+
+> 本仓库执行环境可能 **无 Docker**；Compose 供你的 Mac / 有 Engine 的机器使用。  
+> 默认 `mvn test` **不**需要 Docker / 不启 Keycloak。
+
+```bash
+# 1) 启动 IdP（realm gateway + client gateway-console 自动 import）
+docker compose -f docker-compose.keycloak.yml up -d
+# 管理台 http://localhost:8081/  → admin / admin
+# 就绪后 realm：http://localhost:8081/realms/gateway/.well-known/openid-configuration
+
+# 2) 网关切到 OIDC（JDK 17；application-dev.yml 已 gitignore）
+cp src/main/resources/application-oidc-keycloak-template.yml \
+   src/main/resources/application-dev.yml
+# 已含：mode=oidc、provider=keycloak、issuer/client/secret、role-claim=realm_access.roles
+mvn spring-boot:run -Dspring-boot.run.profiles=dev
+
+# 3) 浏览器
+# 打开 http://localhost:8080/console/login
+# 点「使用 SSO 登录」→ Keycloak 登录
+#   console-admin / admin   → CONSOLE_ADMIN
+#   console-viewer / viewer → CONSOLE_VIEWER
+# 成功落到 /console/
+```
+
+相关文件：`docker-compose.keycloak.yml`、`deploy/keycloak/realm-gateway.json`、`deploy/keycloak/README.md`、`application-oidc-keycloak-template.yml`。
+
+**STATUS**：实验室 Compose + 文档就绪；真联调在有 Docker 的机器上。本环境若无 Docker，仅验证配置 / beans / 单测。
+
 ### OIDC / SSO（实验室）
 
 登录 URL：`/oauth2/authorization/console`（registration-id 可改）。成功回 `/console/`。  
