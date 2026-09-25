@@ -85,7 +85,35 @@
 | open | `gateway.console.auth.mode=open`（或未设且无 token） | lab 默认，API 开放 |
 | token | `mode=token` 或配置 `api-token`/`read-token` | Bearer / X-Console-Token；read-token≈CONSOLE_VIEWER |
 | form | `mode=form` + `gateway.console.auth.users` | Session + Cookie CSRF；默认用户 admin/admin、viewer/viewer（若未配置 users） |
-| oidc | `mode=oidc` + `auth.oidc.issuer-uri` + client-id/secret | OAuth2 登录路径已接线；需真实 IdP；未接 IdP 时勿宣称完整 SSO |
+| oidc | `mode=oidc` + `auth.oidc.issuer-uri` + client-id/secret | 可激活 OAuth2 Login；显式 URI 或 `provider=keycloak` 或 issuer discovery；**E2E 需真实 IdP** |
+
+### OIDC / SSO（实验室）
+
+登录 URL：`/oauth2/authorization/console`（registration-id 可改）。成功回 `/console/`。  
+`GET /console/api/auth/status`（或 `/mode`）在 `oidc=true` 时返回 `ssoLoginUrl`。
+
+**Keycloak 示例**（路径默认，无需 discovery）：
+
+```yaml
+gateway.console.auth.mode: oidc
+gateway.console.auth.oidc.provider: keycloak
+gateway.console.auth.oidc.issuer-uri: http://localhost:8081/realms/gateway
+gateway.console.auth.oidc.client-id: gateway-console
+gateway.console.auth.oidc.client-secret: change-me
+gateway.console.auth.oidc.role-claim: realm_access.roles
+```
+
+**通用 IdP**（推荐显式 endpoint，单元测试同此，无外网）：
+
+```yaml
+gateway.console.auth.oidc.issuer-uri: https://idp.example/realms/lab
+gateway.console.auth.oidc.authorization-uri: https://idp.example/.../auth
+gateway.console.auth.oidc.token-uri: https://idp.example/.../token
+gateway.console.auth.oidc.jwk-set-uri: https://idp.example/.../certs
+gateway.console.auth.oidc.user-info-uri: https://idp.example/.../userinfo
+```
+
+Redirect URI 登记：`{console-base}/login/oauth2/code/console`。角色 claim → `CONSOLE_ADMIN` / `CONSOLE_VIEWER`（缺省 VIEWER）。详见 [`CONSOLE_ARCHITECTURE.md`](CONSOLE_ARCHITECTURE.md) §17。
 
 ### 管控台 HTTPS（server.ssl，非 gateway.tls）
 

@@ -881,4 +881,111 @@ GET /console/api/audit/status
 > 协议无关：对象树 / 历史 / 片段均挂 **网关实例**；无 `/console/api/mysql/...` 品牌路径。  
 > SQL **执行**仍走 `InstanceSqlExecuteService` → 代理 `listenPort`（§15.6）；**元数据树**直连目标 JDBC（与 columns 同路径）。
 
-#
+### 16.1 能力
+
+| 能力 | 说明 |
+|---|---|
+| Schema catalog | JDBC DatabaseMetaData → schemas / tables；REST 挂实例 |
+| 多 Tab 编辑器 | Vue 本地 Tab + localStorage |
+| 历史 / 片段 | 控制面 H2 持久化 + REST |
+| 导出 | 结果集 CSV / JSON |
+| EXPLAIN | 按 dbType 包装（MySQL/PG/…）；执行仍经代理 |
+
+### 16.2 非目标（本轮明确不做）
+
+语句取消、可视化 Query Builder、ER 图、跨实例联合查询、品牌专用 IDE API。
+
+### 16.3 自检
+
+- [x] 对象树 / 历史 / 片段 / 导出 / EXPLAIN 包装落地
+- [x] 执行路径仍为代理 listenPort（RUNNING 门禁）
+- [x] `mvn test` + `npm run build` 绿
+
+---
+
+## 17. 管控台鉴权 · SSO（OIDC）与 HTTPS
+
+> **诚实边界**：`open` / `token` / `form` 可在无外部依赖下完整使用。  
+> `oidc` 是 **可激活** 的 Spring Security OAuth2 Login 模式（ClientRegistration + 角色映射 + 登录 UX），  
+> **E2E 登录仍需要真实 IdP**（Keycloak / 任意 OIDC）。单元测试用 **显式 endpoint URI**，不打外网 discovery。
+
+### 17.1 模式一览
+
+| mode | 说明 |
+|---|---|
+| `open` | lab 默认（无 token 时）；API 开放 |
+| `token` | Bearer / `X-Console-Token`；可选 read-token |
+| `form` | Session + Cookie CSRF；`gateway.console.auth.users` |
+| `oidc` | OAuth2 Authorization Code；registration id 默认 `console` |
+
+配置前缀：`gateway.console.auth.*`。角色：`CONSOLE_ADMIN` / `CONSOLE_VIEWER`（Spring `ROLE_*`）。
+
+### 17.2 OIDC ClientRegistration 解析顺序
+
+1. **显式覆盖**：任一 `authorization-uri` / `token-uri` / `jwk-set-uri` 有值 → 必须三者齐全（`user-info-uri` 可选）。**推荐 lab / CI**。
+2. **`provider=keycloak`** 且覆盖为空 → 在 `issuer-uri` 下拼 Keycloak 路径（`/protocol/openid-connect/{auth,token,certs,userinfo}`）。
+3. **否则** → `ClientRegistrations.fromIssuerLocation(issuer-uri)`（需网络；失败抛清晰 `IllegalStateException` 提示改用显式 URI）。
+
+登录入口：`/oauth2/authorization/{registration-id}`（默认 `/oauth2/authorization/console`）。  
+成功重定向：`/console/`。登出：`POST /console/api/auth/logout`（清 Session + 审计）。
+
+### 17.3 角色映射
+
+| 配置 | 默认 | 说明 |
+|---|---|---|
+| `oidc.role-claim` | `roles` | 支持点路径如 `realm_access.roles`；空时回退 `realm_access.roles` / `groups` / `roles` |
+| `oidc.admin-role-values` | `CONSOLE_ADMIN,admin,console-admin` | 命中 → ADMIN + VIEWER |
+| `oidc.viewer-role-values` | `CONSOLE_VIEWER,viewer,console-viewer` | 未命中 admin 时默认 VIEWER |
+
+### 17.4 API / UX
+
+| 项 | 说明 |
+|---|---|
+| `GET /console/api/auth/mode` 与 `/status` | `oidc=true` 时附带 `ssoLoginUrl`、`registrationId`、`oidcConfigured` |
+| LoginView | OIDC 模式展示「使用 SSO 登录」→ `ssoLoginUrl` |
+| 审计 | `auth.login` / `auth.login.failure` / `auth.logout` |
+
+### 17.5 Keycloak 实验室示例
+
+```yaml
+gateway:
+  console:
+    auth:
+      mode: oidc
+      oidc:
+        provider: keycloak
+        issuer-uri: http://localhost:8081/realms/gateway
+        client-id: gateway-console
+        client-secret: change-me
+        # 或显式（无 discovery / 无 provider 猜测）：
+        # authorization-uri: http://localhost:8081/realms/gateway/protocol/openid-connect/auth
+        # token-uri:        http://localhost:8081/realms/gateway/protocol/openid-connect/token
+        # jwk-set-uri:      http://localhost:8081/realms/gateway/protocol/openid-connect/certs
+        # user-info-uri:    http://localhost:8081/realms/gateway/protocol/openid-connect/userinfo
+        role-claim: realm_access.roles
+        admin-role-values: CONSOLE_ADMIN,admin
+```
+
+Keycloak 客户端：Confidential、Standard flow、Valid redirect URI  
+`http://localhost:8080/login/oauth2/code/console`（端口随管控台）。  
+客户端角色 / realm role 与 `admin-role-values` 对齐。
+
+### 17.6 通用 issuer（非 Keycloak）
+
+优先填齐显式四 URI；或仅填 `issuer-uri` 走 discovery（运行环境须能访问 IdP）。  
+**不要**依赖 Keycloak 路径猜测。
+
+### 17.7 HTTPS（管控台，非代理 TLS）
+
+`server.ssl.*` + `application-console-https-template.yml`（见 [OPS.md](OPS.md)）。  
+协议代理客户端 TLS 仍用 `gateway.tls.*`，与管控台 HTTPS 无关。
+
+### 17.8 自检
+
+- [x] 显式 URI / keycloak / discovery 三路径；单测无外网
+- [x] 角色映射可配置；缺省 VIEWER
+- [x] LoginView SSO 按钮；成功 → `/console/`；logout 清 OIDC Session + 审计
+- [x] OPS / README / STATUS 诚实：E2E 需真实 IdP
+- [x] Prometheus / Oracle / 深度 TDS **本轮不做**
+
+**结论：OIDC 可作为可激活 SSO 模式上线配置；完整联邦验收另开 IdP 联调。**

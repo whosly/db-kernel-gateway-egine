@@ -5,6 +5,7 @@ import com.whosly.gateway.console.security.ConsoleAuthProperties.UserAccount;
 import jakarta.servlet.http.HttpServletResponse;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
@@ -15,7 +16,6 @@ import org.springframework.http.MediaType;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.ProviderManager;
 import org.springframework.security.authentication.dao.DaoAuthenticationProvider;
-import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.method.configuration.EnableMethodSecurity;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
@@ -24,14 +24,22 @@ import org.springframework.security.core.userdetails.User;
 import org.springframework.security.core.userdetails.UserDetailsService;
 import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
 import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.security.oauth2.client.oidc.userinfo.OidcUserRequest;
+import org.springframework.security.oauth2.client.oidc.userinfo.OidcUserService;
+import org.springframework.security.oauth2.client.userinfo.OAuth2UserService;
+import org.springframework.security.oauth2.core.oidc.user.DefaultOidcUser;
+import org.springframework.security.oauth2.core.oidc.user.OidcUser;
 import org.springframework.security.provisioning.InMemoryUserDetailsManager;
 import org.springframework.security.web.SecurityFilterChain;
+import org.springframework.security.web.authentication.AuthenticationSuccessHandler;
+import org.springframework.security.web.authentication.logout.LogoutSuccessHandler;
 import org.springframework.security.web.csrf.CookieCsrfTokenRepository;
 import org.springframework.security.web.csrf.CsrfTokenRequestAttributeHandler;
 import org.springframework.security.web.util.matcher.AntPathRequestMatcher;
 
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
 
 /**
@@ -124,7 +132,11 @@ public class ConsoleSecurityConfig {
 
     @Bean
     @Order(1)
-    public SecurityFilterChain consoleSecurityFilterChain(HttpSecurity http, AuthMode consoleAuthMode)
+    public SecurityFilterChain consoleSecurityFilterChain(
+            HttpSecurity http,
+            AuthMode consoleAuthMode,
+            ObjectProvider<ConsoleOidcRoleMapper> oidcRoleMapper,
+            ObjectProvider<ConsoleAuditService> auditService)
             throws Exception {
         http.securityMatcher("/console/**", "/login/oauth2/**", "/oauth2/**");
 
@@ -132,13 +144,13 @@ public class ConsoleSecurityConfig {
             case OPEN, TOKEN -> http.csrf(csrf -> csrf.disable())
                     .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                     .authorizeHttpRequests(auth -> auth.anyRequest().permitAll());
-            case FORM -> configureForm(http);
+            case FORM -> configureForm(http, auditService.getIfAvailable());
             case OIDC -> {
                 if (authProperties.getOidc().isConfigured()) {
-                    configureOidc(http);
+                    configureOidc(http, oidcRoleMapper.getIfAvailable(), auditService.getIfAvailable());
                 } else {
                     log.warn("OIDC not fully configured — applying form-style chain as fallback");
-                    configureForm(http);
+                    configureForm(http, auditService.getIfAvailable());
                 }
             }
         }
@@ -162,7 +174,7 @@ public class ConsoleSecurityConfig {
         return http.build();
     }
 
-    private void configureForm(HttpSecurity http) throws Exception {
+    private void configureForm(HttpSecurity http, ConsoleAuditService audit) throws Exception {
         CookieCsrfTokenRepository repo = CookieCsrfTokenRepository.withHttpOnlyFalse();
         repo.setCookiePath("/");
         CsrfTokenRequestAttributeHandler requestHandler = new CsrfTokenRequestAttributeHandler();
@@ -176,7 +188,7 @@ public class ConsoleSecurityConfig {
                 .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.IF_REQUIRED))
                 .authorizeHttpRequests(auth -> auth
                         .requestMatchers("/console/api/auth/login", "/console/api/auth/me",
-                                "/console/api/auth/mode")
+                                "/console/api/auth/mode", "/console/api/auth/status")
                         .permitAll()
                         .requestMatchers(HttpMethod.GET, "/console/api/**")
                         .hasAnyRole(ROLE_ADMIN, ROLE_VIEWER)
@@ -189,31 +201,87 @@ public class ConsoleSecurityConfig {
                 .httpBasic(basic -> basic.disable())
                 .logout(logout -> logout
                         .logoutUrl("/console/api/auth/logout")
-                        .logoutSuccessHandler((req, res, a) -> writeJson(res, HttpServletResponse.SC_OK,
-                                "{\"ok\":true,\"message\":\"logged out\"}")));
+                        .logoutSuccessHandler(jsonLogoutSuccess(audit)));
     }
 
-    private void configureOidc(HttpSecurity http) throws Exception {
+    private void configureOidc(HttpSecurity http,
+                               ConsoleOidcRoleMapper roleMapper,
+                               ConsoleAuditService audit) throws Exception {
         CookieCsrfTokenRepository repo = CookieCsrfTokenRepository.withHttpOnlyFalse();
         repo.setCookiePath("/");
         CsrfTokenRequestAttributeHandler requestHandler = new CsrfTokenRequestAttributeHandler();
         requestHandler.setCsrfRequestAttributeName(null);
 
+        OAuth2UserService<OidcUserRequest, OidcUser> oidcUserService = oidcUserService(roleMapper);
+        AuthenticationSuccessHandler success = (req, res, authentication) -> {
+            if (audit != null && authentication != null) {
+                audit.record("auth.login", null,
+                        ConsoleAuditService.detail("username", authentication.getName(),
+                                "mode", "oidc", "ok", true));
+            }
+            res.sendRedirect("/console/");
+        };
+
         http.csrf(csrf -> csrf.csrfTokenRepository(repo).csrfTokenRequestHandler(requestHandler))
                 .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.IF_REQUIRED))
                 .authorizeHttpRequests(auth -> auth
-                        .requestMatchers("/console/api/auth/**", "/oauth2/**", "/login/oauth2/**")
+                        .requestMatchers("/console/api/auth/mode", "/console/api/auth/status",
+                                "/console/api/auth/me", "/oauth2/**", "/login/oauth2/**")
                         .permitAll()
                         .requestMatchers(HttpMethod.GET, "/console", "/console/", "/console/**")
                         .permitAll()
+                        .requestMatchers(HttpMethod.GET, "/console/api/**")
+                        .hasAnyRole(ROLE_ADMIN, ROLE_VIEWER)
                         .requestMatchers("/console/api/**")
-                        .authenticated()
+                        .hasRole(ROLE_ADMIN)
                         .anyRequest().permitAll())
-                .oauth2Login(Customizer.withDefaults())
+                .oauth2Login(oauth -> oauth
+                        .userInfoEndpoint(userInfo -> userInfo.oidcUserService(oidcUserService))
+                        .successHandler(success)
+                        .failureHandler((req, res, ex) -> {
+                            log.warn("OIDC login failed: {}", ex.getMessage());
+                            if (audit != null) {
+                                audit.record("auth.login.failure", null,
+                                        ConsoleAuditService.detail("mode", "oidc", "ok", false,
+                                                "message", ex.getMessage()));
+                            }
+                            res.sendRedirect("/console/login?error=oidc");
+                        }))
                 .logout(logout -> logout
                         .logoutUrl("/console/api/auth/logout")
-                        .logoutSuccessHandler((req, res, a) -> writeJson(res, HttpServletResponse.SC_OK,
-                                "{\"ok\":true,\"message\":\"logged out\"}")));
+                        .clearAuthentication(true)
+                        .invalidateHttpSession(true)
+                        .deleteCookies("JSESSIONID")
+                        .logoutSuccessHandler(jsonLogoutSuccess(audit)));
+    }
+
+    static OAuth2UserService<OidcUserRequest, OidcUser> oidcUserService(ConsoleOidcRoleMapper roleMapper) {
+        OidcUserService delegate = new OidcUserService();
+        return userRequest -> {
+            OidcUser user = delegate.loadUser(userRequest);
+            if (roleMapper == null) {
+                return user;
+            }
+            Collection<? extends org.springframework.security.core.GrantedAuthority> mapped =
+                    roleMapper.mapAuthorities(user.getClaims());
+            String userNameAttr = userRequest.getClientRegistration().getProviderDetails()
+                    .getUserInfoEndpoint().getUserNameAttributeName();
+            if (userNameAttr == null || userNameAttr.isBlank()) {
+                userNameAttr = "sub";
+            }
+            return new DefaultOidcUser(mapped, user.getIdToken(), user.getUserInfo(), userNameAttr);
+        };
+    }
+
+    private static LogoutSuccessHandler jsonLogoutSuccess(ConsoleAuditService audit) {
+        return (req, res, authentication) -> {
+            if (audit != null) {
+                String user = authentication != null ? authentication.getName() : null;
+                audit.record("auth.logout", null,
+                        ConsoleAuditService.detail("username", user, "ok", true));
+            }
+            writeJson(res, HttpServletResponse.SC_OK, "{\"ok\":true,\"message\":\"logged out\"}");
+        };
     }
 
     private static void writeJson(HttpServletResponse res, int status, String json) throws java.io.IOException {

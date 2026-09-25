@@ -3,7 +3,10 @@ package com.whosly.gateway.console.security;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
+import java.util.Locale;
+import java.util.stream.Collectors;
 
 /**
  * Console authentication modes: open | token | form | oidc.
@@ -42,7 +45,7 @@ public class ConsoleAuthProperties {
     }
 
     public AuthMode resolvedMode(String apiToken, String readToken) {
-        String m = mode != null ? mode.trim().toLowerCase() : "";
+        String m = mode != null ? mode.trim().toLowerCase(Locale.ROOT) : "";
         if (!m.isEmpty()) {
             return AuthMode.from(m);
         }
@@ -81,12 +84,48 @@ public class ConsoleAuthProperties {
         public void setRoles(String roles) { this.roles = roles; }
     }
 
+    /**
+     * OIDC / OAuth2 client settings for console SSO.
+     *
+     * <p>Endpoint resolution order:
+     * <ol>
+     *   <li>If any of authorization-uri / token-uri / jwk-set-uri is set → use explicit URIs
+     *       (user-info-uri optional).</li>
+     *   <li>Else if {@code provider=keycloak} → Keycloak path defaults under issuer-uri.</li>
+     *   <li>Else → Spring {@code ClientRegistrations.fromIssuerLocation(issuer-uri)}
+     *       (requires network; fails clearly if discovery unreachable).</li>
+     * </ol>
+     * Unit tests should set explicit URIs (no network).
+     */
     public static class Oidc {
+        /** Spring registration id → login URL {@code /oauth2/authorization/{id}}. */
+        private String registrationId = "console";
         private String issuerUri = "";
         private String clientId = "";
         private String clientSecret = "";
         private String scopes = "openid,profile,email";
+        /** Optional: keycloak | generic (blank). */
+        private String provider = "";
+        private String authorizationUri = "";
+        private String tokenUri = "";
+        private String jwkSetUri = "";
+        private String userInfoUri = "";
+        private String userNameAttribute = "sub";
+        /**
+         * Claim holding role/group values. Supports dotted paths for nested maps,
+         * e.g. {@code realm_access.roles}, {@code groups}, {@code roles}.
+         */
+        private String roleClaim = "roles";
+        /** Comma-separated IdP values that map to CONSOLE_ADMIN. */
+        private String adminRoleValues = "CONSOLE_ADMIN,admin,console-admin";
+        /** Comma-separated IdP values that map to CONSOLE_VIEWER. */
+        private String viewerRoleValues = "CONSOLE_VIEWER,viewer,console-viewer";
 
+        public String getRegistrationId() { return registrationId; }
+        public void setRegistrationId(String registrationId) {
+            this.registrationId = registrationId != null && !registrationId.isBlank()
+                    ? registrationId.trim() : "console";
+        }
         public String getIssuerUri() { return issuerUri; }
         public void setIssuerUri(String issuerUri) { this.issuerUri = issuerUri; }
         public String getClientId() { return clientId; }
@@ -95,10 +134,69 @@ public class ConsoleAuthProperties {
         public void setClientSecret(String clientSecret) { this.clientSecret = clientSecret; }
         public String getScopes() { return scopes; }
         public void setScopes(String scopes) { this.scopes = scopes; }
+        public String getProvider() { return provider; }
+        public void setProvider(String provider) { this.provider = provider; }
+        public String getAuthorizationUri() { return authorizationUri; }
+        public void setAuthorizationUri(String authorizationUri) { this.authorizationUri = authorizationUri; }
+        public String getTokenUri() { return tokenUri; }
+        public void setTokenUri(String tokenUri) { this.tokenUri = tokenUri; }
+        public String getJwkSetUri() { return jwkSetUri; }
+        public void setJwkSetUri(String jwkSetUri) { this.jwkSetUri = jwkSetUri; }
+        public String getUserInfoUri() { return userInfoUri; }
+        public void setUserInfoUri(String userInfoUri) { this.userInfoUri = userInfoUri; }
+        public String getUserNameAttribute() { return userNameAttribute; }
+        public void setUserNameAttribute(String userNameAttribute) {
+            this.userNameAttribute = userNameAttribute != null && !userNameAttribute.isBlank()
+                    ? userNameAttribute.trim() : "sub";
+        }
+        public String getRoleClaim() { return roleClaim; }
+        public void setRoleClaim(String roleClaim) { this.roleClaim = roleClaim; }
+        public String getAdminRoleValues() { return adminRoleValues; }
+        public void setAdminRoleValues(String adminRoleValues) { this.adminRoleValues = adminRoleValues; }
+        public String getViewerRoleValues() { return viewerRoleValues; }
+        public void setViewerRoleValues(String viewerRoleValues) { this.viewerRoleValues = viewerRoleValues; }
 
         public boolean isConfigured() {
             return issuerUri != null && !issuerUri.isBlank()
                     && clientId != null && !clientId.isBlank();
+        }
+
+        /** True when at least one endpoint override is present. */
+        public boolean hasExplicitEndpoints() {
+            return hasText(authorizationUri) || hasText(tokenUri) || hasText(jwkSetUri);
+        }
+
+        public boolean isKeycloakProvider() {
+            return provider != null && "keycloak".equalsIgnoreCase(provider.trim());
+        }
+
+        public List<String> adminRoleValueList() {
+            return splitCsv(adminRoleValues);
+        }
+
+        public List<String> viewerRoleValueList() {
+            return splitCsv(viewerRoleValues);
+        }
+
+        public List<String> scopeList() {
+            if (scopes == null || scopes.isBlank()) {
+                return List.of("openid", "profile", "email");
+            }
+            return splitCsv(scopes);
+        }
+
+        private static List<String> splitCsv(String raw) {
+            if (raw == null || raw.isBlank()) {
+                return List.of();
+            }
+            return Arrays.stream(raw.split("[,\\s]+"))
+                    .map(String::trim)
+                    .filter(s -> !s.isEmpty())
+                    .collect(Collectors.toList());
+        }
+
+        private static boolean hasText(String s) {
+            return s != null && !s.isBlank();
         }
     }
 }

@@ -327,6 +327,9 @@ export interface AuthModeResponse {
   oidc?: boolean
   token?: boolean
   open?: boolean
+  registrationId?: string
+  ssoLoginUrl?: string
+  oidcConfigured?: boolean
 }
 
 export interface AuthMeResponse {

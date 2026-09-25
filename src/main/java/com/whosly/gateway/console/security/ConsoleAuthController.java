@@ -26,6 +26,7 @@ import java.util.stream.Collectors;
 
 /**
  * Form-login JSON endpoints for the Vue SPA. Token/open modes still expose /auth/me + /auth/mode.
+ * OIDC SSO entry is {@code /oauth2/authorization/{registrationId}} (default registrationId=console).
  */
 @RestController
 @RequestMapping("/console/api/auth")
@@ -34,16 +35,19 @@ public class ConsoleAuthController {
     private final AuthMode authMode;
     private final AuthenticationManager authenticationManager;
     private final ConsoleAuditService auditService;
+    private final ConsoleAuthProperties authProperties;
 
     public ConsoleAuthController(AuthMode authMode,
                                  AuthenticationManager consoleAuthenticationManager,
+                                 ConsoleAuthProperties authProperties,
                                  @Autowired(required = false) ConsoleAuditService auditService) {
         this.authMode = authMode;
         this.authenticationManager = consoleAuthenticationManager;
+        this.authProperties = authProperties;
         this.auditService = auditService;
     }
 
-    @GetMapping("/mode")
+    @GetMapping({"/mode", "/status"})
     public Map<String, Object> mode() {
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("mode", authMode.name().toLowerCase());
@@ -51,6 +55,12 @@ public class ConsoleAuthController {
         body.put("oidc", authMode == AuthMode.OIDC);
         body.put("token", authMode == AuthMode.TOKEN);
         body.put("open", authMode == AuthMode.OPEN);
+        if (authMode == AuthMode.OIDC) {
+            String regId = authProperties.getOidc().getRegistrationId();
+            body.put("registrationId", regId);
+            body.put("ssoLoginUrl", "/oauth2/authorization/" + regId);
+            body.put("oidcConfigured", authProperties.getOidc().isConfigured());
+        }
         return body;
     }
 

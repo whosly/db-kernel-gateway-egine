@@ -47,10 +47,22 @@ gateway:
       #     password: viewer
       #     roles: CONSOLE_VIEWER
       oidc:
+        registration-id: console
         issuer-uri: ${GATEWAY_CONSOLE_OIDC_ISSUER:}
         client-id: ${GATEWAY_CONSOLE_OIDC_CLIENT_ID:}
         client-secret: ${GATEWAY_CONSOLE_OIDC_CLIENT_SECRET:}
         scopes: openid,profile,email
+        # keycloak | blank. Keycloak path defaults only when provider=keycloak AND endpoint URIs blank.
+        provider: ${GATEWAY_CONSOLE_OIDC_PROVIDER:}
+        # Prefer explicit URIs for lab/tests (no network discovery). If any set, all of auth/token/jwk required.
+        authorization-uri: ${GATEWAY_CONSOLE_OIDC_AUTH_URI:}
+        token-uri: ${GATEWAY_CONSOLE_OIDC_TOKEN_URI:}
+        jwk-set-uri: ${GATEWAY_CONSOLE_OIDC_JWK_URI:}
+        user-info-uri: ${GATEWAY_CONSOLE_OIDC_USERINFO_URI:}
+        user-name-attribute: sub
+        role-claim: ${GATEWAY_CONSOLE_OIDC_ROLE_CLAIM:roles}
+        admin-role-values: CONSOLE_ADMIN,admin,console-admin
+        viewer-role-values: CONSOLE_VIEWER,viewer,console-viewer
     metrics-history:
       interval-seconds: ${GATEWAY_CONSOLE_METRICS_INTERVAL:5}
       capacity: ${GATEWAY_CONSOLE_METRICS_CAPACITY:120}
