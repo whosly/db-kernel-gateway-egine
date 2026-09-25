@@ -83,13 +83,13 @@ class ConsoleInstanceLifecycleApiTest {
     @Test
     void listFiltersByStatusDbTypeAndQ() {
         Map<String, Object> byStatus = console.listInstances("RUNNING", null, null);
-        assertThat(byStatus.get("count")).isEqualTo(1);
+        assertThat(byStatus.get("total")).isEqualTo(1);
         Map<String, Object> byType = console.listInstances(null, "postgresql", null);
-        assertThat(byType.get("count")).isEqualTo(1);
+        assertThat(byType.get("total")).isEqualTo(1);
         Map<String, Object> byQ = console.listInstances(null, null, "10.0.0");
-        assertThat(byQ.get("count")).isEqualTo(1);
+        assertThat(byQ.get("total")).isEqualTo(1);
         Map<String, Object> byName = console.listInstances(null, null, "运行");
-        assertThat(byName.get("count")).isEqualTo(1);
+        assertThat(byName.get("total")).isEqualTo(1);
     }
 
     @Test

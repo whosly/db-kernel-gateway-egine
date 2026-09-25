@@ -110,7 +110,7 @@ class ConsoleApiMaskingRulesTest {
             String ruleId = String.valueOf(created.get("id"));
 
             Map<String, Object> list = console.listMaskingRules(instanceId);
-            assertThat(list.get("count")).isEqualTo(1);
+            assertThat(list.get("total")).isEqualTo(1);
 
             AbstractProtocolAdapter adapter =
                     (AbstractProtocolAdapter) runtime.find(instanceId).orElseThrow().adapter();
@@ -132,7 +132,7 @@ class ConsoleApiMaskingRulesTest {
 
             Map<String, Object> deleted = console.deleteMaskingRule(instanceId, ruleId);
             assertThat(deleted.get("ok")).isEqualTo(true);
-            assertThat(console.listMaskingRules(instanceId).get("count")).isEqualTo(0);
+            assertThat(console.listMaskingRules(instanceId).get("total")).isEqualTo(0);
             assertThat(adapter.getMaskingEngine().isActive()).isFalse();
         } finally {
             runtime.destroy();

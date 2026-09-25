@@ -10,5 +10,5 @@
 cd console-ui && npm ci && npm run dev
 ```
 
-Vite 将 `/console/api` 代理到 `http://127.0.0.1:8080`；后端另开
+Vite 将 `/console/api`（含 `/console/api/v1`）代理到 `http://127.0.0.1:8080`；后端另开
 `mvn spring-boot:run`。

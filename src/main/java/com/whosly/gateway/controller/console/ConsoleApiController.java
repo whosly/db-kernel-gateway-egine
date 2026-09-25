@@ -122,8 +122,8 @@ public class ConsoleApiController {
     }
 
     public Map<String, Object> supportedDatabases() {
-        Map<String, Object> body = new LinkedHashMap<>();
-        body.put("databases", catalog.listAll());
+        var items = catalog.listAll();
+        Map<String, Object> body = ConsoleApiModels.listEnvelope(items);
         body.put("note", "类型目录（可插拔适配器注册表），与实例注册表分离");
         return body;
     }
@@ -154,15 +154,13 @@ public class ConsoleApiController {
                             || containsIgnore(i.targetHost(), needle)
             ).collect(Collectors.toList());
         }
-        Map<String, Object> body = new LinkedHashMap<>();
-        body.put("instances", instances);
-        body.put("count", instances.size());
-        body.put("byStatus", instances.stream()
+        Map<String, Object> facets = new LinkedHashMap<>();
+        facets.put("byStatus", instances.stream()
                 .collect(Collectors.groupingBy(i -> i.status().name(), Collectors.counting())));
-        if (status != null && !status.isBlank()) body.put("statusFilter", status.trim());
-        if (dbType != null && !dbType.isBlank()) body.put("dbTypeFilter", dbType.trim());
-        if (q != null && !q.isBlank()) body.put("q", q.trim());
-        return body;
+        if (status != null && !status.isBlank()) facets.put("statusFilter", status.trim());
+        if (dbType != null && !dbType.isBlank()) facets.put("dbTypeFilter", dbType.trim());
+        if (q != null && !q.isBlank()) facets.put("q", q.trim());
+        return ConsoleApiModels.listEnvelope(instances, facets);
     }
 
     private static boolean containsIgnore(String value, String needle) {
@@ -182,16 +180,24 @@ public class ConsoleApiController {
         return instanceRegistry.metricsOf(id);
     }
 
-    public Map<String, Object> startInstance(String id) {
+    public GatewayInstance startInstance(String id) {
         Map<String, Object> result = instanceRegistry.start(id);
-        audit("instance.start", id, ConsoleAuditService.detail("ok", result.get("ok")));
-        return result;
+        boolean ok = Boolean.TRUE.equals(result.get("ok"));
+        audit("instance.start", id, ConsoleAuditService.detail("ok", ok));
+        if (!ok) {
+            throw new IllegalStateException(String.valueOf(result.getOrDefault("message", "start failed")));
+        }
+        return getInstance(id);
     }
 
-    public Map<String, Object> stopInstance(String id) {
+    public GatewayInstance stopInstance(String id) {
         Map<String, Object> result = instanceRegistry.stop(id);
-        audit("instance.stop", id, ConsoleAuditService.detail("ok", result.get("ok")));
-        return result;
+        boolean ok = Boolean.TRUE.equals(result.get("ok"));
+        audit("instance.stop", id, ConsoleAuditService.detail("ok", ok));
+        if (!ok) {
+            throw new IllegalStateException(String.valueOf(result.getOrDefault("message", "stop failed")));
+        }
+        return getInstance(id);
     }
 
     public GatewayInstance createInstance(CreateInstanceBody body) {
@@ -473,10 +479,9 @@ public class ConsoleApiController {
 
     public Map<String, Object> listMaskingRules(String id) {
         List<MaskingRuleRecord> rules = instanceRegistry.listMaskingRules(id);
-        Map<String, Object> body = new LinkedHashMap<>();
+        Map<String, Object> body = ConsoleApiModels.listEnvelope(
+                rules.stream().map(ConsoleApiController::toMaskingRuleDto).toList());
         body.put("instanceId", id);
-        body.put("rules", rules.stream().map(ConsoleApiController::toMaskingRuleDto).toList());
-        body.put("count", rules.size());
         return body;
     }
 
@@ -510,8 +515,8 @@ public class ConsoleApiController {
         audit("masking-rule.replace", id, ConsoleAuditService.detail("count", saved.size()));
         Map<String, Object> resp = new LinkedHashMap<>();
         resp.put("instanceId", id);
-        resp.put("rules", saved.stream().map(ConsoleApiController::toMaskingRuleDto).toList());
-        resp.put("count", saved.size());
+        resp.put("items", saved.stream().map(ConsoleApiController::toMaskingRuleDto).toList());
+        resp.put("total", saved.size());
         return resp;
     }
 
@@ -538,8 +543,8 @@ public class ConsoleApiController {
         }
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("instanceId", instance.id());
-        body.put("sessions", sessions);
-        body.put("count", sessions.size());
+        body.put("items", sessions);
+        body.put("total", sessions.size());
         return body;
     }
 
@@ -621,8 +626,8 @@ public class ConsoleApiController {
         }
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("instanceId", id);
-        body.put("entries", entries);
-        body.put("count", entries.size());
+        body.put("items", entries);
+        body.put("total", entries.size());
         body.put("capacity", recentTrafficRing != null ? recentTrafficRing.capacity() : 0);
         body.put("note", "内存环，重启丢失；不能替代 audit spool");
         return body;
@@ -669,8 +674,8 @@ public class ConsoleApiController {
             entries.add(e);
         }
         Map<String, Object> body = new LinkedHashMap<>();
-        body.put("entries", entries);
-        body.put("count", entries.size());
+        body.put("items", entries);
+        body.put("total", entries.size());
         body.put("cap", ConsoleSqlHistoryStore.MAX_ROWS);
         return body;
     }
@@ -701,8 +706,8 @@ public class ConsoleApiController {
             entries.add(snippetToMap(r));
         }
         Map<String, Object> body = new LinkedHashMap<>();
-        body.put("snippets", entries);
-        body.put("count", entries.size());
+        body.put("items", entries);
+        body.put("total", entries.size());
         return body;
     }
 
@@ -788,13 +793,13 @@ public class ConsoleApiController {
                                           String action) {
         if (auditService == null) {
             Map<String, Object> empty = new LinkedHashMap<>();
-            empty.put("entries", List.of());
-            empty.put("count", 0);
+            empty.put("items", List.of());
+            empty.put("total", 0);
             return empty;
         }
         List<ConsoleAuditRecord> rows = auditService.list(limit, action);
         Map<String, Object> body = new LinkedHashMap<>();
-        body.put("entries", rows.stream().map(r -> {
+        body.put("items", rows.stream().map(r -> {
             Map<String, Object> m = new LinkedHashMap<>();
             m.put("id", r.id());
             m.put("at", r.at() != null ? r.at().toString() : null);
@@ -860,7 +865,7 @@ public class ConsoleApiController {
         if (metricsHistorySampler == null) {
             body.put("intervalSeconds", 5);
             body.put("points", List.of());
-            body.put("count", 0);
+            body.put("total", 0);
             body.put("note", "采样器未启用");
             return body;
         }

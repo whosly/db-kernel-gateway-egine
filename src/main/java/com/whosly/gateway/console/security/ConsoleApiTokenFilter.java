@@ -63,7 +63,7 @@ public class ConsoleApiTokenFilter extends OncePerRequestFilter {
             return true;
         }
         // auth discovery endpoints stay open even in token mode
-        return path.startsWith("/console/api/auth/");
+        return path.startsWith("/console/api/v1/auth/");
     }
 
     @Override
@@ -92,7 +92,7 @@ public class ConsoleApiTokenFilter extends OncePerRequestFilter {
         if (!ok) {
             response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);
             response.setCharacterEncoding(StandardCharsets.UTF_8.name());
-            response.setContentType(MediaType.APPLICATION_JSON_VALUE);
+            response.setContentType("application/problem+json");
             response.getWriter().write(
                     "{\"ok\":false,\"message\":\"Unauthorized: missing or invalid console API token\"}");
             return;

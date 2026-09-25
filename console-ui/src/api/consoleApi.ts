@@ -1,11 +1,11 @@
 import { apiDelete, apiGet, apiPost, apiPut } from './client'
 import type {
+  GatewayInstance,
   ActionResult,
   BulkResult,
   CatalogEntry,
   CloneInstancePayload,
   CreateInstancePayload,
-  GatewayInstance,
   ImportInstancesPayload,
   InstancesResponse,
   MaskingRule,
@@ -45,11 +45,11 @@ export function getInstanceMetrics(id: string) {
 }
 
 export function startInstance(id: string) {
-  return apiPost<ActionResult>(`/instances/${encodeURIComponent(id)}/start`)
+  return apiPost<GatewayInstance>(`/instances/${encodeURIComponent(id)}/actions/start`)
 }
 
 export function stopInstance(id: string) {
-  return apiPost<ActionResult>(`/instances/${encodeURIComponent(id)}/stop`)
+  return apiPost<GatewayInstance>(`/instances/${encodeURIComponent(id)}/actions/stop`)
 }
 
 export function createInstance(payload: CreateInstancePayload) {
@@ -65,7 +65,7 @@ export function updateInstance(id: string, payload: UpdateInstancePayload) {
 }
 
 export function cloneInstance(id: string, payload: CloneInstancePayload = {}) {
-  return apiPost<GatewayInstance>(`/instances/${encodeURIComponent(id)}/clone`, payload)
+  return apiPost<GatewayInstance>(`/instances/${encodeURIComponent(id)}/actions/clone`, payload)
 }
 
 export function importInstances(payload: ImportInstancesPayload) {
@@ -80,7 +80,7 @@ export function importInstances(payload: ImportInstancesPayload) {
 }
 
 export function bulkInstances(action: 'start' | 'stop', ids: string[]) {
-  return apiPost<BulkResult>('/instances/bulk', { action, ids })
+  return apiPost<BulkResult>('/instances/bulk-actions', { action, ids })
 }
 
 export function executeSql(
@@ -89,7 +89,7 @@ export function executeSql(
   init?: { signal?: AbortSignal },
 ) {
   return apiPost<SqlExecuteResult>(
-    `/instances/${encodeURIComponent(instanceId)}/sql/execute`,
+    `/instances/${encodeURIComponent(instanceId)}/sql/executions`,
     payload,
     init,
   )
@@ -97,7 +97,7 @@ export function executeSql(
 
 export function cancelSql(instanceId: string, executionId: string) {
   return apiPost<SqlCancelResult>(
-    `/instances/${encodeURIComponent(instanceId)}/sql/cancel`,
+    `/instances/${encodeURIComponent(instanceId)}/sql/executions/cancel`,
     { executionId },
   )
 }
@@ -110,11 +110,11 @@ export function cancelSqlExecution(executionId: string) {
 
 
 export function listSupportedDatabases() {
-  return apiGet<{ databases: CatalogEntry[] }>('/supported-databases')
+  return apiGet<{ items: CatalogEntry[]; total: number }>('/databases')
 }
 
 export function getConfigSummary() {
-  return apiGet<Record<string, unknown>>('/config/summary')
+  return apiGet<Record<string, unknown>>('/config')
 }
 
 export function getHealth() {
@@ -172,8 +172,8 @@ export function getSecretEncryptionStatus() {
 export function listAudit(limit = 50, action?: string) {
   const q = new URLSearchParams({ limit: String(limit) })
   if (action) q.set('action', action)
-  return apiGet<{ entries: import('./types').AuditEntry[]; count: number; actionFilter?: string }>(
-    `/audit?${q.toString()}`,
+  return apiGet<{ items: import('./types').AuditEntry[]; total: number; actionFilter?: string }>(
+    `/audit/operations?${q.toString()}`,
   )
 }
 
@@ -194,7 +194,7 @@ export function listAuditSpool(params?: {
   if (params?.source) q.set('source', params.source)
   if (params?.protocol) q.set('protocol', params.protocol)
   if (params?.operation) q.set('operation', params.operation)
-  return apiGet<import('./types').TrafficAuditBrowseResponse>(`/audit/spool?${q.toString()}`)
+  return apiGet<import('./types').TrafficAuditBrowseResponse>(`/audit/traffic?${q.toString()}`)
 }
 
 export function getMetricsHistory(instanceId?: string, limit = 120) {
@@ -217,7 +217,7 @@ export function putRiskPolicy(payload: {
 
 
 export function listSessions(instanceId: string) {
-  return apiGet<{ instanceId: string; sessions: import('./types').SessionRow[]; count: number }>(
+  return apiGet<{ instanceId?: string; items: import('./types').SessionRow[]; total: number }>(
     `/instances/${encodeURIComponent(instanceId)}/sessions`,
   )
 }
@@ -230,22 +230,23 @@ export function killSession(instanceId: string, connectionId: string) {
 
 export function healthCheck(instanceId: string) {
   return apiPost<import('./types').HealthCheckResult>(
-    `/instances/${encodeURIComponent(instanceId)}/health-check`,
+    `/instances/${encodeURIComponent(instanceId)}/actions/health-check`,
   )
 }
 
 export function listRecentStatements(instanceId: string, limit = 50) {
   return apiGet<{
-    instanceId: string
-    entries: import('./types').RecentStatement[]
-    count: number
+    instanceId?: string
+    items: import('./types').RecentStatement[]
+    total: number
     note?: string
   }>(`/instances/${encodeURIComponent(instanceId)}/recent-statements?limit=${limit}`)
 }
 
 export async function downloadInstancesExport() {
-  const data = await apiGet<unknown[]>('/instances/export')
-  triggerDownload(data, `gateway-instances-${Date.now()}.json`)
+  const data = await apiGet<{ items: unknown[]; total: number } | unknown[]>('/instances/export')
+  const payload = Array.isArray(data) ? data : (data.items ?? data)
+  triggerDownload(payload, `gateway-instances-${Date.now()}.json`)
 }
 
 export async function downloadConfigExport() {
@@ -283,8 +284,8 @@ export function listSqlHistory(instanceId?: string, limit = 50) {
   const q = new URLSearchParams({ limit: String(limit) })
   if (instanceId) q.set('instanceId', instanceId)
   return apiGet<{
-    entries: import('./types').SqlHistoryEntry[]
-    count: number
+    items: import('./types').SqlHistoryEntry[]
+    total: number
     cap?: number
   }>(`/sql/history?${q.toString()}`)
 }
@@ -295,7 +296,7 @@ export function clearSqlHistory(id?: string) {
 }
 
 export function listSqlSnippets() {
-  return apiGet<{ snippets: import('./types').SqlSnippet[]; count: number }>('/sql/snippets')
+  return apiGet<{ items: import('./types').SqlSnippet[]; total: number }>('/sql/snippets')
 }
 
 export function createSqlSnippet(payload: { name: string; sql: string }) {

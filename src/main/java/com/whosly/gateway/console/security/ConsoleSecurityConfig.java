@@ -163,11 +163,11 @@ public class ConsoleSecurityConfig {
 
         AuthMode mode = consoleAuthMode;
         http.exceptionHandling(ex -> ex
-                .authenticationEntryPoint((req, res, e) -> writeJson(res, HttpServletResponse.SC_UNAUTHORIZED,
-                        "{\"ok\":false,\"message\":\"Unauthorized\",\"authMode\":\""
-                                + mode.name().toLowerCase() + "\"}"))
-                .accessDeniedHandler((req, res, e) -> writeJson(res, HttpServletResponse.SC_FORBIDDEN,
-                        "{\"ok\":false,\"message\":\"Forbidden\"}")));
+                .authenticationEntryPoint((req, res, e) -> writeProblem(res, HttpServletResponse.SC_UNAUTHORIZED,
+                        "Unauthorized", "UNAUTHORIZED", req.getRequestURI(),
+                        "{\"authMode\":\"" + mode.name().toLowerCase() + "\"}"))
+                .accessDeniedHandler((req, res, e) -> writeProblem(res, HttpServletResponse.SC_FORBIDDEN,
+                        "Forbidden", "FORBIDDEN", req.getRequestURI(), null)));
 
         return http.build();
     }
@@ -190,15 +190,15 @@ public class ConsoleSecurityConfig {
                         .csrfTokenRepository(repo)
                         .csrfTokenRequestHandler(requestHandler)
                         .ignoringRequestMatchers(
-                                new AntPathRequestMatcher("/console/api/auth/login", "POST")))
+                                new AntPathRequestMatcher("/console/api/v1/auth/login", "POST")))
                 .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.IF_REQUIRED))
                 .authorizeHttpRequests(auth -> auth
-                        .requestMatchers("/console/api/auth/login", "/console/api/auth/me",
-                                "/console/api/auth/mode", "/console/api/auth/status")
+                        .requestMatchers("/console/api/v1/auth/login", "/console/api/v1/auth/me",
+                                "/console/api/v1/auth/mode", "/console/api/v1/auth/status")
                         .permitAll()
-                        .requestMatchers(HttpMethod.GET, "/console/api/**")
+                        .requestMatchers(HttpMethod.GET, "/console/api/v1/**")
                         .hasAnyRole(ROLE_ADMIN, ROLE_VIEWER)
-                        .requestMatchers("/console/api/**")
+                        .requestMatchers("/console/api/v1/**")
                         .hasRole(ROLE_ADMIN)
                         .requestMatchers(HttpMethod.GET, "/console", "/console/", "/console/**")
                         .permitAll()
@@ -206,7 +206,7 @@ public class ConsoleSecurityConfig {
                 .formLogin(form -> form.disable())
                 .httpBasic(basic -> basic.disable())
                 .logout(logout -> logout
-                        .logoutUrl("/console/api/auth/logout")
+                        .logoutUrl("/console/api/v1/auth/logout")
                         .logoutSuccessHandler(jsonLogoutSuccess(audit)));
         // SPA: force CSRF cookie write (Spring Security 6 deferred token)
         http.addFilterAfter(new CsrfCookieFilter(), CsrfFilter.class);
@@ -233,14 +233,14 @@ public class ConsoleSecurityConfig {
         http.csrf(csrf -> csrf.csrfTokenRepository(repo).csrfTokenRequestHandler(requestHandler))
                 .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.IF_REQUIRED))
                 .authorizeHttpRequests(auth -> auth
-                        .requestMatchers("/console/api/auth/mode", "/console/api/auth/status",
-                                "/console/api/auth/me", "/oauth2/**", "/login/oauth2/**")
+                        .requestMatchers("/console/api/v1/auth/mode", "/console/api/v1/auth/status",
+                                "/console/api/v1/auth/me", "/oauth2/**", "/login/oauth2/**")
                         .permitAll()
                         .requestMatchers(HttpMethod.GET, "/console", "/console/", "/console/**")
                         .permitAll()
-                        .requestMatchers(HttpMethod.GET, "/console/api/**")
+                        .requestMatchers(HttpMethod.GET, "/console/api/v1/**")
                         .hasAnyRole(ROLE_ADMIN, ROLE_VIEWER)
-                        .requestMatchers("/console/api/**")
+                        .requestMatchers("/console/api/v1/**")
                         .hasRole(ROLE_ADMIN)
                         .anyRequest().permitAll())
                 .oauth2Login(oauth -> oauth
@@ -256,7 +256,7 @@ public class ConsoleSecurityConfig {
                             res.sendRedirect("/console/login?error=oidc");
                         }))
                 .logout(logout -> logout
-                        .logoutUrl("/console/api/auth/logout")
+                        .logoutUrl("/console/api/v1/auth/logout")
                         .clearAuthentication(true)
                         .invalidateHttpSession(true)
                         .deleteCookies("JSESSIONID")
@@ -292,6 +292,30 @@ public class ConsoleSecurityConfig {
             }
             writeJson(res, HttpServletResponse.SC_OK, "{\"ok\":true,\"message\":\"logged out\"}");
         };
+    }
+
+
+    private static void writeProblem(HttpServletResponse res, int status, String title, String code,
+                                     String instance, String extraJsonObjectFields) throws java.io.IOException {
+        StringBuilder sb = new StringBuilder();
+        sb.append("{\"type\":\"about:blank\",\"title\":\"").append(title)
+          .append("\",\"status\":").append(status)
+          .append(",\"detail\":\"").append(title)
+          .append("\",\"code\":\"").append(code).append("\"");
+        if (instance != null) {
+            sb.append(",\"instance\":\"").append(instance.replace("\\", "\\\\").replace("\"", "\\\"")).append("\"");
+        }
+        if (extraJsonObjectFields != null && extraJsonObjectFields.startsWith("{") && extraJsonObjectFields.endsWith("}")) {
+            String inner = extraJsonObjectFields.substring(1, extraJsonObjectFields.length() - 1).trim();
+            if (!inner.isEmpty()) {
+                sb.append(',').append(inner);
+            }
+        }
+        sb.append('}');
+        res.setStatus(status);
+        res.setCharacterEncoding(java.nio.charset.StandardCharsets.UTF_8.name());
+        res.setContentType("application/problem+json");
+        res.getWriter().write(sb.toString());
     }
 
     private static void writeJson(HttpServletResponse res, int status, String json) throws java.io.IOException {

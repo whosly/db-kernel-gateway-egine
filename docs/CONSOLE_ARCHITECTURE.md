@@ -30,7 +30,7 @@
 │  Browser  ·  /console/  (Vue 3 SPA)                          │
 │  views → stores → api client → (fetch)                      │
 └────────────────────────────┬────────────────────────────────┘
-                             │  /console/api/*  (JSON)
+                             │  /console/api/v1/*  (JSON, versioned)
 ┌────────────────────────────▼────────────────────────────────┐
 │  Spring Web                                                 │
 │  ConsolePageController  → SPA index.html                    │
@@ -84,7 +84,7 @@
 `InstanceMaskingSupport`、`TrafficRingAttachment`）；`RecentTrafficRing` 位于 `runtime.observe`（数据面观测）。
 装配仍在 `GatewayConfig` / console `@Configuration`，方向为 console → runtime。
 
-**Controller 拆分**：`/console/api` 按域拆为多个 `@RestController`（`ConsoleOverviewApiController`、
+**Controller 拆分**：`/console/api/v1` 按域拆为多个 `@RestController`（`ConsoleOverviewApiController`、
 `ConsoleInstanceApiController`、`ConsoleSqlApiController`、`ConsoleAuditApiController`、
 `ConsoleSecurityApiController`），路径与 JSON 不变；共享异常映射见 `ConsoleApiExceptionAdvice`，
 请求体见 `ConsoleApiModels`；业务实现集中在 `@Component` `ConsoleApiController`（无 HTTP 映射）。
@@ -113,33 +113,42 @@ UNBOUND      ← 仅兼容保留；creatable 配置实例不应再出现
 2. **运行真相**：`GatewayListenerRuntime` 内存中的 ManagedListener 表。
 3. **本阶段**：yml = 引导实例；管控台增删写入 **H2**；启停改运行态并与 H2 `enabled` 可同步。不写回 yml。
 
-### 2.4 REST 契约（v1，冻结语义）
+### 2.4 REST 契约（API v1，版本化）
 
-基准路径：`/console/api`
+> **完整路径表与 JSON 约定**：见 [`CONSOLE_API_V1.md`](CONSOLE_API_V1.md)（本轮破坏性升级；仅 `/console/api/v1`，Vue 同变更）。
+
+基准路径：**`/console/api/v1`**（SPA 静态仍为 `/console`，不版本化）。
 
 | 方法 | 路径 | 成功体要点 |
 |---|---|---|
-| GET | `/supported-databases` | `{ databases: CatalogEntry[] }` |
-| GET | `/instances` | `{ instances, count, byStatus }` |
+| GET | `/databases` | `{ items: CatalogEntry[], total }`（原 `/supported-databases`） |
+| GET | `/instances` | `{ items, total, byStatus? }` |
 | GET | `/instances/{id}` | `GatewayInstance`（含可选 metrics 摘要） |
 | GET | `/instances/{id}/status` | `{ id, status, bound, message, … }` |
 | GET | `/instances/{id}/metrics` | 该 listener 计数 map |
-| POST | `/instances` | 创建管控台实例 → **H2 insert** + runtime bind（可选 auto-start）；密码不回传 |
-| DELETE | `/instances/{id}` | 仅 `source=console`：停听 + 删 H2 + 移除运行时；YAML 实例 → 4xx |
-| POST | `/instances/{id}/start` | `{ ok, message, … }` |
-| POST | `/instances/{id}/stop` | 同上 |
+| POST | `/instances` | `GatewayInstance`，**201** + `Location`；H2 + runtime；密码不回传 |
+| PUT | `/instances/{id}` | `GatewayInstance` |
+| DELETE | `/instances/{id}` | 仅 `source=console`；成功 `{ ok, message }`；YAML → Problem |
+| POST | `/instances/{id}/actions/start\|stop` | 成功返回更新后 **`GatewayInstance`**；失败 Problem |
+| POST | `/instances/{id}/actions/clone\|health-check\|reload-masking-rules` | 见 CONSOLE_API_V1 |
+| POST | `/instances/bulk-actions` | 批量启停结果 |
+| POST | `/instances/import` | 集合导入 |
+| GET | `/instances/export` | `{ items, total }`（无密码） |
+| POST | `/instances/{id}/sql/executions` | SQL 执行结果 |
 | GET | `/overview` | 聚合：instances + databases + **metrics（全实例求和）** + `metricsScope` + `legacyMetrics` + health + config |
 | GET | `/health` | 进程级：runningCount / boundCount / status |
-| GET | `/config/summary` | 非密钥；password → 掩码或不出现 |
-| POST | `/instances` | 校验后写入 H2 + 注册 Runtime；可 creatable 类型 |
-| DELETE | `/instances/{id}` | 仅 console/H2 来源：删库行并停 listener；yml 来源拒绝删除 |
+| GET | `/config` | 非密钥摘要（原 `/config/summary`） |
+| GET | `/audit/operations` | 管控操作审计 `{ items, total }` |
+| GET | `/audit/traffic` | 流量审计浏览（原 `/audit/spool`） |
+| GET/POST… | `/auth/*` | 挂在 `/console/api/v1/auth` |
 
 **契约规则**
 
 - 字段命名：JSON camelCase；与 Java record/getter 一致。
-- 错误：未知 id → 4xx + `{ message }`；禁止堆栈回前端。
-- **禁止**新增 `/console/api/{mysql|postgresql}/…`。
-- 新增字段只追加；删除或改语义必须升文档版本并改 STATUS。
+- **列表**：`{ items, total }` + 可选分面兄弟字段；**错误**：RFC 7807 `application/problem+json`。
+- **禁止**新增 `/console/api/v1/{mysql|postgresql}/…`。
+- 未版本化 `/console/api/*`（除静态）本版移除；不双轨长期兼容。
+- 新增字段只追加；删除或改语义必须升 API 主版本（v2）并改 STATUS。
 
 ### 2.5 指标语义（易混点，必须统一）
 
@@ -226,7 +235,7 @@ console-ui/
     App.vue
     router/index.ts
     api/
-      client.ts           # baseURL `/console/api`
+      client.ts           # baseURL `/console/api/v1`
       types.ts            # 与后端契约一一对应的 interface
       consoleApi.ts       # 函数：getOverview, startInstance, …
     composables/
@@ -255,7 +264,7 @@ console-ui/
 |---|---|---|
 | `/` | 总览 | `GET /overview` → KPI、状态分布、实例卡 |
 | `/instances` | 网关实例 | 列表 + 抽屉 `GET /instances/{id}` + metrics |
-| `/catalog` | 类型目录 | `GET /supported-databases` |
+| `/catalog` | 类型目录 | `GET /databases` |
 | `/ops` | 运维 | `config/summary` + legacy 说明 |
 
 **交互闭环（本阶段）**

@@ -60,9 +60,9 @@ export interface OverviewResponse {
 }
 
 export interface InstancesResponse {
-  instances: GatewayInstance[]
-  count: number
-  byStatus: Record<string, number>
+  items: GatewayInstance[]
+  total: number
+  byStatus?: Record<string, number>
 }
 
 export interface ActionResult {
@@ -215,9 +215,9 @@ export interface MaskingRulePayload {
 }
 
 export interface MaskingRulesResponse {
-  instanceId: string
-  rules: MaskingRule[]
-  count: number
+  instanceId?: string
+  items: MaskingRule[]
+  total: number
 }
 
 export interface MaskingKeyStatus {
@@ -338,8 +338,8 @@ export interface TrafficAuditBrowseResponse {
   spoolDir?: string
   jdbcConfigured?: boolean
   source: string
-  entries: TrafficAuditEntry[]
-  count: number
+  items: TrafficAuditEntry[]
+  total: number
   limit?: number
   before?: number | null
   nextBefore?: number | null
@@ -360,7 +360,7 @@ export interface MetricsHistoryResponse {
   instanceId?: string | null
   scope: string
   points: MetricsHistoryPoint[]
-  count: number
+  total: number
   capacity?: number
   note?: string
 }

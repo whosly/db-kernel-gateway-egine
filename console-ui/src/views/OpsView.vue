@@ -69,7 +69,7 @@ async function loadTraffic(resetCursor = true) {
       protocol: trafficProtocol.value.trim() || undefined,
       operation: trafficOperation.value.trim() || undefined,
     })
-    trafficEntries.value = traffic.value.entries || []
+    trafficEntries.value = traffic.value.items || []
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e)
   }
@@ -88,7 +88,7 @@ async function loadMoreTraffic() {
       operation: trafficOperation.value.trim() || undefined,
     })
     traffic.value = page
-    trafficEntries.value = [...trafficEntries.value, ...(page.entries || [])]
+    trafficEntries.value = [...trafficEntries.value, ...(page.items || [])]
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e)
   }
@@ -106,7 +106,7 @@ async function load() {
     }
     auditStatus.value = await getAuditStatus()
     const auditBody = await listAudit(30, auditActionFilter.value.trim() || undefined)
-    audit.value = auditBody.entries || []
+    audit.value = auditBody.items || []
     await loadTraffic(true)
     risk.value = await getRiskPolicy()
     if (risk.value) {
@@ -190,7 +190,7 @@ function sourceLabel(s?: string) {
     <div class="panel">
       <h3>运维说明</h3>
       <ul>
-        <li>管控台 API：<code>/console/api/*</code>（实例中心，协议无关）</li>
+        <li>管控台 API：<code> /console/api/v1/*</code>（实例中心，协议无关）</li>
         <li>遗留管理面：<code>/gateway/*</code> · Actuator · CLI（legacy adapter）</li>
         <li>管控台创建的实例持久化在嵌入式 H2（控制面库，非业务库）</li>
         <li>

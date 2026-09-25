@@ -110,8 +110,8 @@ async function load() {
       /* optional */
     }
     const [inst, cat] = await Promise.all([listInstances(), listSupportedDatabases()])
-    instances.value = inst.instances || []
-    catalog.value = cat.databases || []
+    instances.value = inst.items || []
+    catalog.value = cat.items || []
     if (selected.value) {
       selected.value = instances.value.find((i) => i.id === selected.value!.id) || null
     }
@@ -178,7 +178,7 @@ async function submitCreate() {
 async function onStart(id: string) {
   try {
     const r = await startInstance(id)
-    toast(r.message || '已启动')
+    toast(`已启动 ${r.id}`)
     await load()
   } catch (e) {
     toast(e instanceof Error ? e.message : String(e))
@@ -187,7 +187,7 @@ async function onStart(id: string) {
 async function onStop(id: string) {
   try {
     const r = await stopInstance(id)
-    toast(r.message || '已停止')
+    toast(`已停止 ${r.id}`)
     await load()
   } catch (e) {
     toast(e instanceof Error ? e.message : String(e))
@@ -262,7 +262,7 @@ async function onImportFile(ev: Event) {
   try {
     const text = await file.text()
     const parsed = JSON.parse(text)
-    const list = Array.isArray(parsed) ? parsed : parsed.instances
+    const list = Array.isArray(parsed) ? parsed : (parsed.items || parsed.instances)
     if (!Array.isArray(list)) throw new Error('JSON 需为实例数组或含 instances 字段')
     const r = await importInstances({ instances: list, skipExisting: true })
     toast(r.message || `导入：创建 ${r.created}，跳过 ${r.skipped}，失败 ${r.failed}`)

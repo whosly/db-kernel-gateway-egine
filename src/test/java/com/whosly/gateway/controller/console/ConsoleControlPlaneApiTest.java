@@ -114,9 +114,9 @@ class ConsoleControlPlaneApiTest {
     @Test
     void sessionsEmptyWhenAdapterStoppedOrIdle() {
         Map<String, Object> body = console.listSessions("gw-stop");
-        assertThat(body.get("count")).isEqualTo(0);
+        assertThat(body.get("total")).isEqualTo(0);
         @SuppressWarnings("unchecked")
-        List<?> sessions = (List<?>) body.get("sessions");
+        List<?> sessions = (List<?>) body.get("items");
         assertThat(sessions).isEmpty();
     }
 
@@ -132,9 +132,9 @@ class ConsoleControlPlaneApiTest {
         when(runningAdapter.getActiveSessionSnapshots()).thenReturn(List.of(snap));
 
         Map<String, Object> body = console.listSessions("gw-run");
-        assertThat(body.get("count")).isEqualTo(1);
+        assertThat(body.get("total")).isEqualTo(1);
         @SuppressWarnings("unchecked")
-        List<Map<String, Object>> sessions = (List<Map<String, Object>>) body.get("sessions");
+        List<Map<String, Object>> sessions = (List<Map<String, Object>>) body.get("items");
         assertThat(sessions.get(0).get("connectionId")).isEqualTo("conn-1");
         assertThat(sessions.get(0).get("clientUser")).isEqualTo("alice");
         assertThat(body.toString()).doesNotContain("s3cret");
@@ -183,7 +183,7 @@ class ConsoleControlPlaneApiTest {
         assertThat(ring.size()).isEqualTo(8);
         Map<String, Object> body = console.recentStatements("gw-run", 50);
         @SuppressWarnings("unchecked")
-        List<Map<String, Object>> entries = (List<Map<String, Object>>) body.get("entries");
+        List<Map<String, Object>> entries = (List<Map<String, Object>>) body.get("items");
         assertThat(entries).hasSizeLessThanOrEqualTo(8);
         assertThat(entries).allSatisfy(e -> assertThat(e.get("instanceId")).isEqualTo("gw-run"));
         assertThat(body.get("note").toString()).contains("内存环");

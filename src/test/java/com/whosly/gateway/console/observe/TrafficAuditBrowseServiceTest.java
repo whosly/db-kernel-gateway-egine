@@ -41,7 +41,7 @@ class TrafficAuditBrowseServiceTest {
         assertThat(body.get("source")).isEqualTo("ring");
         assertThat(body.get("auditEnabled")).isEqualTo(false);
         @SuppressWarnings("unchecked")
-        List<Map<String, Object>> entries = (List<Map<String, Object>>) body.get("entries");
+        List<Map<String, Object>> entries = (List<Map<String, Object>>) body.get("items");
         assertThat(entries).hasSize(1);
         assertThat(entries.get(0).get("statement").toString()).doesNotContain("secret-pass");
         assertThat(body.get("note").toString()).contains("未启用");
@@ -68,7 +68,7 @@ class TrafficAuditBrowseServiceTest {
         Map<String, Object> body = svc.browse(20, null, "spool", "MySQL", null);
         assertThat(body.get("source")).isEqualTo("spool");
         @SuppressWarnings("unchecked")
-        List<Map<String, Object>> entries = (List<Map<String, Object>>) body.get("entries");
+        List<Map<String, Object>> entries = (List<Map<String, Object>>) body.get("items");
         assertThat(entries).isNotEmpty();
         String stmt = String.valueOf(entries.get(0).get("statement"));
         assertThat(stmt.toLowerCase()).doesNotContain("hunter2");
@@ -87,7 +87,7 @@ class TrafficAuditBrowseServiceTest {
         TrafficAuditBrowseService svc = new TrafficAuditBrowseService(cfg, null);
         Map<String, Object> body = svc.browse(10, null, "jdbc", null, null);
         assertThat(body.get("source")).isEqualTo("jdbc");
-        assertThat(body.get("count")).isEqualTo(0);
+        assertThat(body.get("total")).isEqualTo(0);
         assertThat(body.get("note").toString()).contains("未配置");
     }
 }

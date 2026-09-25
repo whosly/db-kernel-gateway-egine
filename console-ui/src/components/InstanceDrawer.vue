@@ -155,7 +155,7 @@ async function loadRules() {
   rulesError.value = null
   try {
     const body = await listMaskingRules(props.instance.id)
-    rules.value = body.rules || []
+    rules.value = body.items || []
   } catch (e) {
     rulesError.value = e instanceof Error ? e.message : String(e)
     rules.value = []
@@ -280,7 +280,7 @@ async function loadSessions() {
   sessionsError.value = null
   try {
     const body = await listSessions(props.instance.id)
-    sessions.value = body.sessions || []
+    sessions.value = body.items || []
   } catch (e) {
     sessionsError.value = e instanceof Error ? e.message : String(e)
     sessions.value = []
@@ -307,7 +307,7 @@ async function loadRecent() {
   recentError.value = null
   try {
     const body = await listRecentStatements(props.instance.id, 50)
-    recent.value = body.entries || []
+    recent.value = body.items || []
     recentNote.value = body.note || null
   } catch (e) {
     recentError.value = e instanceof Error ? e.message : String(e)

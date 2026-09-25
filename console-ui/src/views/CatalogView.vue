@@ -11,7 +11,7 @@ const error = ref<string | null>(null)
 async function load() {
   try {
     const body = await listSupportedDatabases()
-    rows.value = body.databases || []
+    rows.value = body.items || []
     error.value = null
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e)

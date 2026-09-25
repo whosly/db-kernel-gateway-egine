@@ -54,7 +54,7 @@ function series(key: string) {
 async function onStart(id: string) {
   try {
     const r = await startInstance(id)
-    toast(r.message || '已启动')
+    toast(`已启动 ${r.id}`)
     await load()
   } catch (e) {
     toast(e instanceof Error ? e.message : String(e))
@@ -63,7 +63,7 @@ async function onStart(id: string) {
 async function onStop(id: string) {
   try {
     const r = await stopInstance(id)
-    toast(r.message || '已停止')
+    toast(`已停止 ${r.id}`)
     await load()
   } catch (e) {
     toast(e instanceof Error ? e.message : String(e))

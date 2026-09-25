@@ -165,7 +165,7 @@ gateway:
 | `gateway.audit.*` | 见 [审计与脱敏](#审计与脱敏) |
 | `gateway.risk.denied-operations` | 逗号分隔协议操作名拒绝清单（空=allow-all） |
 | `gateway.risk.denied-statement-keywords` | 逗号分隔语句关键字子串拒绝清单（空=allow-all） |
-| `gateway.catalog.databases[]` | 支持库**类型**目录（id/maturity/enabled/ports/notes）；`GET /console/api/supported-databases` |
+| `gateway.catalog.databases[]` | 支持库**类型**目录（id/maturity/enabled/ports/notes）；`GET /console/api/v1/databases` |
 | `gateway.instances[]` | 协议无关**实例**注册表（可多类型混部）；非空=多 listener；空则合成 `id=default` |
 
 ## 快速开始 · MySQL
@@ -369,13 +369,16 @@ mvn -Pintegration-test test
 
 ## 数据库管控台
 
+> **API v1（破坏性）**：基准路径 `/console/api/v1`；完整契约见 [`docs/CONSOLE_API_V1.md`](docs/CONSOLE_API_V1.md)。Vue 已同变更；旧 `/console/api/*` 不再提供业务接口。
+
+
 内置 **协议无关 · 实例中心** 管控台（无 Node 构建）：
 
 | 入口 | 说明 |
 |---|---|
 | UI | [http://localhost:8080/console](http://localhost:8080/console)（`server.port` 可改） |
-| 类型目录 API | `GET /console/api/supported-databases` |
-| 实例 API | `GET/POST /console/api/instances`（`?status=&dbType=&q=`）；`PUT /instances/{id}`；`/status|metrics|start|stop`；`POST …/clone`；`POST …/import`；`POST …/bulk` |
+| 类型目录 API | `GET /console/api/v1/databases` |
+| 实例 API | `GET/POST /console/api/v1/instances`（`?status=&dbType=&q=`）；`PUT /instances/{id}`；`/status|metrics|start|stop`；`POST …/clone`；`POST …/import`；`POST …/bulk` |
 | 会话 | `GET …/instances/{id}/sessions`；`DELETE …/sessions/{connectionId}`（关客户端腿） |
 | 健康探测 | `POST|GET …/instances/{id}/health-check`（TCP + 可选 JDBC，~3s） |
 | 导出 / 导入 | `GET …/instances/export`、`GET …/config/export`（无密码）；`POST …/instances/import` |
@@ -383,13 +386,13 @@ mvn -Pintegration-test test
 | 鉴权 | `gateway.console.auth.mode=open\|token\|form\|oidc`（默认 auto：有 token→token，否则 open）；form 用户 `gateway.console.auth.users`；oidc 见 docs §17（显式 URI / Keycloak / discovery）；角色 CONSOLE_ADMIN/VIEWER |
 | HTTPS | Spring `server.ssl.*`；模板 `application-console-https-template.yml`（管控台 HTTP 服务 TLS，勿与 `gateway.tls.*` 协议代理 TLS 混淆） |
 | 最近语句 | `GET …/instances/{id}/recent-statements`（内存环，重启丢失） |
-| 脱敏规则 API | `GET/POST/PUT/DELETE /console/api/instances/{id}/masking-rules`（协议无关） |
-| 列提示 | `GET /console/api/instances/{id}/schema/columns?table=`（JDBC metadata；失败 502） |
-| 安全 | `GET/PUT/DELETE /console/api/security/masking-key`；`GET /console/api/audit`（`action`/`limit`） |
-| 审计状态 | `GET /console/api/audit/status`（非密钥：enabled/destination/spoolDir/…） |
-| 流量审计内容 | `GET /console/api/audit/spool`（别名 `/audit/records`；ring/spool/可选 jdbc；分页 `before`） |
-| 指标时序 | `GET /console/api/metrics/history?instanceId=&limit=`（进程内环；总览火花图） |
-| 风控 | `GET/PUT /console/api/risk-policy`（H2 覆盖 + 热挂；空=allow-all） |
+| 脱敏规则 API | `GET/POST/PUT/DELETE /console/api/v1/instances/{id}/masking-rules`（协议无关） |
+| 列提示 | `GET /console/api/v1/instances/{id}/schema/columns?table=`（JDBC metadata；失败 502） |
+| 安全 | `GET/PUT/DELETE /console/api/v1/security/masking-key`；`GET /console/api/v1/audit`（`action`/`limit`） |
+| 审计状态 | `GET /console/api/v1/audit/status`（非密钥：enabled/destination/spoolDir/…） |
+| 流量审计内容 | `GET /console/api/v1/audit/spool`（别名 `/audit/records`；ring/spool/可选 jdbc；分页 `before`） |
+| 指标时序 | `GET /console/api/v1/metrics/history?instanceId=&limit=`（进程内环；总览火花图） |
+| 风控 | `GET/PUT /console/api/v1/risk-policy`（H2 覆盖 + 热挂；空=allow-all） |
 | 连接池 | 实例 `metrics`/`status` 含 `pool.{enabled,idleCount,maxIdle}` |
 | 控制面加密 | `gateway.console.secret-key-base64`（32 字节 AES Base64）→ 密码/密钥 `enc:v1:`；缺省实验室明文；生产 `require-secret-encryption=true` 缺钥拒写（503） |
 | 可选 API Token | `gateway.console.api-token`（读写）；`gateway.console.read-token`（仅 GET）；`Authorization: Bearer` 或 `X-Console-Token` |

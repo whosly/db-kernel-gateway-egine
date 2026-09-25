@@ -1,4 +1,4 @@
-const BASE = '/console/api'
+const BASE = '/console/api/v1'
 
 export class ApiError extends Error {
   status: number
@@ -104,8 +104,14 @@ async function parse<T>(res: Response): Promise<T> {
       onUnauthorized()
     }
     const msg =
-      data && typeof data === 'object' && data !== null && 'message' in data
-        ? String((data as { message: unknown }).message)
+      data && typeof data === 'object' && data !== null
+        ? 'detail' in data && (data as { detail: unknown }).detail != null
+          ? String((data as { detail: unknown }).detail)
+          : 'title' in data && (data as { title: unknown }).title != null
+            ? String((data as { title: unknown }).title)
+            : 'message' in data && (data as { message: unknown }).message != null
+              ? String((data as { message: unknown }).message)
+              : `HTTP ${res.status}`
         : `HTTP ${res.status}`
     throw new ApiError(res.status, msg, data)
   }

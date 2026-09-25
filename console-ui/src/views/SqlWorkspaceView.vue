@@ -125,7 +125,7 @@ watch([tabs, activeTabId], persistTabs, { deep: true })
 async function loadInstances() {
   try {
     const body = await listInstances()
-    instances.value = body.instances || []
+    instances.value = body.items || []
     if (!instanceId.value && instances.value.length) instanceId.value = instances.value[0].id
   } catch (e) {
     toast(e instanceof Error ? e.message : String(e))
@@ -151,7 +151,7 @@ async function loadCatalog() {
 async function loadHistory() {
   try {
     const body = await listSqlHistory(instanceId.value || undefined, 50)
-    history.value = body.entries || []
+    history.value = body.items || []
   } catch {
     history.value = []
   }
@@ -160,7 +160,7 @@ async function loadHistory() {
 async function loadSnippets() {
   try {
     const body = await listSqlSnippets()
-    snippets.value = body.snippets || []
+    snippets.value = body.items || []
   } catch {
     snippets.value = []
   }

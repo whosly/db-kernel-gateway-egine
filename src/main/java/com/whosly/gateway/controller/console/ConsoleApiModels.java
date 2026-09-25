@@ -1,11 +1,31 @@
 package com.whosly.gateway.controller.console;
 
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
-/** Shared request-body records for /console/api (JSON shapes unchanged). */
+/** Shared request-body records and list envelopes for /console/api/v1. */
 public final class ConsoleApiModels {
     private ConsoleApiModels() {}
+
+    /** Standard list envelope: items + total (+ optional sibling facets). */
+    public static Map<String, Object> listEnvelope(List<?> items) {
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("items", items != null ? items : List.of());
+        body.put("total", items != null ? items.size() : 0);
+        return body;
+    }
+
+    public static Map<String, Object> listEnvelope(List<?> items, Map<String, ?> facets) {
+        Map<String, Object> body = listEnvelope(items);
+        if (facets != null) {
+            facets.forEach((k, v) -> {
+                if (v != null) body.put(k, v);
+            });
+        }
+        return body;
+    }
+
 
     public record CreateInstanceBody(
             String id,

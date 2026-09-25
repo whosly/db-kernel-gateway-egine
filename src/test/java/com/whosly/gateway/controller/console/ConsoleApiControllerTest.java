@@ -90,7 +90,7 @@ class ConsoleApiControllerTest {
     @Test
     void supportedDatabasesHasNoBrandFocusField() {
         Map<String, Object> body = console.supportedDatabases();
-        assertThat(body).containsKey("databases");
+        assertThat(body).containsKey("items");
         assertThat(body).doesNotContainKey("primaryFocus");
         assertThat(body.toString()).doesNotContain("s3cret");
     }
@@ -98,9 +98,9 @@ class ConsoleApiControllerTest {
     @Test
     void instancesAreFirstClassAndTypeAgnostic() {
         Map<String, Object> body = console.listInstances(null, null, null);
-        assertThat(body.get("count")).isEqualTo(2);
+        assertThat(body.get("total")).isEqualTo(2);
         @SuppressWarnings("unchecked")
-        List<GatewayInstance> instances = (List<GatewayInstance>) body.get("instances");
+        List<GatewayInstance> instances = (List<GatewayInstance>) body.get("items");
         assertThat(instances).extracting(GatewayInstance::id).containsExactly("gw-1", "gw-2");
         assertThat(instances).extracting(GatewayInstance::dbType)
                 .containsExactly("mysql", "postgresql");

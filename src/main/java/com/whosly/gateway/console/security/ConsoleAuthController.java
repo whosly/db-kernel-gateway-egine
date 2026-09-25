@@ -29,7 +29,7 @@ import java.util.stream.Collectors;
  * OIDC SSO entry is {@code /oauth2/authorization/{registrationId}} (default registrationId=console).
  */
 @RestController
-@RequestMapping("/console/api/auth")
+@RequestMapping("/console/api/v1/auth")
 public class ConsoleAuthController {
 
     private final AuthMode authMode;

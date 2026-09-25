@@ -84,13 +84,13 @@ public class TrafficAuditBrowseService {
 
         Resolved resolved = resolve(prefer, lim, before, protocol, operation);
         body.put("source", resolved.source);
-        body.put("entries", resolved.entries);
-        body.put("count", resolved.entries.size());
+        body.put("items", resolved.entries);
+        body.put("total", resolved.entries.size());
         if (resolved.nextBefore != null) {
             body.put("nextBefore", resolved.nextBefore);
         }
         body.put("note", resolved.note);
-        body.put("help", "管控操作审计见 GET /console/api/audit；本接口为流量/spool 内容浏览");
+        body.put("help", "管控操作审计见 GET /console/api/v1/audit/operations；本接口为流量/spool 内容浏览");
         return body;
     }
 
