@@ -890,6 +890,8 @@ public class GatewayListenerRuntime implements DisposableBean {
     public Map<String, Object> reloadAllMasking() {
         int ok = 0;
         int skipped = 0;
+        int failed = 0;
+        java.util.List<Map<String, Object>> failures = new java.util.ArrayList<>();
         for (ManagedListener listener : list()) {
             if (listener.adapter() == null) {
                 skipped++;
@@ -898,16 +900,29 @@ public class GatewayListenerRuntime implements DisposableBean {
             Map<String, Object> one = reloadMasking(listener.id());
             if (Boolean.TRUE.equals(one.get("ok"))) {
                 ok++;
+            } else if (one.containsKey("error")) {
+                // compile/load failure (e.g. encrypt without key) — fail closed
+                failed++;
+                Map<String, Object> f = new LinkedHashMap<>();
+                f.put("instanceId", listener.id());
+                f.put("message", one.get("message"));
+                failures.add(f);
             } else {
                 skipped++;
             }
         }
         Map<String, Object> body = new LinkedHashMap<>();
-        body.put("ok", true);
+        body.put("ok", failed == 0);
         body.put("reloaded", ok);
         body.put("skipped", skipped);
-        body.put("message", "已热重载 " + ok + " 个实例的脱敏引擎");
-        log.info("reloadAllMasking reloaded={} skipped={}", ok, skipped);
+        body.put("failed", failed);
+        if (!failures.isEmpty()) {
+            body.put("failures", failures);
+        }
+        body.put("message", failed == 0
+                ? "已热重载 " + ok + " 个实例的脱敏引擎"
+                : "热重载完成：成功 " + ok + "，失败 " + failed + "（失败闭合，未静默跳过 encrypt）");
+        log.info("reloadAllMasking reloaded={} skipped={} failed={}", ok, skipped, failed);
         return body;
     }
 
@@ -926,18 +941,29 @@ public class GatewayListenerRuntime implements DisposableBean {
             body.put("reloaded", false);
             return body;
         }
-        MaskingEngine engine = buildMaskingEngine(listener.id());
-        abstractAdapter.setMaskingEngine(engine);
-        body.put("ok", true);
-        body.put("reloaded", true);
-        body.put("maskingActive", engine.isActive());
-        body.put("listenerBounced", false);
-        body.put("message", engine.isActive()
-                ? "已热更新脱敏引擎（不停端口；已有会话保持旧规则至重连）"
-                : "已热更新：当前无启用规则（透明转发）");
-        log.info("Reloaded MaskingEngine for instance '{}' (active={})",
-                listener.id(), engine.isActive());
-        return body;
+        try {
+            MaskingEngine engine = buildMaskingEngine(listener.id());
+            abstractAdapter.setMaskingEngine(engine);
+            body.put("ok", true);
+            body.put("reloaded", true);
+            body.put("maskingActive", engine.isActive());
+            body.put("listenerBounced", false);
+            body.put("message", engine.isActive()
+                    ? "已热更新脱敏引擎（不停端口；已有会话保持旧规则至重连）"
+                    : "已热更新：当前无启用规则（透明转发）");
+            log.info("Reloaded MaskingEngine for instance '{}' (active={})",
+                    listener.id(), engine.isActive());
+            return body;
+        } catch (IllegalArgumentException e) {
+            body.put("ok", false);
+            body.put("reloaded", false);
+            body.put("maskingActive", false);
+            body.put("listenerBounced", false);
+            body.put("message", e.getMessage());
+            body.put("error", e.getMessage());
+            log.warn("Failed to reload MaskingEngine for instance '{}': {}", listener.id(), e.getMessage());
+            return body;
+        }
     }
 
 

@@ -1133,3 +1133,56 @@ GET /console/api/audit/spool?limit=50&before=&source=auto|ring|spool|jdbc&protoc
 
 **结论：设计可通过 → 进入 §19 实现。**
 
+
+---
+
+## 20. 列加密端到端（脱敏密钥 + encrypt 策略）
+
+> 作者自检通过后实现。补齐 §11/§12 中 encrypt 半接线：密钥轮换、密文带 keyId、缺钥失败闭合、运维自检。  
+> **不做** 完整 KMS/HSM、客户侧透明加解密、Oracle、Prometheus。
+
+### 20.1 目标
+
+| 项 | 约定 |
+|---|---|
+| 密文格式 | `enc:v1:<keyId>:<Base64(nonce\|\|ciphertext+tag)>`；解密优先读嵌入 keyId；兼容旧版裸 Base64（须显式 keyId） |
+| 加密用钥 | 始终用 **active** keyId |
+| 解密用钥 | holder 内 active + previous（最多保留 5 个旧钥）按嵌入 keyId 解析 |
+| 缺钥 | 保存 / 编译 / 热重载 **失败闭合**（400 / 控制台可见 message）；**禁止** 静默 noop |
+| 状态 API | `configured`、`activeKeyId`/`keyId`、`source`、`previousKeyIds`、`encryptRulesCanBind`、`encryptRulesWithoutKey` |
+| 轮换 | `PUT` body 可带 `previousKeyId` / `keepPrevious`（默认 true）；新钥变 active，旧钥留作解密 |
+| 自检 | `POST /console/api/v1/security/masking-key/verify` → `{ ok: true }`；往返加密样例，**不**回传密钥/密文 |
+
+### 20.2 API（均在 `/console/api/v1`）
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/security/masking-key` | 富状态（上表）；永不回传密钥材料 |
+| PUT | `/security/masking-key` | `{ keyId?, keyBase64, previousKeyId?, keepPrevious? }` |
+| DELETE | `/security/masking-key` | 清管控台覆盖；回退 yaml；若仍有 encrypt 规则且无 yaml 钥 → 重载报错可见 |
+| POST | `/security/masking-key/verify` | 进程内 encrypt→decrypt；无 DB |
+
+### 20.3 UI
+
+- 运维 → 安全 · 脱敏密钥：状态 / 设置·轮换 / 清除 / **加密自检**；encrypt 规则存在但无钥时红字警告。
+- 实例抽屉 · 加密策略：展示绑定 `keyId`；缺钥链到运维页。
+
+### 20.4 诚实边界
+
+| 已做 | 仍非 |
+|---|---|
+| AES-GCM 列加密 + 控制面密钥 CRUD/轮换 | 云 KMS / HSM / 自动密钥派生 |
+| 密文嵌入 keyId + 多钥解密窗 | 历史裸 Base64 跨钥自动猜测 |
+| 缺钥失败闭合 + verify | 客户端驱动透明解密 |
+
+### 20.5 自检清单（作者）
+
+- [x] MaskingCipher 新格式 + 旧格式兼容；EncryptingRule 往返
+- [x] Holder 多钥；PUT 轮换保留 previous；encrypt 始终 active
+- [x] Compiler 无钥 400；reload 失败可见、不静默跳过 encrypt
+- [x] 状态字段 + verify；UI 面板 + 抽屉提示
+- [x] 单测：往返 / 轮换双钥 / verify / 无钥编译；默认 mvn test 无 Docker
+- [x] STATUS 诚实：encrypt E2E 已落地；非完整 KMS
+- [x] `mvn test` + `npm run build` 绿
+
+**结论：设计可通过 → 进入 §20 实现。**

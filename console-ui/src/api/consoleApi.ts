@@ -155,12 +155,21 @@ export function getMaskingKeyStatus() {
   return apiGet<import('./types').MaskingKeyStatus>('/security/masking-key')
 }
 
-export function putMaskingKey(payload: { keyId?: string; keyBase64: string }) {
+export function putMaskingKey(payload: {
+  keyId?: string
+  keyBase64: string
+  previousKeyId?: string
+  keepPrevious?: boolean
+}) {
   return apiPut<import('./types').MaskingKeyStatus>('/security/masking-key', payload)
 }
 
 export function deleteMaskingKey() {
   return apiDelete<import('./types').MaskingKeyStatus>('/security/masking-key')
+}
+
+export function verifyMaskingKey() {
+  return apiPost<import('./types').MaskingKeyVerifyResult>('/security/masking-key/verify', {})
 }
 
 export function getSecretEncryptionStatus() {

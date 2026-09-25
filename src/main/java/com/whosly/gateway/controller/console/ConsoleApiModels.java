@@ -58,7 +58,12 @@ public final class ConsoleApiModels {
     ) {
     }
 
-    public record MaskingKeyBody(String keyId, String keyBase64) {
+    public record MaskingKeyBody(
+            String keyId,
+            String keyBase64,
+            String previousKeyId,
+            Boolean keepPrevious
+    ) {
     }
 
     public record RiskPolicyBody(

@@ -32,6 +32,11 @@ public class ConsoleSecurityApiController {
         return api.deleteMaskingKey();
     }
 
+    @PostMapping("/security/masking-key/verify")
+    public Map<String, Object> verifyMaskingKey() {
+        return api.verifyMaskingKey();
+    }
+
     @GetMapping("/security/secret-encryption")
     public Map<String, Object> secretEncryptionStatus() {
         return api.secretEncryptionStatus();

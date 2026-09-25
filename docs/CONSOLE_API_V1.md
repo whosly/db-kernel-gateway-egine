@@ -97,7 +97,8 @@
 | GET | `/audit/status` | `/audit/status` | 状态对象 |
 | GET | `/audit/spool`、`/audit/records` | **`/audit/traffic`** | `{ items, total, … }`（`records` 别名废弃） |
 | GET | `/metrics/history` | `/metrics/history` | 时序对象 |
-| GET/PUT/DELETE | `/security/masking-key` | 同 | 状态对象 |
+| GET/PUT/DELETE | `/security/masking-key` | 同 | 富状态：`configured`/`activeKeyId`/`source`/`previousKeyIds`/`encryptRulesCanBind`/`encryptRulesWithoutKey`；PUT body 可含 `previousKeyId`/`keepPrevious` |
+| POST | — | **`/security/masking-key/verify`** | `{ ok: true, keyId, message }`（不回传密钥/密文） |
 | GET | `/security/secret-encryption` | 同 | 状态对象 |
 | GET/PUT | `/risk-policy` | `/risk-policy` | 策略对象 |
 

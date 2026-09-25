@@ -9,6 +9,7 @@ import type {
   RecentStatement,
   SchemaColumn,
   PoolStats,
+  MaskingKeyStatus,
   SecretEncryptionStatus,
   SessionRow,
   UpdateInstancePayload,
@@ -24,6 +25,7 @@ import {
   listMaskingRules,
   listRecentStatements,
   listSessions,
+  getMaskingKeyStatus,
   getSecretEncryptionStatus,
   updateMaskingRule,
 } from '../api/consoleApi'
@@ -33,6 +35,7 @@ const emit = defineEmits<{ close: []; delete: []; save: [UpdateInstancePayload];
 
 const toast = inject<(m: string) => void>('toast', () => {})
 const secretEnc = ref<SecretEncryptionStatus | null>(null)
+const maskingKey = ref<MaskingKeyStatus | null>(null)
 const tab = ref<'info' | 'masking' | 'sessions' | 'recent'>('info')
 const metrics = ref<Record<string, number>>({})
 const pool = ref<PoolStats | null>(null)
@@ -134,6 +137,14 @@ async function loadSecretEnc() {
     secretEnc.value = await getSecretEncryptionStatus()
   } catch {
     secretEnc.value = null
+  }
+}
+
+async function loadMaskingKey() {
+  try {
+    maskingKey.value = await getMaskingKeyStatus()
+  } catch {
+    maskingKey.value = null
   }
 }
 
@@ -336,6 +347,7 @@ onMounted(() => {
   loadMetrics()
   loadRules()
   loadSecretEnc()
+  loadMaskingKey()
 })
 watch(
   () => props.instance?.id,
@@ -347,11 +359,13 @@ watch(
     loadMetrics()
     loadRules()
     loadSecretEnc()
+    loadMaskingKey()
   },
 )
 watch(tab, (v) => {
   if (v === 'sessions') loadSessions()
   if (v === 'recent') loadRecent()
+  if (v === 'masking') loadMaskingKey()
 })
 </script>
 
@@ -528,7 +542,14 @@ watch(tab, (v) => {
           <h4>已配置规则</h4>
           <p class="muted tiny">
             协议无关 · 挂在本实例 MaskingEngine；写操作后热更新（不停监听端口；已有会话保持旧规则至重连）。
-            加密策略需脱敏密钥（yaml 或「运维 → 安全」）。
+            加密策略绑定脱敏密钥 activeKeyId
+            <code>{{ maskingKey?.activeKeyId || maskingKey?.keyId || '（未配置）' }}</code>
+            · 来源 {{ maskingKey?.source || '—' }}。
+          </p>
+          <p v-if="maskingKey && !maskingKey.configured" class="err tiny">
+            当前无脱敏密钥：encrypt 规则保存/重载将失败闭合。请前往
+            <strong>运维 → 安全 · 脱敏密钥</strong> 配置，或设置
+            <code>gateway.masking.key-base64</code>。
           </p>
           <p v-if="rulesLoading" class="muted">加载中…</p>
           <p v-else-if="rulesError" class="err">{{ rulesError }}</p>
@@ -610,9 +631,18 @@ watch(tab, (v) => {
               <label>哈希十六进制长度 (1–64)</label>
               <input v-model.number="form.hashHexLength" type="number" min="1" max="64" />
             </div>
-            <p v-if="showStrategyFields === 'encrypt'" class="muted tiny">
-              使用脱敏密钥加密（AES-GCM）：yaml <code>gateway.masking.key-base64</code> 或「运维 → 安全」配置；控制台不回显密钥。
-            </p>
+            <div v-if="showStrategyFields === 'encrypt'" class="field">
+              <p class="muted tiny">
+                AES-GCM 列加密；密文 <code>enc:v1:&lt;keyId&gt;:…</code>。
+                绑定 activeKeyId：
+                <strong>{{ maskingKey?.activeKeyId || maskingKey?.keyId || '未配置' }}</strong>
+                （来源 {{ maskingKey?.source || 'none' }}）。控制台不回显密钥。
+              </p>
+              <p v-if="!maskingKey?.configured" class="err tiny">
+                缺少脱敏密钥 — 请先到 <strong>运维 → 安全</strong> 设置/轮换密钥，或配置 yaml
+                <code>gateway.masking.key-base64</code>。
+              </p>
+            </div>
 
             <div class="schema-hint">
               <div class="schema-head">

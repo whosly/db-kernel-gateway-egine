@@ -760,11 +760,16 @@ public class ConsoleApiController {
         if (body == null) {
             throw new IllegalArgumentException("request body is required");
         }
-        return requireMaskingKeyService().putKey(body.keyId(), body.keyBase64());
+        return requireMaskingKeyService().putKey(
+                body.keyId(), body.keyBase64(), body.previousKeyId(), body.keepPrevious());
     }
 
     public Map<String, Object> deleteMaskingKey() {
         return requireMaskingKeyService().clearKey();
+    }
+
+    public Map<String, Object> verifyMaskingKey() {
+        return requireMaskingKeyService().verify();
     }
 
     /**

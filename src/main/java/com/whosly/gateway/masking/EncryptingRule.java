@@ -9,7 +9,9 @@ import java.util.Set;
  * Replaces the value with an AES-GCM ciphertext, Base64 encoded.
  *
  * <p>Reversible masking: an operator holding the key can recover the value with
- * {@link MaskingCipher#decrypt(String, String)}. Each value gets a random nonce,
+ * {@link MaskingCipher#decrypt(String)} (prefers embedded key id) or
+ * {@link MaskingCipher#decrypt(String, String)}. Wire form is
+ * {@code enc:v1:&lt;keyId&gt;:&lt;Base64&gt;}. Each value gets a random nonce,
  * so equal plaintexts produce different ciphertexts, which is the right choice
  * when the masked data must not be comparable.</p>
  *

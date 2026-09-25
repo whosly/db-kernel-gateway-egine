@@ -170,3 +170,10 @@ mvn spring-boot:run -Dspring-boot.run.profiles=dev
 - 管控操作审计仍用：`GET /console/api/audit`（H2，与流量 spool 分离）
 - UI：运维页「审计」Tabs
 
+## 列加密（脱敏密钥）
+
+1. 配置控制面主密钥：`GATEWAY_CONSOLE_SECRET_KEY_BASE64`（`openssl rand -base64 32`）。
+2. 管控台 **运维 → 安全 · 脱敏密钥**：设置/轮换 AES 密钥（或 yaml `gateway.masking.key-base64`）。
+3. 可选自检：`POST /console/api/v1/security/masking-key/verify`（不回传密钥/密文）。
+4. 实例抽屉为列配置 `strategy=encrypt` → 经代理查询结果为 `enc:v1:<keyId>:…` 密文。
+5. **诚实边界**：进程内 AES-GCM + 控制面密钥环；**不是**云 KMS/HSM。

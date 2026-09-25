@@ -223,12 +223,25 @@ export interface MaskingRulesResponse {
 export interface MaskingKeyStatus {
   configured: boolean
   keyId: string | null
+  activeKeyId?: string | null
   source: 'config' | 'console' | 'none' | string
+  previousKeyIds?: string[]
+  encryptRulesCanBind?: boolean
+  encryptRuleCount?: number
+  encryptRulesWithoutKey?: number
+  warning?: string
   consoleMasterKeyConfigured?: boolean
   requireSecretEncryption?: boolean
   allowsPlaintextWrites?: boolean
   secretEncryption?: SecretEncryptionStatus
   ok?: boolean
+  message?: string
+  reload?: Record<string, unknown>
+}
+
+export interface MaskingKeyVerifyResult {
+  ok: boolean
+  keyId?: string
   message?: string
 }
 

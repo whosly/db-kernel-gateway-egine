@@ -63,7 +63,14 @@ public class InstanceMaskingEngineFactory implements InstanceMaskingSupport {
             if (!row.enabled()) {
                 continue;
             }
-            merged.add(compiler.compile(row));
+            try {
+                merged.add(compiler.compile(row));
+            } catch (IllegalArgumentException e) {
+                throw new IllegalArgumentException(
+                        "实例 " + instanceId + " 脱敏规则「" + row.name() + "」(id=" + row.id()
+                                + ") 加载失败：" + e.getMessage(),
+                        e);
+            }
         }
         if (merged.isEmpty()) {
             return MaskingEngine.inactive();

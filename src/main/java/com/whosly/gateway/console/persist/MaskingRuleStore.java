@@ -209,6 +209,34 @@ public class MaskingRuleStore {
                 id, instanceId) > 0;
     }
 
+    /**
+     * Count enabled rules whose strategy normalizes to encrypt
+     * (encrypt / encryption / cipher).
+     */
+    public int countEnabledByStrategy(String strategy) {
+        Objects.requireNonNull(strategy, "strategy");
+        String s = strategy.trim().toLowerCase(java.util.Locale.ROOT);
+        boolean encryptFamily = s.equals("encrypt") || s.equals("encryption") || s.equals("cipher");
+        Integer n;
+        if (encryptFamily) {
+            n = jdbc.queryForObject(
+                    """
+                    SELECT COUNT(*) FROM gateway_instance_masking_rule
+                    WHERE enabled = TRUE
+                      AND LOWER(strategy) IN ('encrypt', 'encryption', 'cipher')
+                    """,
+                    Integer.class);
+        } else {
+            n = jdbc.queryForObject(
+                    """
+                    SELECT COUNT(*) FROM gateway_instance_masking_rule
+                    WHERE enabled = TRUE AND LOWER(strategy) = ?
+                    """,
+                    Integer.class, s);
+        }
+        return n != null ? n : 0;
+    }
+
     public int deleteByInstanceId(String instanceId) {
         return jdbc.update(
                 "DELETE FROM gateway_instance_masking_rule WHERE instance_id = ?",

@@ -1,6 +1,8 @@
 package com.whosly.gateway.masking;
 
 import java.util.Base64;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.Objects;
 
 /**
@@ -17,7 +19,7 @@ import java.util.Objects;
 public interface MaskingKeyProvider {
 
     /**
-     * @param keyId logical key name referenced by a rule
+     * @param keyId logical key name referenced by a rule / ciphertext
      * @return raw AES key bytes (128, 192 or 256 bits)
      * @throws MaskingException when the key is unknown
      */
@@ -39,5 +41,48 @@ public interface MaskingKeyProvider {
             }
             return key.clone();
         };
+    }
+
+    /**
+     * Provider backed by multiple raw AES keys (active + previous for rotation).
+     *
+     * <p>Each entry is cloned; the returned provider clones again on every
+     * {@link #key(String)} call.</p>
+     */
+    static MaskingKeyProvider ofKeys(Map<String, byte[]> keysById) {
+        Objects.requireNonNull(keysById, "keysById must not be null");
+        if (keysById.isEmpty()) {
+            throw new IllegalArgumentException("keysById must not be empty");
+        }
+        Map<String, byte[]> copy = new LinkedHashMap<>();
+        for (Map.Entry<String, byte[]> e : keysById.entrySet()) {
+            if (e.getKey() == null || e.getKey().isBlank()) {
+                throw new IllegalArgumentException("key id must not be blank");
+            }
+            if (e.getValue() == null) {
+                throw new IllegalArgumentException("key bytes must not be null for id=" + e.getKey());
+            }
+            copy.put(e.getKey().trim(), e.getValue().clone());
+        }
+        Map<String, byte[]> frozen = Map.copyOf(copy);
+        return requested -> {
+            byte[] key = frozen.get(requested);
+            if (key == null) {
+                throw new MaskingException("Unknown masking key id: " + requested);
+            }
+            return key.clone();
+        };
+    }
+
+    /**
+     * Provider backed by multiple Base64-encoded AES keys.
+     */
+    static MaskingKeyProvider ofBase64Keys(Map<String, String> base64ById) {
+        Objects.requireNonNull(base64ById, "base64ById must not be null");
+        Map<String, byte[]> raw = new LinkedHashMap<>();
+        for (Map.Entry<String, String> e : base64ById.entrySet()) {
+            raw.put(e.getKey(), Base64.getDecoder().decode(e.getValue()));
+        }
+        return ofKeys(raw);
     }
 }

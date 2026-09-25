@@ -119,8 +119,8 @@ public final class InstanceMaskingRuleCompiler {
             case "encrypt" -> {
                 if (resolveCipher().isEmpty()) {
                     throw new IllegalArgumentException(
-                            "encrypt strategy requires a masking key："
-                                    + "设置 gateway.masking.key-base64 或在管控台「安全」中配置脱敏密钥");
+                            "encrypt 策略需要脱敏密钥（失败闭合，不会静默跳过）："
+                                    + "设置 gateway.masking.key-base64 或在管控台「运维 → 安全」配置脱敏密钥");
                 }
             }
             case "null" -> {

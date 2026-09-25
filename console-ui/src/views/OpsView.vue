@@ -14,6 +14,7 @@ import {
   listAuditSpool,
   putMaskingKey,
   putRiskPolicy,
+  verifyMaskingKey,
 } from '../api/consoleApi'
 import type {
   AuditEntry,
@@ -35,6 +36,9 @@ const keyId = ref('default')
 const keyBase64 = ref('')
 const keyMsg = ref<string | null>(null)
 const keyBusy = ref(false)
+const verifyBusy = ref(false)
+const keepPrevious = ref(true)
+const previousKeyId = ref('')
 const audit = ref<AuditEntry[]>([])
 const auditStatus = ref<AuditStatus | null>(null)
 const auditActionFilter = ref('')
@@ -128,13 +132,30 @@ async function saveKey() {
     keyStatus.value = await putMaskingKey({
       keyId: keyId.value.trim() || 'default',
       keyBase64: keyBase64.value.trim(),
+      previousKeyId: previousKeyId.value.trim() || undefined,
+      keepPrevious: keepPrevious.value,
     })
     keyBase64.value = ''
+    previousKeyId.value = ''
     keyMsg.value = keyStatus.value.message || '已保存'
   } catch (e) {
     keyMsg.value = e instanceof Error ? e.message : String(e)
   } finally {
     keyBusy.value = false
+  }
+}
+
+async function runVerify() {
+  verifyBusy.value = true
+  keyMsg.value = null
+  try {
+    const r = await verifyMaskingKey()
+    keyMsg.value = r.message || (r.ok ? '加密自检通过' : '自检失败')
+    keyStatus.value = await getMaskingKeyStatus()
+  } catch (e) {
+    keyMsg.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    verifyBusy.value = false
   }
 }
 
@@ -354,32 +375,55 @@ function sourceLabel(s?: string) {
     </div>
 
     <div class="panel">
-      <h3>安全 · 脱敏密钥</h3>
+      <h3>安全 · 脱敏密钥（列加密）</h3>
       <p class="muted">
         状态：
         <strong>{{ keyStatus?.configured ? '已配置' : '未配置' }}</strong>
         · 来源 {{ sourceLabel(keyStatus?.source) }}
-        <template v-if="keyStatus?.keyId"> · keyId={{ keyStatus.keyId }}</template>
+        <template v-if="keyStatus?.activeKeyId || keyStatus?.keyId">
+          · activeKeyId={{ keyStatus.activeKeyId || keyStatus.keyId }}
+        </template>
+        <template v-if="keyStatus?.previousKeyIds?.length">
+          · 可解密旧钥 {{ keyStatus?.previousKeyIds?.join(', ') }}
+        </template>
+        · encrypt 可绑定 {{ keyStatus?.encryptRulesCanBind ? '是' : '否' }}
+        <template v-if="keyStatus?.encryptRuleCount != null">
+          · encrypt 规则 {{ keyStatus?.encryptRuleCount }}
+        </template>
         · 控制面主密钥
         {{ keyStatus?.consoleMasterKeyConfigured ? '已配置' : '未配置（实验室）' }}
-        <template v-if="keyStatus?.requireSecretEncryption"> · 强制加密开</template>
+      </p>
+      <p v-if="keyStatus?.warning" class="err">{{ keyStatus.warning }}</p>
+      <p v-else-if="(keyStatus?.encryptRulesWithoutKey || 0) > 0" class="err">
+        有 {{ keyStatus?.encryptRulesWithoutKey }} 条启用的 encrypt 规则但无脱敏密钥；保存/重载将失败闭合。
       </p>
       <p class="muted tiny">
-        密钥永不回显。保存需已配置 <code>gateway.console.secret-key-base64</code>。清除后回退 yaml
-        <code>gateway.masking.key-base64</code>。
+        密钥永不回显。密文格式 <code>enc:v1:&lt;keyId&gt;:&lt;Base64&gt;</code>。
+        保存需 <code>gateway.console.secret-key-base64</code>。轮换默认保留旧钥供解密；加密始终用 active。
+        清除后回退 yaml <code>gateway.masking.key-base64</code>。非完整 KMS/HSM。
       </p>
       <form class="key-form" @submit.prevent="saveKey">
         <div class="field">
-          <label>keyId</label>
+          <label>keyId（active）</label>
           <input v-model="keyId" placeholder="default" />
         </div>
         <div class="field">
           <label>密钥 Base64（AES 128/192/256）</label>
           <input v-model="keyBase64" type="password" autocomplete="new-password" required placeholder="Base64…" />
         </div>
+        <div class="field">
+          <label>previousKeyId（可选，轮换时确保保留）</label>
+          <input v-model="previousKeyId" placeholder="如旧 keyId" />
+        </div>
+        <label class="check">
+          <input v-model="keepPrevious" type="checkbox" /> 保留现有密钥环供解密（轮换）
+        </label>
         <div class="actions">
-          <button type="submit" class="primary" :disabled="keyBusy">保存密钥</button>
+          <button type="submit" class="primary" :disabled="keyBusy">设置 / 轮换密钥</button>
           <button type="button" :disabled="keyBusy" @click="clearKey">清除管控台密钥</button>
+          <button type="button" :disabled="verifyBusy || !keyStatus?.configured" @click="runVerify">
+            {{ verifyBusy ? '自检中…' : '加密自检' }}
+          </button>
         </div>
       </form>
       <p v-if="keyMsg" class="msg">{{ keyMsg }}</p>
