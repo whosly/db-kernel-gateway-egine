@@ -153,12 +153,14 @@ class ConsoleApiControllerTest {
                 "a", "A", "mysql", "0.0.0.0", 1, true,
                 GatewayInstance.InstanceStatus.RUNNING, true, true,
                 "h", 3306, "db", "u", true, 0, 0, 10,
-                Map.of("connectionsAccepted", 3L, "policyDenials", 1L), "ok", "console");
+                Map.of("connectionsAccepted", 3L, "policyDenials", 1L), "ok", "console",
+                null, null);
         GatewayInstance b = new GatewayInstance(
                 "b", "B", "postgresql", "0.0.0.0", 2, true,
                 GatewayInstance.InstanceStatus.STOPPED, true, true,
                 "h", 5432, "db", "u", false, 0, 0, 10,
-                Map.of("connectionsAccepted", 2L), "ok", "config");
+                Map.of("connectionsAccepted", 2L), "ok", "config",
+                null, null);
         Map<String, Long> sum = ConsoleApiController.aggregateInstanceMetrics(List.of(a, b));
         assertThat(sum.get("connectionsAccepted")).isEqualTo(5L);
         assertThat(sum.get("policyDenials")).isEqualTo(1L);

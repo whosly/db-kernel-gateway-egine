@@ -339,6 +339,7 @@ public class GatewayInstanceRegistry {
             startable = true;
         }
 
+        ProxyCapability mode = ProxyCapability.fromDbType(listener.dbType());
         return new GatewayInstance(
                 listener.id(),
                 listener.name(),
@@ -359,7 +360,9 @@ public class GatewayInstanceRegistry {
                 maxConnections,
                 metrics,
                 message,
-                listener.source()
+                listener.source(),
+                mode,
+                mode.label()
         );
     }
 }

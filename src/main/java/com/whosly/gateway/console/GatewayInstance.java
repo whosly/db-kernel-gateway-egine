@@ -6,6 +6,7 @@ import java.util.Objects;
 /**
  * First-class console entity: one gateway listener slot (protocol-agnostic).
  * {@code dbType} is a catalog attribute, not a UI/layout branch key.
+ * {@code proxyMode} / {@code proxyModeLabel} are derived labeling (网关代理 vs 透明代理).
  */
 public record GatewayInstance(
         String id,
@@ -27,7 +28,9 @@ public record GatewayInstance(
         Integer maxConnections,
         Map<String, Long> metrics,
         String message,
-        String source
+        String source,
+        ProxyCapability proxyMode,
+        String proxyModeLabel
 ) {
     public enum InstanceStatus {
         RUNNING,
@@ -46,5 +49,10 @@ public record GatewayInstance(
         metrics = metrics != null ? Map.copyOf(metrics) : Map.of();
         message = message != null ? message : "";
         source = (source != null && !source.isBlank()) ? source : "config";
+        ProxyCapability resolved = proxyMode != null ? proxyMode : ProxyCapability.fromDbType(dbType);
+        proxyMode = resolved;
+        proxyModeLabel = (proxyModeLabel != null && !proxyModeLabel.isBlank())
+                ? proxyModeLabel
+                : resolved.label();
     }
 }

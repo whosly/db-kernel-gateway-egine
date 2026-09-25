@@ -59,6 +59,7 @@ public class SupportedDatabaseCatalog {
         boolean consoleCreateAllowed = entry.isEnabled()
                 && creatable
                 && !"stub".equals(maturity);
+        ProxyCapability mode = ProxyCapability.fromDbType(id);
         return new SupportedDatabaseInfo(
                 id,
                 display,
@@ -69,7 +70,9 @@ public class SupportedDatabaseCatalog {
                 entry.getNotes(),
                 registered,
                 creatable,
-                consoleCreateAllowed
+                consoleCreateAllowed,
+                mode,
+                mode.label()
         );
     }
 

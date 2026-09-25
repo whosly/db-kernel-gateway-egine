@@ -78,3 +78,7 @@ label {
   grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
   gap: 1rem;
 }
+
+.badge.proxy-gateway { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 40%, var(--border)); }
+.badge.proxy-transparent { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, var(--border)); }
+.badge.proxy-unsupported { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 40%, var(--border)); }

@@ -22,6 +22,7 @@ import type {
   GatewayInstance,
   UpdateInstancePayload,
 } from '../api/types'
+import { proxyModeBadgeClass, proxyModeHint } from '../api/proxyMode'
 import { usePolling } from '../composables/usePolling'
 
 const toast = inject<(m: string) => void>('toast', () => {})
@@ -60,6 +61,10 @@ const dbTypeOptions = computed(() => {
   const set = new Set(instances.value.map((i) => i.dbType).filter(Boolean))
   return Array.from(set).sort()
 })
+
+const selectedCreateType = computed(() =>
+  catalog.value.find((c) => c.id === form.dbType) || null,
+)
 
 const portConflictHint = computed(() => {
   const port = Number(form.listenPort)
@@ -366,8 +371,16 @@ async function onImportFile(ev: Event) {
             <select v-model="form.dbType" required @change="onDbTypeChange">
               <option v-for="t in creatableTypes" :key="t.id" :value="t.id">
                 {{ t.displayName }} ({{ t.id }})
+                {{ t.proxyModeLabel ? '· ' + t.proxyModeLabel : '' }}
               </option>
             </select>
+            <p v-if="selectedCreateType?.proxyModeLabel" class="muted tiny mode-hint">
+              <span
+                class="badge"
+                :class="proxyModeBadgeClass(selectedCreateType.proxyMode)"
+              >{{ selectedCreateType.proxyModeLabel }}</span>
+              {{ proxyModeHint(selectedCreateType.proxyMode) }}
+            </p>
           </div>
           <div class="field">
             <label>监听 Host</label>
@@ -452,5 +465,6 @@ async function onImportFile(ev: Event) {
 .check.inline { margin: 0; }
 .check input { width: auto; }
 footer { display: flex; justify-content: flex-end; gap: 0.5rem; }
+.mode-hint { margin: 0.35rem 0 0; display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; }
 @media (max-width: 640px) { .grid2 { grid-template-columns: 1fr; } }
 </style>

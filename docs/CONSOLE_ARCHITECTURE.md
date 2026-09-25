@@ -84,6 +84,7 @@
 
 - Catalog：回答「系统支持哪些类型、能否创建」。
 - Instance：回答「当前有哪些 listener、状态与指标」。
+- **代理模式标注**（`ProxyCapability`）：实例与目录 JSON 均带 `proxyMode` / `proxyModeLabel`——MySQL/MariaDB/PostgreSQL → `GATEWAY`（**网关代理**）；SQL Server → `TRANSPARENT`（**透明代理**）；Oracle/未知 → `UNSUPPORTED`。协议无关字段，不新增品牌路由；启停语义不变。
 
 状态机（实例）：
 

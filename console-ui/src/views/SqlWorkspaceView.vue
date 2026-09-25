@@ -352,7 +352,9 @@ onMounted(async () => {
         <select v-model="instanceId">
           <option disabled value="">请选择…</option>
           <option v-for="i in instances" :key="i.id" :value="i.id">
-            {{ i.name }} ({{ i.id }}) · {{ i.dbType }} · {{ i.targetHost }}:{{ i.targetPort }}
+            {{ i.name }} ({{ i.id }}) · {{ i.dbType }}
+            {{ i.proxyModeLabel ? '· ' + i.proxyModeLabel : '' }}
+            · {{ i.targetHost }}:{{ i.targetPort }}
           </option>
         </select>
       </label>
@@ -372,6 +374,7 @@ onMounted(async () => {
     <div v-if="selected" class="meta muted">
       代理 {{ selected.listenHost }}:{{ selected.listenPort }}
       · 状态 {{ selected.status }}
+      <template v-if="selected.proxyModeLabel"> · {{ selected.proxyModeLabel }}</template>
       · 目标 {{ selected.targetHost }}:{{ selected.targetPort }}
       · 库 {{ selected.targetDatabase || '—' }}
       · 密码 {{ selected.passwordConfigured ? '已配置' : '未配置' }}

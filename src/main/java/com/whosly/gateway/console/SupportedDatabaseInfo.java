@@ -15,12 +15,19 @@ public record SupportedDatabaseInfo(
         String notes,
         boolean registered,
         boolean creatable,
-        boolean consoleCreateAllowed
+        boolean consoleCreateAllowed,
+        ProxyCapability proxyMode,
+        String proxyModeLabel
 ) {
     public SupportedDatabaseInfo {
         Objects.requireNonNull(id, "id");
         Objects.requireNonNull(displayName, "displayName");
         Objects.requireNonNull(maturity, "maturity");
         notes = notes != null ? notes : "";
+        ProxyCapability resolved = proxyMode != null ? proxyMode : ProxyCapability.fromDbType(id);
+        proxyMode = resolved;
+        proxyModeLabel = (proxyModeLabel != null && !proxyModeLabel.isBlank())
+                ? proxyModeLabel
+                : resolved.label();
     }
 }

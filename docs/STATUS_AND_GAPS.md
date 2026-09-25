@@ -99,7 +99,7 @@ Spring 实际读取的键（`@Value`）与默认 `application.yml`、模板一�
 | P2-4 | Metrics 出口 | **partial（improved）** | 每 listener 独立 metrics；overview 求和 + `legacyMetrics`；**E lite**：`MetricsHistorySampler` + `GET …/metrics/history` + Overview SVG 火花图（内存环） | 外部 Prometheus/Grafana 非必需 | 可选后续接 Micrometer；告警阈值见 `docs/OPS.md` |
 | P2-5 | 审计测试与运维手册 | **partial（improved）** | P0-3 单测已有；**`docs/OPS.md`** 开启清单 / 告警清单；管控台 **spool 内容浏览**（§18）；README 运维段索引 | JDBC 审计真库验收仍缺 |
 | P2-6 | 集成测试在 CI 可复现 | **partial（improved）** | 跳过策略写入 `integration-test.properties` + OPS；`-Pintegration-test` 无 props → `assumeTrue` skip；`-Pintegration-testcontainers` **stub only** | 真 Testcontainers 接线另开；默认 `mvn test` 仍不需 Docker |
-| P2-7 | 多库扩展点 / Oracle·SQL Server | **in-progress / partial（SQL Server P0 + P1-lite）** | 第三库定为 **SQL Server TDS**（非 Oracle）。`SqlServerProtocolAdapter` + `sqlserver`/`mssql` 注册 + TDS framing + 透明 `DuplexRelay` + **P1-lite 明文** Login7/SQL_BATCH 观测（会话标签/事件；不驱动路由）；模板 `application-sqlserver-template.yml`（31433→1433）；管控台 SQL 工作台在 classpath 含 `mssql-jdbc` 时可经 listenPort 执行。Oracle 仍 stub。**仍无** 脱敏/Attention cancel/深 token/协议 reset/Login7 路由 | P1 余量（ERROR token、Docker 冒烟）；P2 深消息/脱敏/cancel；Oracle 另开 |
+| P2-7 | 多库扩展点 / Oracle·SQL Server | **in-progress / partial（SQL Server P0 + P1-lite）** | 第三库定为 **SQL Server TDS**（非 Oracle）。`SqlServerProtocolAdapter` + `sqlserver`/`mssql` 注册 + TDS framing + 透明 `DuplexRelay` + **P1-lite 明文** Login7/SQL_BATCH 观测（会话标签/事件；不驱动路由）；模板 `application-sqlserver-template.yml`（31433→1433）；管控台 SQL 工作台在 classpath 含 `mssql-jdbc` 时可经 listenPort 执行；实例/目录标注 `proxyMode`：**网关代理**（MySQL/PG）vs **透明代理**（SQL Server）。Oracle 仍 stub。**仍无** 脱敏/Attention cancel/深 token/协议 reset/Login7 路由 | P1 余量（ERROR token、Docker 冒烟）；P2 深消息/脱敏/cancel；Oracle 另开 |
 
 
 ### 4.1 TLS / 明文强制（产品策略，P1-1）

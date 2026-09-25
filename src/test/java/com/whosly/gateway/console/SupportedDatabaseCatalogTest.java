@@ -35,6 +35,8 @@ class SupportedDatabaseCatalogTest {
         assertThat(mysql.registered()).isTrue();
         assertThat(mysql.creatable()).isTrue();
         assertThat(mysql.consoleCreateAllowed()).isTrue();
+        assertThat(mysql.proxyMode()).isEqualTo(ProxyCapability.GATEWAY);
+        assertThat(mysql.proxyModeLabel()).isEqualTo("网关代理");
 
         SupportedDatabaseInfo pg = catalog.findById("postgresql").orElseThrow();
         assertThat(pg.consoleCreateAllowed()).isTrue();
@@ -43,12 +45,16 @@ class SupportedDatabaseCatalogTest {
         assertThat(sqlserver.maturity()).isEqualTo("partial");
         assertThat(sqlserver.creatable()).isTrue();
         assertThat(sqlserver.consoleCreateAllowed()).isTrue();
+        assertThat(sqlserver.proxyMode()).isEqualTo(ProxyCapability.TRANSPARENT);
+        assertThat(sqlserver.proxyModeLabel()).isEqualTo("透明代理");
 
         SupportedDatabaseInfo oracle = catalog.findById("oracle").orElseThrow();
         assertThat(oracle.enabled()).isFalse();
         assertThat(oracle.registered()).isTrue();
         assertThat(oracle.creatable()).isFalse();
         assertThat(oracle.consoleCreateAllowed()).isFalse();
+        assertThat(oracle.proxyMode()).isEqualTo(ProxyCapability.UNSUPPORTED);
+        assertThat(oracle.proxyModeLabel()).isEqualTo("不支持");
     }
 
     @Test

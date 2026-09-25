@@ -395,7 +395,7 @@ mvn -Pintegration-test test
 | 可选 API Token | `gateway.console.api-token`（读写）；`gateway.console.read-token`（仅 GET）；`Authorization: Bearer` 或 `X-Console-Token` |
 | 设计 | [`docs/CONSOLE_ARCHITECTURE.md`](docs/CONSOLE_ARCHITECTURE.md) §11–§15 · [`CONSOLE_DESIGN.md`](docs/CONSOLE_DESIGN.md) |
 
-一等实体是 **网关实例**（监听端口 + `dbType` 标签），不是按 MySQL/PG 分拆的控制台。  
+一等实体是 **网关实例**（监听端口 + `dbType` 标签），不是按 MySQL/PG 分拆的控制台。管控台以 `proxyMode`/`proxyModeLabel` 标注能力：**网关代理**（MySQL/PG 协议网关）vs **透明代理**（SQL Server 字节中继）；启停仍走既有 ProtocolAdapter。  
 类型目录（`gateway.catalog`）与实例注册表（`gateway.instances`）分离。  
 `gateway.instances` 非空时，同 JVM 为每个 enabled+creatable 实例启动独立 listener（MySQL+PG 可混部）；空列表仍合成 `id=default`。遗留 `/gateway/*` 操作 legacy 实例（匹配 `proxy-*`）。
 

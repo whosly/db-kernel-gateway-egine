@@ -12,6 +12,7 @@ import type {
   SessionRow,
   UpdateInstancePayload,
 } from '../api/types'
+import { proxyModeBadgeClass, proxyModeHint } from '../api/proxyMode'
 import {
   createMaskingRule,
   deleteMaskingRule,
@@ -347,7 +348,15 @@ watch(tab, (v) => {
       <header>
         <div>
           <h2>{{ instance.name }}</h2>
-          <div class="sub">{{ instance.id }} · {{ instance.dbType }}</div>
+          <div class="sub">
+            {{ instance.id }} · {{ instance.dbType }}
+            <span
+              v-if="instance.proxyModeLabel"
+              class="badge"
+              :class="proxyModeBadgeClass(instance.proxyMode)"
+            >{{ instance.proxyModeLabel }}</span>
+          </div>
+          <p v-if="instance.proxyMode" class="muted tiny">{{ proxyModeHint(instance.proxyMode) }}</p>
         </div>
         <button @click="$emit('close')">关闭</button>
       </header>
@@ -364,6 +373,11 @@ watch(tab, (v) => {
           <h4>状态</h4>
           <p>
             <span class="badge" :class="'status-' + instance.status">{{ instance.status }}</span>
+            <span
+              v-if="instance.proxyModeLabel"
+              class="badge"
+              :class="proxyModeBadgeClass(instance.proxyMode)"
+            >{{ instance.proxyModeLabel }}</span>
             <span class="badge">{{ instance.source === 'console' ? '管控台(H2)' : 'YAML' }}</span>
             <span
               v-if="pool"

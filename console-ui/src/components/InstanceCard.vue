@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import type { GatewayInstance, HealthCheckResult } from '../api/types'
+import { proxyModeBadgeClass } from '../api/proxyMode'
 import { healthCheck } from '../api/consoleApi'
 
 const props = defineProps<{ instance: GatewayInstance }>()
@@ -42,6 +43,12 @@ async function probe() {
     </header>
     <div class="meta">
       <span class="badge">{{ instance.dbType }}</span>
+      <span
+        v-if="instance.proxyModeLabel"
+        class="badge"
+        :class="proxyModeBadgeClass(instance.proxyMode)"
+        :title="instance.proxyMode || ''"
+      >{{ instance.proxyModeLabel }}</span>
       <span class="badge">{{ instance.source === 'console' ? '管控台' : 'YAML' }}</span>
       <span class="port">{{ instance.listenHost }}:{{ instance.listenPort }}</span>
       <span

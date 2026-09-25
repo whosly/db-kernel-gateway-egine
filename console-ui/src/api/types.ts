@@ -2,6 +2,8 @@
 
 export type InstanceStatus = 'RUNNING' | 'STOPPED' | 'DISABLED' | 'UNBOUND' | 'UNSUPPORTED'
 
+export type ProxyMode = 'GATEWAY' | 'TRANSPARENT' | 'UNSUPPORTED'
+
 export interface CatalogEntry {
   id: string
   displayName: string
@@ -13,6 +15,10 @@ export interface CatalogEntry {
   registered?: boolean
   creatable?: boolean
   consoleCreateAllowed?: boolean
+  /** GATEWAY | TRANSPARENT | UNSUPPORTED */
+  proxyMode?: ProxyMode | string
+  /** 中文：网关代理 / 透明代理 / 不支持 */
+  proxyModeLabel?: string
 }
 
 export interface GatewayInstance {
@@ -36,6 +42,10 @@ export interface GatewayInstance {
   metrics: Record<string, number>
   message: string
   source: string
+  /** GATEWAY | TRANSPARENT | UNSUPPORTED */
+  proxyMode?: ProxyMode | string
+  /** 中文：网关代理 / 透明代理 / 不支持 */
+  proxyModeLabel?: string
 }
 
 export interface OverviewResponse {
