@@ -122,6 +122,24 @@ export interface SqlExecutePayload {
   sql: string
   maxRows?: number
   timeoutMs?: number
+  /** Client-generated id so Cancel can target this in-flight execute. */
+  executionId?: string
+  /** Default false: stop on first error. */
+  continueOnError?: boolean
+}
+
+export interface SqlStatementResult {
+  index: number
+  ok: boolean
+  sql?: string
+  columns?: string[]
+  rows?: (string | number | boolean | null)[][]
+  rowCount?: number
+  truncated?: boolean
+  updateCount?: number
+  warnings?: string[]
+  error?: string
+  durationMs?: number
 }
 
 export interface SqlExecuteResult {
@@ -140,6 +158,25 @@ export interface SqlExecuteResult {
   proxyPort?: number
   instanceId?: string
   dbType?: string
+  executionId?: string
+  statementCount?: number
+  results?: SqlStatementResult[]
+  stoppedAt?: number
+  cancelled?: boolean
+  cancelNote?: string
+  cancelBestEffort?: boolean
+  cancelDisclaimer?: string
+}
+
+export interface SqlCancelResult {
+  ok: boolean
+  executionId?: string
+  instanceId?: string
+  found?: boolean
+  cancelRequested?: boolean
+  message?: string
+  cancelBestEffort?: boolean
+  cancelDisclaimer?: string
 }
 
 export type MaskingStrategy = 'null' | 'fixed' | 'partial' | 'hash' | 'encrypt'

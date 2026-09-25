@@ -19,7 +19,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
-
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.mock;
@@ -58,7 +57,6 @@ class InstanceSqlExecuteServiceTest {
                 false, "127.0.0.1", 0, url, "sa",
                 adapter, new GatewayRuntimeMetrics(), "config"));
 
-        // Wire-type instance stopped — execute must require RUNNING (proxy path).
         ProtocolAdapter mysqlAdapter = mock(ProtocolAdapter.class);
         when(mysqlAdapter.isRunning()).thenReturn(false);
         listeners.put("sql-mysql-stopped", new ManagedListener(
@@ -81,15 +79,70 @@ class InstanceSqlExecuteServiceTest {
     }
 
     @Test
+    void denyMultiStatementRiskOnSecond() {
+        assertThatThrownBy(() -> service.execute("sql-h2", "SELECT 1; DROP TABLE demo", 50, 5000))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("语句[1]")
+                .hasMessageContaining("风控拒绝");
+    }
+
+    @Test
     void maxRowsTruncates() {
         Map<String, Object> body = service.execute("sql-h2", "SELECT * FROM demo ORDER BY id", 2, 5000);
         assertThat(body.get("ok")).isEqualTo(true);
         assertThat(body.get("rowCount")).isEqualTo(2);
         assertThat(body.get("truncated")).isEqualTo(true);
         assertThat(body.get("viaProxy")).isEqualTo(false);
+        assertThat(body.get("statementCount")).isEqualTo(1);
+        assertThat(body.get("executionId")).isNotNull();
         @SuppressWarnings("unchecked")
         List<String> cols = (List<String>) body.get("columns");
         assertThat(cols).isNotEmpty();
+    }
+
+    @Test
+    void multiStatementReturnsResultsArray() {
+        Map<String, Object> body = service.execute(
+                "sql-h2", "SELECT 1 AS a; SELECT id FROM demo WHERE id = 2", 50, 5000);
+        assertThat(body.get("ok")).isEqualTo(true);
+        assertThat(body.get("statementCount")).isEqualTo(2);
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> results = (List<Map<String, Object>>) body.get("results");
+        assertThat(results).hasSize(2);
+        assertThat(results.get(0).get("ok")).isEqualTo(true);
+        assertThat(results.get(0).get("index")).isEqualTo(0);
+        assertThat(results.get(1).get("ok")).isEqualTo(true);
+        assertThat(results.get(1).get("rowCount")).isEqualTo(1);
+        // flatten first success for backward compat
+        assertThat(body.get("rowCount")).isEqualTo(1);
+    }
+
+    @Test
+    void stopOnFirstError() {
+        Map<String, Object> body = service.execute(
+                "sql-h2", "SELECT 1 AS a; SELECT * FROM nosuch; SELECT 3", 50, 5000);
+        assertThat(body.get("ok")).isEqualTo(false);
+        assertThat(body.get("stoppedAt")).isEqualTo(1);
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> results = (List<Map<String, Object>>) body.get("results");
+        assertThat(results).hasSize(2);
+        assertThat(results.get(0).get("ok")).isEqualTo(true);
+        assertThat(results.get(1).get("ok")).isEqualTo(false);
+        assertThat(results.get(1).get("error")).isNotNull();
+    }
+
+    @Test
+    void continueOnErrorRunsRemaining() {
+        Map<String, Object> body = service.execute(
+                "sql-h2", "SELECT 1 AS a; SELECT * FROM nosuch; SELECT 3 AS c",
+                50, 5000, null, true);
+        assertThat(body.get("ok")).isEqualTo(false);
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> results = (List<Map<String, Object>>) body.get("results");
+        assertThat(results).hasSize(3);
+        assertThat(results.get(0).get("ok")).isEqualTo(true);
+        assertThat(results.get(1).get("ok")).isEqualTo(false);
+        assertThat(results.get(2).get("ok")).isEqualTo(true);
     }
 
     @Test
@@ -100,7 +153,7 @@ class InstanceSqlExecuteServiceTest {
     }
 
     @Test
-    void rejectsMultiStatement() {
+    void legacyValidateSingleStatementStillRejectsMulti() {
         assertThatThrownBy(() -> InstanceSqlExecuteService.validateSingleStatement("SELECT 1; SELECT 2"))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("单条");
@@ -108,7 +161,9 @@ class InstanceSqlExecuteServiceTest {
 
     @Test
     void allowsTrailingSemicolon() {
-        InstanceSqlExecuteService.validateSingleStatement("SELECT 1;");
+        Map<String, Object> body = service.execute("sql-h2", "SELECT 1;", 10, 1000);
+        assertThat(body.get("ok")).isEqualTo(true);
+        assertThat(body.get("statementCount")).isEqualTo(1);
     }
 
     @Test
@@ -121,8 +176,6 @@ class InstanceSqlExecuteServiceTest {
 
     @Test
     void mysqlStoppedRequiresStart() {
-        // Password comes from gatewayConfig for config-source instances when empty on listener;
-        // set a non-empty password so we reach the RUNNING gate.
         ReflectionTestUtils.setField(gatewayConfig, "targetPassword", "secret");
         assertThatThrownBy(() -> service.execute("sql-mysql-stopped", "SELECT 1", 10, 1000))
                 .isInstanceOf(IllegalArgumentException.class)
@@ -164,5 +217,62 @@ class InstanceSqlExecuteServiceTest {
         assertThat(InstanceSqlExecuteService.usesWireProxy("sqlserver")).isTrue();
         assertThat(InstanceSqlExecuteService.usesWireProxy("mssql")).isTrue();
         assertThat(InstanceSqlExecuteService.usesWireProxy("h2")).isFalse();
+    }
+
+    @Test
+    void cancelUnknownExecution() {
+        Map<String, Object> body = service.cancel("no-such-exec");
+        assertThat(body.get("ok")).isEqualTo(false);
+        assertThat(body.get("found")).isEqualTo(false);
+        assertThat(body.get("cancelBestEffort")).isEqualTo(true);
+    }
+
+    @Test
+    void cancelInFlightExecution() throws Exception {
+        String execId = "cancel-" + UUID.randomUUID();
+
+        // Register a RunningExecution manually and exercise cancel path
+        InstanceSqlExecuteService.RunningExecution running =
+                new InstanceSqlExecuteService.RunningExecution(execId, "sql-h2");
+        @SuppressWarnings("unchecked")
+        var map = (java.util.concurrent.ConcurrentHashMap<String, InstanceSqlExecuteService.RunningExecution>)
+                ReflectionTestUtils.getField(service, "runningById");
+        map.put(execId, running);
+
+        // Put a real H2 statement that we can cancel
+        String url = (String) ReflectionTestUtils.getField(gatewayConfig, "targetDatabase");
+        try (Connection conn = DriverManager.getConnection(url, "sa", "")) {
+            running.connection.set(conn);
+            Statement stmt = conn.createStatement();
+            running.statement.set(stmt);
+
+            Map<String, Object> cancelResult = service.cancel("sql-h2", execId);
+            assertThat(cancelResult.get("ok")).isEqualTo(true);
+            assertThat(cancelResult.get("found")).isEqualTo(true);
+            assertThat(running.cancelled.get()).isTrue();
+        }
+
+        // After cancel, registry entry may still be present until execute removes it;
+        // our cancel does not remove — execute does. Clean up.
+        map.remove(execId);
+        assertThat(service.runningCount()).isEqualTo(0);
+    }
+
+    @Test
+    void cancelWrongInstanceRejected() {
+        String execId = "cancel-wrong-" + UUID.randomUUID();
+        InstanceSqlExecuteService.RunningExecution running =
+                new InstanceSqlExecuteService.RunningExecution(execId, "sql-h2");
+        @SuppressWarnings("unchecked")
+        var map = (java.util.concurrent.ConcurrentHashMap<String, InstanceSqlExecuteService.RunningExecution>)
+                ReflectionTestUtils.getField(service, "runningById");
+        map.put(execId, running);
+        try {
+            assertThatThrownBy(() -> service.cancel("other-instance", execId))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("不属于");
+        } finally {
+            map.remove(execId);
+        }
     }
 }

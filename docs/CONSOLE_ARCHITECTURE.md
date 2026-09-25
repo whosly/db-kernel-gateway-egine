@@ -840,16 +840,17 @@ GET /console/api/audit/status
 | 执行路径 | **服务端 JDBC 经该实例代理监听口**（与业务客户端同路径）：connect host 在 bind=`0.0.0.0`/`::`/`*` 时用 `127.0.0.1`，否则用具体 `listenHost`；port=`listenPort`；库名/用户/密码仍为**目标凭据**（透明代理）。列提示 `/schema/columns` 仍直连目标库。 |
 | 例外 | `dbType=h2`（lab/单测）无 ProtocolAdapter 线协议 → **直连目标 JDBC**，不要求 RUNNING |
 | 路径 | `POST /console/api/instances/{id}/sql/execute` |
-| Body | `{ sql, maxRows?: 200 (cap 1000), timeoutMs?: 15000 (cap 60000) }` |
-| 响应 | `{ ok, columns, rows, rowCount, truncated, durationMs, viaProxy, proxyHost?, proxyPort?, note, message?, warnings? }`；`note` 中文说明经代理口 |
+| Body | `{ sql, maxRows?: 200 (cap 1000), timeoutMs?: 15000 (cap 60000), executionId?, continueOnError? }` |
+| 响应 | `{ ok, executionId, statementCount, results[{index,ok,sql,columns,rows,…}], stoppedAt?, cancelled?, columns/rows…(首条成功扁平兼容), durationMs, viaProxy, … }` |
 | 前置 | 线协议类型须实例 **RUNNING**；未启动 → **400**「请先启动…」 |
-| 单语句 | 仅允许单条语句；中间 `;` 拒绝（允许末尾分号） |
-| 风控 | 执行前管控台层 `MutableDatabaseRiskPolicy`（defense in depth）；代理数据面亦有风控 |
-| 超时 | JDBC `Statement.setQueryTimeout`；超时取消 |
+| 多语句 | `;` 分隔，最多 20 条；引号/注释内分号忽略；默认 **遇错即停**（`stoppedAt`）；`continueOnError=true` 可继续 |
+| 风控 | **每条语句**执行前管控台层 `MutableDatabaseRiskPolicy`（defense in depth）；代理数据面亦有风控 |
+| 超时 | 整体 `timeoutMs` 预算 + 每条 `Statement.setQueryTimeout` |
 | 安全 | 不记/不回密码；单元格字符串截断（4KB）；审计 `sql.execute`（语句截断） |
 | 类型 | MySQL / MariaDB / PostgreSQL / SQL Server（`mssql-jdbc` 已入默认依赖；缺失时仍 **400**）；h2 lab 直连；经 **listenPort** 代理（须 RUNNING） |
 | 错误 | 无密码/未启动/不支持类型 → 400；连接失败 → 502；未知实例 → 400 |
-| UI | 顶栏「SQL 工作台」路由 `/sql`；标明经代理口 + 须启动；中文文案 |
+| 取消 | `POST …/sql/cancel` 或 `POST /sql/executions/{executionId}/cancel` → `Statement.cancel()`+close；**尽力而为**（非 TDS Attention / PG cancel key） |
+| UI | 顶栏「SQL 工作台」路由 `/sql`；多结果 Tab；运行中「取消」；中文文案 |
 
 ### 15.7 REST 契约追加
 
@@ -860,7 +861,9 @@ GET /console/api/audit/status
 | POST | `/instances/import` | 批量导入 |
 | GET | `/instances?status=&dbType=&q=` | 筛选 |
 | POST | `/instances/bulk` | 批量 start/stop |
-| POST | `/instances/{id}/sql/execute` | SQL 工作台 |
+| POST | `/instances/{id}/sql/execute` | SQL 工作台（多语句） |
+| POST | `/instances/{id}/sql/cancel` | 取消进行中执行（executionId） |
+| POST | `/sql/executions/{executionId}/cancel` | 同上（按 executionId） |
 
 ### 15.8 演进表更新
 
@@ -878,7 +881,7 @@ GET /console/api/audit/status
 - [x] 运行中更新：stop→rebind→start；端口冲突排除自身
 - [x] 密码永不回显；omit 保留；导入忽略密码
 - [x] 克隆复制 H2 密文；API 无明文
-- [x] SQL 单语句 + 风控 + 单元格截断 + 审计截断
+- [x] SQL 多语句（≤20）+ 每语句风控 + 单元格截断 + 审计截断；取消尽力而为
 - [x] SQL 经代理 listenPort（RUNNING 门禁）；h2 lab 直连例外已文档化
 - [x] Prometheus / 外部 scrape **本轮不做**（写明）
 - [x] STATUS P2-3 + README API 表同步；`mvn test` + `npm run build` 绿
@@ -900,10 +903,12 @@ GET /console/api/audit/status
 | 历史 / 片段 | 控制面 H2 持久化 + REST |
 | 导出 | 结果集 CSV / JSON |
 | EXPLAIN | 按 dbType 包装（MySQL/PG/…）；执行仍经代理 |
+| 多语句 | `;` 分隔顺序执行；结果数组 / 多结果 Tab |
+| 取消 | 尽力而为 `Statement.cancel`；见 §19 |
 
 ### 16.2 非目标（本轮明确不做）
 
-语句取消、可视化 Query Builder、ER 图、跨实例联合查询、品牌专用 IDE API。
+可视化 Query Builder、ER 图、跨实例联合查询、品牌专用 IDE API、深度 TDS Attention / PG 代发 cancel。
 
 ### 16.3 自检
 
@@ -1067,3 +1072,44 @@ GET /console/api/audit/spool?limit=50&before=&source=auto|ring|spool|jdbc&protoc
 - [x] `mvn test` + `npm run build` 绿
 
 **结论：设计可通过 → 进入 §18 实现。**
+
+---
+
+## 19. SQL IDE · 多语句执行与取消（尽力而为）
+
+> 作者自检通过后实现。升级 §15.6 / §16：允许多语句脚本 + 运行中取消。  
+> **不做** Prometheus、Oracle、深度 TDS Attention、可视化 Query Builder。
+
+### 19.1 多语句
+
+| 项 | 约定 |
+|---|---|
+| 分隔 | `;`；`SqlStatementSplitter` 尊重 `'…'` / `"…"` / `` `…` ``、`--`/`#` 行注释、块注释 |
+| 上限 | 最多 **20** 条非空语句；超出 → 400 |
+| 执行 | 同一 JDBC Connection **顺序**执行；线协议类型仍经 **proxy listenPort**；h2 lab 直连 |
+| 风控 | **每条** `MutableDatabaseRiskPolicy.evaluate`；拒绝时带 `语句[i]` 索引 |
+| 遇错 | 默认 **stop on first error**（响应 `stoppedAt` + `results`）；可选 `continueOnError=true` |
+| 限额 | 每条仍受 `maxRows`；整体 `timeoutMs` 为预算（剩余时间传给后续 `setQueryTimeout`） |
+| 兼容 | 单语句时顶层仍有 `columns`/`rows`/`rowCount`（取首条成功结果扁平） |
+
+### 19.2 取消（best-effort）
+
+| 项 | 约定 |
+|---|---|
+| 登记 | 执行开始时用 `executionId`（客户端生成或服务端 UUID）登记 `Statement`/`Connection` |
+| API | `POST /console/api/instances/{id}/sql/cancel` body `{ executionId }`；或 `POST /console/api/sql/executions/{executionId}/cancel` |
+| 行为 | `Statement.cancel()` + close statement/connection；从登记表移除（execute 结束时亦移除） |
+| 诚实 | **不是** TDS Attention，也 **不是** PG CancelRequest / BackendKeyData 代发；经代理时效果依赖驱动与目标库 |
+| UI | 运行中显示「取消」；先调 cancel API，再 `AbortController.abort()` 解除前端等待 |
+
+### 19.3 自检清单（作者）
+
+- [x] 协议无关路径；无品牌前缀
+- [x] 多语句 ≤20；遇错即停 + 可选继续；每语句风控
+- [x] cancel 登记 + 双路径 API；文档标明尽力而为
+- [x] UI 多结果 Tab + 取消按钮；单语句路径仍可用
+- [x] CONSOLE_ARCHITECTURE §19 + STATUS / README 同步
+- [x] `mvn test` + `npm run build` 绿
+
+**结论：设计可通过 → 进入 §19 实现。**
+

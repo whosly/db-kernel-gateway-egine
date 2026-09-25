@@ -45,7 +45,11 @@ export async function apiGet<T>(path: string): Promise<T> {
   return parse<T>(res)
 }
 
-export async function apiPost<T>(path: string, body?: unknown): Promise<T> {
+export async function apiPost<T>(
+  path: string,
+  body?: unknown,
+  init?: { signal?: AbortSignal },
+): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
     method: 'POST',
     credentials: 'include',
@@ -56,6 +60,7 @@ export async function apiPost<T>(path: string, body?: unknown): Promise<T> {
       ...csrfHeaders(),
     },
     body: body === undefined ? undefined : JSON.stringify(body),
+    signal: init?.signal,
   })
   return parse<T>(res)
 }

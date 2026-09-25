@@ -12,6 +12,7 @@ import type {
   MaskingRulePayload,
   MaskingRulesResponse,
   OverviewResponse,
+  SqlCancelResult,
   SqlExecutePayload,
   SqlExecuteResult,
   UpdateInstancePayload,
@@ -82,10 +83,28 @@ export function bulkInstances(action: 'start' | 'stop', ids: string[]) {
   return apiPost<BulkResult>('/instances/bulk', { action, ids })
 }
 
-export function executeSql(instanceId: string, payload: SqlExecutePayload) {
+export function executeSql(
+  instanceId: string,
+  payload: SqlExecutePayload,
+  init?: { signal?: AbortSignal },
+) {
   return apiPost<SqlExecuteResult>(
     `/instances/${encodeURIComponent(instanceId)}/sql/execute`,
     payload,
+    init,
+  )
+}
+
+export function cancelSql(instanceId: string, executionId: string) {
+  return apiPost<SqlCancelResult>(
+    `/instances/${encodeURIComponent(instanceId)}/sql/cancel`,
+    { executionId },
+  )
+}
+
+export function cancelSqlExecution(executionId: string) {
+  return apiPost<SqlCancelResult>(
+    `/sql/executions/${encodeURIComponent(executionId)}/cancel`,
   )
 }
 

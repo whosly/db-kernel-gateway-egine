@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, inject, onMounted, ref, watch } from 'vue'
 import {
+  cancelSql,
   clearSqlHistory,
   createSqlSnippet,
   deleteSqlSnippet,
@@ -17,6 +18,7 @@ import type {
   SqlExecuteResult,
   SqlHistoryEntry,
   SqlSnippet,
+  SqlStatementResult,
 } from '../api/types'
 
 const toast = inject<(m: string) => void>('toast', () => {})
@@ -35,6 +37,29 @@ const maxRows = ref(200)
 const running = ref(false)
 const error = ref<string | null>(null)
 const result = ref<SqlExecuteResult | null>(null)
+const resultTab = ref(0)
+const currentExecutionId = ref<string | null>(null)
+let abortController: AbortController | null = null
+
+const statementResults = computed((): SqlStatementResult[] => {
+  if (!result.value) return []
+  if (result.value.results?.length) return result.value.results
+  return [
+    {
+      index: 0,
+      ok: result.value.ok,
+      columns: result.value.columns,
+      rows: result.value.rows,
+      rowCount: result.value.rowCount,
+      truncated: result.value.truncated,
+      updateCount: result.value.updateCount,
+      warnings: result.value.warnings,
+      durationMs: result.value.durationMs,
+    },
+  ]
+})
+
+const activeResult = computed(() => statementResults.value[resultTab.value] || statementResults.value[0] || null)
 
 const tabs = ref<EditorTab[]>([
   { id: 't1', title: '查询 1', sql: 'SELECT 1' },
@@ -203,6 +228,11 @@ function closeTab(id: string) {
   if (activeTabId.value === id) activeTabId.value = tabs.value[0].id
 }
 
+function newExecutionId() {
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) return crypto.randomUUID()
+  return `exec-${Date.now()}-${Math.random().toString(16).slice(2)}`
+}
+
 async function run(sqlOverride?: string) {
   if (!instanceId.value) {
     toast('请先选择网关实例')
@@ -213,21 +243,59 @@ async function run(sqlOverride?: string) {
     toast('请输入 SQL')
     return
   }
+  if (abortController) {
+    abortController.abort()
+  }
+  abortController = new AbortController()
+  const executionId = newExecutionId()
+  currentExecutionId.value = executionId
   running.value = true
   error.value = null
   result.value = null
+  resultTab.value = 0
   try {
-    result.value = await executeSql(instanceId.value, {
-      sql,
-      maxRows: Number(maxRows.value) || 200,
-    })
+    result.value = await executeSql(
+      instanceId.value,
+      {
+        sql,
+        maxRows: Number(maxRows.value) || 200,
+        executionId,
+      },
+      { signal: abortController.signal },
+    )
+    if (result.value.results?.length) {
+      const failIdx = result.value.results.findIndex((r) => !r.ok)
+      resultTab.value = failIdx >= 0 ? failIdx : 0
+    }
     toast(result.value.message || `完成 · ${result.value.durationMs}ms`)
     loadHistory()
   } catch (e) {
-    error.value = e instanceof Error ? e.message : String(e)
+    if (e instanceof DOMException && e.name === 'AbortError') {
+      error.value = '请求已中止（浏览器侧）；服务端取消为尽力而为'
+    } else {
+      error.value = e instanceof Error ? e.message : String(e)
+    }
     loadHistory()
   } finally {
     running.value = false
+    currentExecutionId.value = null
+    abortController = null
+  }
+}
+
+async function cancelRunning() {
+  const execId = currentExecutionId.value
+  if (!instanceId.value || !execId) {
+    toast('当前无进行中的执行')
+    return
+  }
+  try {
+    const body = await cancelSql(instanceId.value, execId)
+    toast(body.message || '已请求取消')
+    // Also abort the fetch so UI unblocks if the server hangs
+    abortController?.abort()
+  } catch (e) {
+    toast(e instanceof Error ? e.message : String(e))
   }
 }
 
@@ -253,13 +321,14 @@ function onKey(e: KeyboardEvent) {
 }
 
 function exportCsv() {
-  if (!result.value?.columns?.length) {
+  const cols = activeResult.value?.columns
+  const rows = activeResult.value?.rows
+  if (!cols?.length) {
     toast('无结果可导出')
     return
   }
-  const cols = result.value.columns
   const lines = [cols.map(csvEscape).join(',')]
-  for (const row of result.value.rows || []) {
+  for (const row of rows || []) {
     lines.push(row.map((c) => csvEscape(c == null ? '' : String(c))).join(','))
   }
   downloadBlob(lines.join('\n'), `sql-result-${Date.now()}.csv`, 'text/csv;charset=utf-8')
@@ -270,7 +339,8 @@ function exportJson() {
     toast('无结果可导出')
     return
   }
-  downloadBlob(JSON.stringify(result.value, null, 2), `sql-result-${Date.now()}.json`, 'application/json')
+  const payload = activeResult.value || result.value
+  downloadBlob(JSON.stringify(payload, null, 2), `sql-result-${Date.now()}.json`, 'application/json')
 }
 
 function csvEscape(v: string) {
@@ -343,7 +413,7 @@ onMounted(async () => {
   <div class="sql-ide">
     <p class="lead">
       SQL IDE 挂在<strong>网关实例</strong>上：执行经<strong>代理 listenPort</strong>（脱敏/观测/风控生效）；
-      左侧对象树为<strong>直连目标 JDBC 元数据</strong>。多 Tab · 历史 · 片段 · 导出 · EXPLAIN。
+      左侧对象树为<strong>直连目标 JDBC 元数据</strong>。多语句（;）· 取消（尽力而为）· 多 Tab · 历史 · 片段 · 导出 · EXPLAIN。
     </p>
 
     <div class="bar">
@@ -365,8 +435,17 @@ onMounted(async () => {
       <button class="primary" :disabled="running || !instanceId" @click="run()">
         {{ running ? '执行中…' : '运行 (Ctrl/⌘+Enter)' }}
       </button>
+      <button
+        v-if="running"
+        type="button"
+        class="danger-btn"
+        :disabled="!currentExecutionId"
+        @click="cancelRunning"
+      >
+        取消
+      </button>
       <button type="button" :disabled="running || !instanceId" @click="runExplain">EXPLAIN</button>
-      <button type="button" :disabled="!result" @click="exportCsv">导出 CSV</button>
+      <button type="button" :disabled="!activeResult?.columns?.length" @click="exportCsv">导出 CSV</button>
       <button type="button" :disabled="!result" @click="exportJson">导出 JSON</button>
       <button type="button" @click="loadInstances">刷新实例</button>
     </div>
@@ -494,41 +573,63 @@ onMounted(async () => {
           class="editor"
           rows="12"
           spellcheck="false"
-          placeholder="输入单条 SQL…"
+          placeholder="输入 SQL（可用 ; 分隔多条，最多 20 条；遇错默认停止）…"
           @keydown="onKey"
         />
 
         <p v-if="error" class="err">{{ error }}</p>
         <div v-if="result" class="result">
           <div class="result-head">
-            <span>{{ result.rowCount }} 行</span>
+            <span v-if="result.statementCount != null">{{ result.statementCount }} 条语句</span>
             <span>{{ result.durationMs }} ms</span>
-            <span v-if="result.truncated" class="warn">已截断</span>
-            <span v-if="result.updateCount != null">updateCount={{ result.updateCount }}</span>
+            <span v-if="result.stoppedAt != null" class="warn">停于 [{{ result.stoppedAt }}]</span>
+            <span v-if="result.cancelled" class="warn">已取消</span>
             <span v-if="result.viaProxy" class="ok-tag">
               经代理 {{ result.proxyHost }}:{{ result.proxyPort }}
             </span>
             <span class="muted tiny">{{ result.note }}</span>
           </div>
-          <p v-for="(w, i) in result.warnings || []" :key="i" class="muted tiny">{{ w }}</p>
-          <div class="table-wrap">
-            <table v-if="result.columns.length">
-              <thead>
-                <tr>
-                  <th v-for="c in result.columns" :key="c">{{ c }}</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="(row, ri) in result.rows" :key="ri">
-                  <td v-for="(cell, ci) in row" :key="ci">
-                    <span v-if="cell === null" class="null">NULL</span>
-                    <span v-else>{{ cell }}</span>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-            <p v-else class="muted">无结果集</p>
+          <p v-if="result.cancelDisclaimer" class="muted tiny">{{ result.cancelDisclaimer }}</p>
+          <div v-if="statementResults.length > 1" class="result-tabs">
+            <button
+              v-for="r in statementResults"
+              :key="r.index"
+              type="button"
+              class="tab"
+              :class="{ on: resultTab === r.index, 'tab-err': !r.ok }"
+              @click="resultTab = r.index"
+            >
+              #{{ r.index }} {{ r.ok ? 'OK' : 'ERR' }}
+            </button>
           </div>
+          <template v-if="activeResult">
+            <div class="result-head">
+              <span v-if="activeResult.ok">{{ activeResult.rowCount ?? 0 }} 行</span>
+              <span v-if="activeResult.durationMs != null">{{ activeResult.durationMs }} ms</span>
+              <span v-if="activeResult.truncated" class="warn">已截断</span>
+              <span v-if="activeResult.updateCount != null">updateCount={{ activeResult.updateCount }}</span>
+              <span v-if="!activeResult.ok" class="err">{{ activeResult.error }}</span>
+            </div>
+            <p v-for="(w, i) in activeResult.warnings || []" :key="i" class="muted tiny">{{ w }}</p>
+            <div class="table-wrap">
+              <table v-if="activeResult.ok && activeResult.columns?.length">
+                <thead>
+                  <tr>
+                    <th v-for="c in activeResult.columns" :key="c">{{ c }}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="(row, ri) in activeResult.rows || []" :key="ri">
+                    <td v-for="(cell, ci) in row" :key="ci">
+                      <span v-if="cell === null" class="null">NULL</span>
+                      <span v-else>{{ cell }}</span>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+              <p v-else-if="activeResult.ok" class="muted">无结果集</p>
+            </div>
+          </template>
         </div>
       </section>
     </div>
@@ -603,4 +704,11 @@ th { background: var(--bg-elevated); position: sticky; top: 0; }
 .muted { color: var(--text-muted); }
 .tiny { font-size: 0.75rem; }
 .link.danger { color: var(--danger, #ef4444); }
+.danger-btn {
+  background: var(--danger, #ef4444); color: #fff; border: 0; border-radius: 6px;
+  padding: 0.45rem 0.85rem; cursor: pointer;
+}
+.danger-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.result-tabs { display: flex; flex-wrap: wrap; gap: 0.25rem; margin: 0.5rem 0; }
+.tab-err { color: var(--danger, #ef4444) !important; }
 </style>

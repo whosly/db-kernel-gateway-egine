@@ -335,10 +335,14 @@ public class ConsoleApiController {
         if (body == null) {
             throw new IllegalArgumentException("request body is required");
         }
+        boolean continueOnError = Boolean.TRUE.equals(body.continueOnError());
         Map<String, Object> result;
         try {
-            result = sqlExecuteService.execute(id, body.sql(), body.maxRows(), body.timeoutMs());
-            recordSqlHistory(id, body.sql(), true, result);
+            result = sqlExecuteService.execute(
+                    id, body.sql(), body.maxRows(), body.timeoutMs(),
+                    body.executionId(), continueOnError);
+            boolean ok = !Boolean.FALSE.equals(result.get("ok"));
+            recordSqlHistory(id, body.sql(), ok, result);
         } catch (RuntimeException ex) {
             recordSqlHistoryFailure(id, body.sql(), ex);
             throw ex;
@@ -350,8 +354,46 @@ public class ConsoleApiController {
         audit("sql.execute", id, ConsoleAuditService.detail(
                 "ok", result.get("ok"),
                 "rowCount", result.get("rowCount"),
+                "statementCount", result.get("statementCount"),
+                "executionId", result.get("executionId"),
                 "durationMs", result.get("durationMs"),
                 "sql", truncatedSql));
+        return result;
+    }
+
+    /**
+     * Best-effort cancel of an in-flight console SQL execute for this instance.
+     * Body: {@code { "executionId": "..." }}.
+     */
+    @PostMapping("/instances/{id}/sql/cancel")
+    public Map<String, Object> cancelSql(@PathVariable("id") String id,
+                                         @RequestBody(required = false) SqlCancelBody body) {
+        if (sqlExecuteService == null) {
+            throw new IllegalStateException("SQL execute service is not available");
+        }
+        String executionId = body != null ? body.executionId() : null;
+        Map<String, Object> result = sqlExecuteService.cancel(id, executionId);
+        audit("sql.cancel", id, ConsoleAuditService.detail(
+                "executionId", executionId,
+                "found", result.get("found"),
+                "ok", result.get("ok")));
+        return result;
+    }
+
+    /**
+     * Best-effort cancel by executionId (protocol-agnostic).
+     */
+    @PostMapping("/sql/executions/{executionId}/cancel")
+    public Map<String, Object> cancelSqlExecution(@PathVariable("executionId") String executionId) {
+        if (sqlExecuteService == null) {
+            throw new IllegalStateException("SQL execute service is not available");
+        }
+        Map<String, Object> result = sqlExecuteService.cancel(executionId);
+        Object instanceId = result.get("instanceId");
+        audit("sql.cancel", instanceId != null ? instanceId.toString() : null, ConsoleAuditService.detail(
+                "executionId", executionId,
+                "found", result.get("found"),
+                "ok", result.get("ok")));
         return result;
     }
 
@@ -1189,7 +1231,14 @@ public class ConsoleApiController {
     public record SqlExecuteBody(
             String sql,
             Integer maxRows,
-            Integer timeoutMs
+            Integer timeoutMs,
+            String executionId,
+            Boolean continueOnError
+    ) {
+    }
+
+    public record SqlCancelBody(
+            String executionId
     ) {
     }
 
