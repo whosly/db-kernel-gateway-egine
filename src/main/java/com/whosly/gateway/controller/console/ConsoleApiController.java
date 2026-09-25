@@ -6,6 +6,7 @@ import com.whosly.gateway.runtime.GatewayListenerRuntime.ManagedListener;
 import com.whosly.gateway.runtime.GatewayListenerRuntime;
 import com.whosly.gateway.console.observe.MetricsHistorySampler;
 import com.whosly.gateway.console.observe.RecentTrafficRing;
+import com.whosly.gateway.console.observe.TrafficAuditBrowseService;
 import com.whosly.gateway.console.InstanceBackendHealthService;
 import com.whosly.gateway.adapter.protocol.SessionSnapshot;
 import com.whosly.gateway.adapter.protocol.SessionDirtiness;
@@ -76,6 +77,7 @@ public class ConsoleApiController {
     private final InstanceSqlExecuteService sqlExecuteService;
     private final ConsoleSqlHistoryStore sqlHistoryStore;
     private final ConsoleSqlSnippetStore sqlSnippetStore;
+    private final TrafficAuditBrowseService trafficAuditBrowseService;
 
     /** Test-friendly constructor (security extras optional). */
     public ConsoleApiController(SupportedDatabaseCatalog catalog,
@@ -84,7 +86,7 @@ public class ConsoleApiController {
                                 GatewayRuntimeMetrics runtimeMetrics,
                                 GatewayConfig gatewayConfig) {
         this(catalog, instanceRegistry, protocolAdapter, runtimeMetrics, gatewayConfig,
-                null, null, null, null, null, null, null, null, null, null, null);
+                null, null, null, null, null, null, null, null, null, null, null, null);
     }
 
     @Autowired
@@ -103,7 +105,8 @@ public class ConsoleApiController {
                                 @Autowired(required = false) MetricsHistorySampler metricsHistorySampler,
                                 @Autowired(required = false) InstanceSqlExecuteService sqlExecuteService,
                                 @Autowired(required = false) ConsoleSqlHistoryStore sqlHistoryStore,
-                                @Autowired(required = false) ConsoleSqlSnippetStore sqlSnippetStore) {
+                                @Autowired(required = false) ConsoleSqlSnippetStore sqlSnippetStore,
+                                @Autowired(required = false) TrafficAuditBrowseService trafficAuditBrowseService) {
         this.catalog = catalog;
         this.instanceRegistry = instanceRegistry;
         this.protocolAdapter = protocolAdapter;
@@ -120,6 +123,7 @@ public class ConsoleApiController {
         this.sqlExecuteService = sqlExecuteService;
         this.sqlHistoryStore = sqlHistoryStore;
         this.sqlSnippetStore = sqlSnippetStore;
+        this.trafficAuditBrowseService = trafficAuditBrowseService;
     }
 
     @GetMapping("/supported-databases")
@@ -797,6 +801,36 @@ public class ConsoleApiController {
         body.put("consoleAuditCount", auditService != null ? auditService.count() : 0);
         body.put("help", "流量审计见 docs/OPS.md · gateway.audit.*；本接口仅非密钥状态");
         return body;
+    }
+
+    /**
+     * Traffic / spool audit content browse (not control-plane ops audit).
+     *
+     * <p>{@code source}=auto|ring|spool|jdbc；分页 {@code limit}+{@code before}（epoch ms，排他上界）。</p>
+     */
+    @GetMapping("/audit/spool")
+    public Map<String, Object> listAuditSpool(
+            @RequestParam(value = "limit", defaultValue = "50") int limit,
+            @RequestParam(value = "before", required = false) Long before,
+            @RequestParam(value = "source", required = false) String source,
+            @RequestParam(value = "protocol", required = false) String protocol,
+            @RequestParam(value = "operation", required = false) String operation) {
+        TrafficAuditBrowseService svc = trafficAuditBrowseService;
+        if (svc == null) {
+            svc = new TrafficAuditBrowseService(gatewayConfig, recentTrafficRing);
+        }
+        return svc.browse(limit, before, source, protocol, operation);
+    }
+
+    /** Alias for {@link #listAuditSpool}. */
+    @GetMapping("/audit/records")
+    public Map<String, Object> listAuditRecords(
+            @RequestParam(value = "limit", defaultValue = "50") int limit,
+            @RequestParam(value = "before", required = false) Long before,
+            @RequestParam(value = "source", required = false) String source,
+            @RequestParam(value = "protocol", required = false) String protocol,
+            @RequestParam(value = "operation", required = false) String operation) {
+        return listAuditSpool(limit, before, source, protocol, operation);
     }
 
     @GetMapping("/metrics/history")

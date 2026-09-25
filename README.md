@@ -385,6 +385,7 @@ mvn -Pintegration-test test
 | 列提示 | `GET /console/api/instances/{id}/schema/columns?table=`（JDBC metadata；失败 502） |
 | 安全 | `GET/PUT/DELETE /console/api/security/masking-key`；`GET /console/api/audit`（`action`/`limit`） |
 | 审计状态 | `GET /console/api/audit/status`（非密钥：enabled/destination/spoolDir/…） |
+| 流量审计内容 | `GET /console/api/audit/spool`（别名 `/audit/records`；ring/spool/可选 jdbc；分页 `before`） |
 | 指标时序 | `GET /console/api/metrics/history?instanceId=&limit=`（进程内环；总览火花图） |
 | 风控 | `GET/PUT /console/api/risk-policy`（H2 覆盖 + 热挂；空=allow-all） |
 | 连接池 | 实例 `metrics`/`status` 含 `pool.{enabled,idleCount,maxIdle}` |

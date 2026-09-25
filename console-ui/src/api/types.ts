@@ -259,6 +259,35 @@ export interface AuditStatus {
   help?: string
 }
 
+export interface TrafficAuditEntry {
+  ts?: number | null
+  observedAt?: string | null
+  protocolName?: string | null
+  sessionId?: string | null
+  sequence?: number | null
+  operation?: string | null
+  statement?: string | null
+  instanceId?: string | null
+  source?: string | null
+  segment?: string | null
+}
+
+export interface TrafficAuditBrowseResponse {
+  auditEnabled: boolean
+  destination?: string
+  maskStatements?: boolean
+  spoolDir?: string
+  jdbcConfigured?: boolean
+  source: string
+  entries: TrafficAuditEntry[]
+  count: number
+  limit?: number
+  before?: number | null
+  nextBefore?: number | null
+  note?: string
+  help?: string
+}
+
 export interface MetricsHistoryPoint {
   t: number
   connectionsAccepted?: number

@@ -127,3 +127,14 @@ mvn spring-boot:run -Dspring-boot.run.profiles=dev
 ```
 
 协议代理客户端 TLS 终止仍用 `gateway.tls.*`，与管控台 HTTPS 无关。
+
+## 管控台浏览流量审计（spool / 环）
+
+- 状态（非密钥）：`GET /console/api/audit/status`
+- **内容浏览**：`GET /console/api/audit/spool?limit=50&source=auto|ring|spool|jdbc`
+  - lab 默认：`source=ring` 或 `auto` 回退到进程内最近语句（重启丢失）
+  - 开启 `gateway.audit.enabled=true` 后可读本地 spool 分段；**不**推进 ship offset
+  - `destination=jdbc` 且配置了 `gateway.audit.jdbc.url` 时可只读审计表（须已建表，见 `docs/sql/audit-sink-schema.sql`）
+- 管控操作审计仍用：`GET /console/api/audit`（H2，与流量 spool 分离）
+- UI：运维页「审计」Tabs
+

@@ -613,6 +613,32 @@ public class GatewayConfig implements DisposableBean {
         return auditSpoolDir;
     }
 
+    public String getAuditFileName() {
+        return auditFileName;
+    }
+
+    /** True when jdbc sink URL is configured (password never exposed via console status). */
+    public boolean isAuditJdbcConfigured() {
+        return auditJdbcUrl != null && !auditJdbcUrl.isBlank();
+    }
+
+    /** Internal browse / shipper use only — never put in API JSON. */
+    public String getAuditJdbcUrl() {
+        return auditJdbcUrl;
+    }
+
+    public String getAuditJdbcUsername() {
+        return auditJdbcUsername;
+    }
+
+    public String getAuditJdbcPassword() {
+        return auditJdbcPassword;
+    }
+
+    public String getAuditJdbcTable() {
+        return auditJdbcTable != null && !auditJdbcTable.isBlank() ? auditJdbcTable : "gateway_audit_record";
+    }
+
     public boolean isAuditShipperRunning() {
         return auditShipper != null && auditShipper.isRunning();
     }

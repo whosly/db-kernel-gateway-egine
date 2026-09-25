@@ -10,10 +10,18 @@ import {
   getMaskingKeyStatus,
   getRiskPolicy,
   listAudit,
+  listAuditSpool,
   putMaskingKey,
   putRiskPolicy,
 } from '../api/consoleApi'
-import type { AuditEntry, AuditStatus, MaskingKeyStatus, RiskPolicy } from '../api/types'
+import type {
+  AuditEntry,
+  AuditStatus,
+  MaskingKeyStatus,
+  RiskPolicy,
+  TrafficAuditBrowseResponse,
+  TrafficAuditEntry,
+} from '../api/types'
 import { usePolling } from '../composables/usePolling'
 
 const summary = ref<Record<string, unknown> | null>(null)
@@ -27,6 +35,13 @@ const keyBusy = ref(false)
 const audit = ref<AuditEntry[]>([])
 const auditStatus = ref<AuditStatus | null>(null)
 const auditActionFilter = ref('')
+const auditTab = ref<'ops' | 'traffic'>('ops')
+const traffic = ref<TrafficAuditBrowseResponse | null>(null)
+const trafficEntries = ref<TrafficAuditEntry[]>([])
+const trafficSource = ref<'auto' | 'ring' | 'spool' | 'jdbc'>('auto')
+const trafficProtocol = ref('')
+const trafficOperation = ref('')
+const trafficBefore = ref<number | null>(null)
 const risk = ref<RiskPolicy | null>(null)
 const riskOpsText = ref('')
 const riskKwText = ref('')
@@ -41,6 +56,41 @@ function linesToList(text: string): string[] {
     .filter(Boolean)
 }
 
+async function loadTraffic(resetCursor = true) {
+  if (resetCursor) trafficBefore.value = null
+  try {
+    traffic.value = await listAuditSpool({
+      limit: 40,
+      before: trafficBefore.value ?? undefined,
+      source: trafficSource.value,
+      protocol: trafficProtocol.value.trim() || undefined,
+      operation: trafficOperation.value.trim() || undefined,
+    })
+    trafficEntries.value = traffic.value.entries || []
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : String(e)
+  }
+}
+
+async function loadMoreTraffic() {
+  const next = traffic.value?.nextBefore
+  if (next == null) return
+  trafficBefore.value = next
+  try {
+    const page = await listAuditSpool({
+      limit: 40,
+      before: next,
+      source: trafficSource.value,
+      protocol: trafficProtocol.value.trim() || undefined,
+      operation: trafficOperation.value.trim() || undefined,
+    })
+    traffic.value = page
+    trafficEntries.value = [...trafficEntries.value, ...(page.entries || [])]
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : String(e)
+  }
+}
+
 async function load() {
   try {
     summary.value = await getConfigSummary()
@@ -49,6 +99,7 @@ async function load() {
     auditStatus.value = await getAuditStatus()
     const auditBody = await listAudit(30, auditActionFilter.value.trim() || undefined)
     audit.value = auditBody.entries || []
+    await loadTraffic(true)
     risk.value = await getRiskPolicy()
     if (risk.value) {
       riskEnabled.value = !!risk.value.enabled
@@ -148,7 +199,7 @@ function sourceLabel(s?: string) {
         </li>
         <li>
           流量审计：配置 <code>gateway.audit.enabled=true</code> 与 spool 目录；详见
-          <code>docs/OPS.md</code>。下方「审计状态」仅展示非密钥字段。
+          <code>docs/OPS.md</code>。下方可浏览状态与 <strong>spool / 内存环内容</strong>（只读）。
         </li>
         <li>指标趋势：进程内环（总览页火花图）；不强制外部 Prometheus。</li>
       </ul>
@@ -167,6 +218,86 @@ function sourceLabel(s?: string) {
         <div><dt>consoleAuditCount</dt><dd>{{ auditStatus.consoleAuditCount ?? 0 }}</dd></div>
       </dl>
       <p v-else class="muted">加载中…</p>
+    </div>
+
+    <div class="panel">
+      <h3>审计</h3>
+      <p class="muted tiny">
+        区分两类：<strong>管控操作审计</strong>（H2 <code>gateway_console_audit</code>）与
+        <strong>流量 / spool 审计</strong>（内存环 + 本地 spool；可选 JDBC sink）。密码与脱敏密钥永不展示。
+      </p>
+      <div class="tabs">
+        <button type="button" :class="{ active: auditTab === 'ops' }" @click="auditTab = 'ops'">管控操作审计</button>
+        <button type="button" :class="{ active: auditTab === 'traffic' }" @click="auditTab = 'traffic'">流量 / spool 审计</button>
+      </div>
+
+      <div v-if="auditTab === 'ops'">
+        <div class="row" style="margin-bottom: 0.5rem">
+          <input v-model="auditActionFilter" placeholder="按 action 过滤，如 instance.start" @change="load" />
+          <button type="button" @click="load">刷新</button>
+        </div>
+        <table v-if="audit.length" class="audit">
+          <thead>
+            <tr><th>时间</th><th>动作</th><th>实例</th><th>详情</th></tr>
+          </thead>
+          <tbody>
+            <tr v-for="e in audit" :key="e.id">
+              <td>{{ e.at }}</td>
+              <td>{{ e.action }}</td>
+              <td>{{ e.instanceId || '—' }}</td>
+              <td class="tiny">{{ e.detailJson }}</td>
+            </tr>
+          </tbody>
+        </table>
+        <p v-else class="muted">暂无管控操作审计记录</p>
+      </div>
+
+      <div v-else>
+        <p class="muted tiny">{{ traffic?.note || '加载中…' }}</p>
+        <div class="row" style="margin-bottom: 0.5rem">
+          <label class="inline">
+            来源
+            <select v-model="trafficSource" @change="loadTraffic(true)">
+              <option value="auto">自动</option>
+              <option value="ring">内存环</option>
+              <option value="spool">本地 spool</option>
+              <option value="jdbc">JDBC sink</option>
+            </select>
+          </label>
+          <input v-model="trafficProtocol" placeholder="协议过滤，如 MySQL" />
+          <input v-model="trafficOperation" placeholder="操作过滤，如 COM_QUERY" />
+          <button type="button" @click="loadTraffic(true)">刷新</button>
+        </div>
+        <p v-if="traffic && !traffic.auditEnabled && trafficSource !== 'ring'" class="empty-hint">
+          流量审计未启用（<code>gateway.audit.enabled=false</code>）。可切换来源为「内存环」查看进程内最近语句，或在配置中开启 spool。
+        </p>
+        <table v-if="trafficEntries.length" class="audit">
+          <thead>
+            <tr>
+              <th>时间</th>
+              <th>来源</th>
+              <th>协议</th>
+              <th>操作</th>
+              <th>会话</th>
+              <th>语句（已截断/脱敏）</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="(e, i) in trafficEntries" :key="`${e.ts}-${e.sessionId}-${i}`">
+              <td class="tiny">{{ e.observedAt || e.ts || '—' }}</td>
+              <td>{{ e.source || '—' }}</td>
+              <td>{{ e.protocolName || '—' }}</td>
+              <td>{{ e.operation || '—' }}</td>
+              <td class="tiny">{{ e.sessionId || '—' }}</td>
+              <td class="tiny mono">{{ e.statement || '' }}</td>
+            </tr>
+          </tbody>
+        </table>
+        <p v-else class="muted">暂无流量审计记录</p>
+        <div v-if="traffic?.nextBefore != null" class="row" style="margin-top: 0.5rem">
+          <button type="button" @click="loadMoreTraffic">加载更早</button>
+        </div>
+      </div>
     </div>
 
     <div class="panel">
@@ -237,29 +368,6 @@ function sourceLabel(s?: string) {
         <pre>{{ JSON.stringify(summary, null, 2) }}</pre>
       </div>
     </div>
-
-    <div class="panel">
-      <h3>操作审计（最近）</h3>
-      <p class="muted tiny">不含密码 / 脱敏密钥。完整鉴权与 SSO 仍为规划项。</p>
-      <div class="row" style="margin-bottom: 0.5rem">
-        <input v-model="auditActionFilter" placeholder="按 action 过滤，如 instance.start" @change="load" />
-        <button type="button" @click="load">刷新</button>
-      </div>
-      <table v-if="audit.length" class="audit">
-        <thead>
-          <tr><th>时间</th><th>动作</th><th>实例</th><th>详情</th></tr>
-        </thead>
-        <tbody>
-          <tr v-for="e in audit" :key="e.id">
-            <td>{{ e.at }}</td>
-            <td>{{ e.action }}</td>
-            <td>{{ e.instanceId || '—' }}</td>
-            <td class="tiny">{{ e.detailJson }}</td>
-          </tr>
-        </tbody>
-      </table>
-      <p v-else class="muted">暂无审计记录</p>
-    </div>
   </div>
 </template>
 
@@ -277,6 +385,7 @@ pre { font-size: 0.75rem; overflow: auto; max-height: 280px; }
 .err { color: var(--danger); }
 .muted { color: var(--text-muted); }
 .tiny { font-size: 0.75rem; }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; word-break: break-all; }
 .key-form { display: grid; gap: 0.65rem; max-width: 480px; }
 .field label { display: block; font-size: 0.8rem; color: var(--text-muted); margin-bottom: 0.25rem; }
 .field textarea, .field input { width: 100%; box-sizing: border-box; }
@@ -285,11 +394,35 @@ pre { font-size: 0.75rem; overflow: auto; max-height: 280px; }
 .audit { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
 .audit th, .audit td { border-bottom: 1px solid var(--border); padding: 0.4rem 0.35rem; text-align: left; vertical-align: top; }
 code { font-size: 0.85em; }
-.row { display: flex; gap: 0.5rem; flex-wrap: wrap; }
+.row { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; }
 .kv { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 0.35rem 1rem; }
 .kv dt { font-size: 0.75rem; color: var(--text-muted); }
 .kv dd { margin: 0; font-size: 0.9rem; }
 .risk-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; }
 @media (max-width: 800px) { .risk-grid { grid-template-columns: 1fr; } }
 .check { display: flex; align-items: center; gap: 0.4rem; margin: 0.5rem 0; font-size: 0.9rem; }
+.tabs { display: flex; gap: 0.35rem; margin: 0.75rem 0; }
+.tabs button {
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-muted);
+  border-radius: 999px;
+  padding: 0.35rem 0.85rem;
+  cursor: pointer;
+}
+.tabs button.active {
+  background: var(--bg-elevated, #1e293b);
+  color: var(--text, #e2e8f0);
+  border-color: #3b82f6;
+}
+.inline { display: flex; align-items: center; gap: 0.35rem; font-size: 0.85rem; color: var(--text-muted); }
+.inline select { margin-left: 0.25rem; }
+.empty-hint {
+  background: rgba(59, 130, 246, 0.08);
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  padding: 0.65rem 0.85rem;
+  font-size: 0.85rem;
+  margin-bottom: 0.65rem;
+}
 </style>

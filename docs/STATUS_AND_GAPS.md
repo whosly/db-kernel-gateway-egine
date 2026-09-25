@@ -15,7 +15,7 @@
 | 本环境 `mvn test`（`JAVA_HOME`=JDK 17） | **BUILD SUCCESS：Tests run 514, Failures 0, Errors 0, Skipped 0** | surefire；含 SQL IDE + form/token/open 鉴权 |
 | `pom.xml` 编译目标 | `maven.compiler.source/target=17` | **保持 17**；不升到 21 |
 
-**结论**：编译目标保持 17；VT 仅在 JDK 21+ 运行期启用。管控台已完成 Phase B/B+/C partial/E lite，并完成本轮**实例编辑/克隆/导入/筛选/批量**与 **SQL 工作台经代理 listenPort**；完整 SQL IDE（MaxGUI-lite）与本地 form/token 鉴权 + HTTPS 模板已落地；OIDC 为配置路径；外部 Prometheus·Grafana 仍不做。见 P0 / P1 / P2。
+**结论**：编译目标保持 17；VT 仅在 JDK 21+ 运行期启用。管控台已完成 Phase B/B+/C partial/E lite，并完成本轮**实例编辑/克隆/导入/筛选/批量**与 **SQL 工作台经代理 listenPort**；完整 SQL IDE（MaxGUI-lite）与本地 form/token 鉴权 + HTTPS 模板已落地；OIDC 为配置路径；**审计 spool 内容浏览**已落地；外部 Prometheus·Grafana 仍不做。见 P0 / P1 / P2。
 
 ## 2. 能力总览（按主题）
 
@@ -25,7 +25,7 @@
 | SQL Server（TDS）透明转发 | **partial（P0）** | `SqlServerProtocolAdapter` + framing；无观测/脱敏；计划 [`SQLSERVER_TDS_PLAN.md`](SQLSERVER_TDS_PLAN.md) |
 | 明文观测 / 状态机 | **partial** | 命令/消息抽取与会话状态齐全；TLS/压缩后 opaque |
 | 结果集脱敏 | **partial** | MySQL 文本+二进制、PG 已接线；类型边界见 README；无规则时透明 |
-| 审计 spool / JDBC ship | **partial** | 实现齐全；专用单元测试已补（P0-3）；默认关闭 |
+| 审计 spool / JDBC ship | **partial（improved）** | 实现齐全；专用单测（P0-3）；**管控台可只读浏览** spool/环/可选 JDBC（`GET /console/api/audit/spool`）；默认关闭 |
 | 风控策略 | **partial** | `DenyListDatabaseRiskPolicy` + `gateway.risk.*` 装配；空配置仍 `allowAll()` |
 | 连接治理 | **partial** | `max-connections`、CIDR、idle timeout 有；配置键见 §3 |
 | 多后端 | **partial（improved）** | 有序 failover + 冷却；**可选**按库名/用户/权重路由（`gateway.routing.*`，默认关） |
@@ -95,9 +95,9 @@ Spring 实际读取的键（`@Value`）与默认 `application.yml`、模板一�
 |---|---|---|---|---|
 | P2-1 | NIO / 少线程模型 | **missing（deferred）** | 仍 `ServerSocket.accept` + 阻塞读；并发模型选定为 **每连接线程 / 可选 VT**（`VirtualThreadExecutors`） | **不做 NIO 重写**；若 JDK 21+ VT 不足再开专项 |
 | P2-2 | JDBC vs 协议代理分裂 | **partial（improved）** | `DatabaseConnectionService` / adapter 字段 `@Deprecated` + javadoc；STATUS §6；wire 仍走 `BackendProvider` | 无调用方后可删类；勿接入 DuplexRelay |
-| P2-3 | HTTP 管控面 / 管控台 | **partial（improved）** | Vue3+TS+Vite；H2 CRUD；脱敏热挂；B/B+/C partial/E lite/风控；实例编辑/克隆/导入/筛选/批量；**SQL IDE（本轮）**：schema catalog 对象树、多 Tab、历史/片段 H2、CSV/JSON 导出、EXPLAIN 包装；执行仍经代理 listenPort。**鉴权（本轮）**：`gateway.console.auth.mode=open|token|form|oidc`；open/token/form 可用；OIDC 为**可激活** SSO（显式 URI / Keycloak 路径 / issuer discovery + 角色映射 + Login SSO 按钮）；**E2E 仍需真实 IdP**，非已验收联邦联调。管控台 HTTPS：`server.ssl.*` + `application-console-https-template.yml`。设计 [`CONSOLE_ARCHITECTURE.md`](CONSOLE_ARCHITECTURE.md) §16–§17。**不做** Prometheus/Grafana 出口 | 外部 Micrometer 见 P2-4；OIDC 真 IdP 联调另开 |
+| P2-3 | HTTP 管控面 / 管控台 | **partial（improved）** | Vue3+TS+Vite；H2 CRUD；脱敏热挂；B/B+/C partial/E lite/风控；实例编辑/克隆/导入/筛选/批量；**SQL IDE（本轮）**：schema catalog 对象树、多 Tab、历史/片段 H2、CSV/JSON 导出、EXPLAIN 包装；执行仍经代理 listenPort。**鉴权（本轮）**：`gateway.console.auth.mode=open|token|form|oidc`；open/token/form 可用；OIDC 为**可激活** SSO（显式 URI / Keycloak 路径 / issuer discovery + 角色映射 + Login SSO 按钮）；**E2E 仍需真实 IdP**，非已验收联邦联调。管控台 HTTPS：`server.ssl.*` + `application-console-https-template.yml`。设计 [`CONSOLE_ARCHITECTURE.md`](CONSOLE_ARCHITECTURE.md) §16–§18（含审计 spool 内容浏览）。**不做** Prometheus/Grafana 出口 | 外部 Micrometer 见 P2-4；OIDC 真 IdP 联调另开 |
 | P2-4 | Metrics 出口 | **partial（improved）** | 每 listener 独立 metrics；overview 求和 + `legacyMetrics`；**E lite**：`MetricsHistorySampler` + `GET …/metrics/history` + Overview SVG 火花图（内存环） | 外部 Prometheus/Grafana 非必需 | 可选后续接 Micrometer；告警阈值见 `docs/OPS.md` |
-| P2-5 | 审计测试与运维手册 | **partial（improved）** | P0-3 单测已有；**`docs/OPS.md`** 开启清单 / 告警清单；README 运维段改为索引 | JDBC 审计真库验收仍缺 |
+| P2-5 | 审计测试与运维手册 | **partial（improved）** | P0-3 单测已有；**`docs/OPS.md`** 开启清单 / 告警清单；管控台 **spool 内容浏览**（§18）；README 运维段索引 | JDBC 审计真库验收仍缺 |
 | P2-6 | 集成测试在 CI 可复现 | **partial（improved）** | 跳过策略写入 `integration-test.properties` + OPS；`-Pintegration-test` 无 props → `assumeTrue` skip；`-Pintegration-testcontainers` **stub only** | 真 Testcontainers 接线另开；默认 `mvn test` 仍不需 Docker |
 | P2-7 | 多库扩展点 / Oracle·SQL Server | **in-progress / partial（SQL Server P0）** | 第三库定为 **SQL Server TDS**（非 Oracle）。`SqlServerProtocolAdapter` + `sqlserver`/`mssql` 注册 + TDS framing + 透明 `DuplexRelay`；模板 `application-sqlserver-template.yml`（31433→1433）；计划见 [`SQLSERVER_TDS_PLAN.md`](SQLSERVER_TDS_PLAN.md)。Oracle 仍 stub。P0 **无** Login7 观测/脱敏/协议 reset | P1 观测与 Docker 冒烟；P2 深消息/脱敏/cancel；Oracle 另开 |
 

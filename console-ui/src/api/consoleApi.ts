@@ -157,6 +157,22 @@ export function getAuditStatus() {
   return apiGet<import('./types').AuditStatus>('/audit/status')
 }
 
+export function listAuditSpool(params?: {
+  limit?: number
+  before?: number
+  source?: 'auto' | 'ring' | 'spool' | 'jdbc' | string
+  protocol?: string
+  operation?: string
+}) {
+  const q = new URLSearchParams()
+  q.set('limit', String(params?.limit ?? 50))
+  if (params?.before != null) q.set('before', String(params.before))
+  if (params?.source) q.set('source', params.source)
+  if (params?.protocol) q.set('protocol', params.protocol)
+  if (params?.operation) q.set('operation', params.operation)
+  return apiGet<import('./types').TrafficAuditBrowseResponse>(`/audit/spool?${q.toString()}`)
+}
+
 export function getMetricsHistory(instanceId?: string, limit = 120) {
   const q = new URLSearchParams({ limit: String(limit) })
   if (instanceId) q.set('instanceId', instanceId)

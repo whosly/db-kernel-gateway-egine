@@ -698,7 +698,7 @@ GET /console/api/audit/status
   }
 ```
 
-- 流量审计仍由 `gateway.audit.*` + `AuditSpool` / `AuditShipper` 驱动；本轮只**暴露状态**，不把 spool 内容搬进管控台表格。
+- 流量审计仍由 `gateway.audit.*` + `AuditSpool` / `AuditShipper` 驱动；§14 本轮只**暴露状态**。内容浏览见 **§18**（`GET /console/api/audit/spool`）。
 - Ops 页补充启用说明 + 指向 `docs/OPS.md`。
 - `GET /console/api/audit?action=&limit=` 仍仅列**管控操作审计**（H2 `gateway_console_audit`）。
 
@@ -989,3 +989,66 @@ Keycloak 客户端：Confidential、Standard flow、Valid redirect URI
 - [x] Prometheus / Oracle / 深度 TDS **本轮不做**
 
 **结论：OIDC 可作为可激活 SSO 模式上线配置；完整联邦验收另开 IdP 联调。**
+
+---
+
+## 18. 审计 spool 内容浏览（管控台）
+
+> 作者自检通过后实现。补齐 §14「只暴露状态、不把 spool 内容搬进表格」的遗留缺口：运维可在管控台**只读浏览**流量审计记录。  
+> **不做** Prometheus、Oracle、深度 SQL Server TDS、OIDC 联调深化。
+
+### 18.1 两类审计（勿混淆）
+
+| 类型 | 存储 | API | UI |
+|---|---|---|---|
+| **管控操作审计** | H2 `gateway_console_audit` | 既有 `GET /console/api/audit?action=&limit=` | Ops「管控操作审计」Tab |
+| **流量 / spool 审计** | `RecentTrafficRing` + `gateway.audit` spool 分段；可选 JDBC sink | **本轮** `GET /console/api/audit/spool`（别名 `/audit/records`） | Ops「流量 / spool 审计」Tab |
+
+### 18.2 流量浏览 API
+
+```text
+GET /console/api/audit/spool?limit=50&before=&source=auto|ring|spool|jdbc&protocol=&operation=
+→ {
+    auditEnabled, destination, maskStatements, spoolDir, jdbcConfigured,
+    source,          // 实际采用的来源
+    entries: [{ ts, observedAt, protocolName, sessionId, sequence?, operation, statement, instanceId?, source, segment? }],
+    count, limit, before?, nextBefore?,
+    note, help
+  }
+```
+
+| 项 | 约定 |
+|---|---|
+| 默认来源 `auto` | 审计启用且 spool 有数据 → spool；否则若 jdbc 有数据 → jdbc；否则内存环 |
+| `ring` | 始终可读（进程内，重启丢失）；**不能**替代 spool |
+| `spool` | 只读扫描 `gateway.audit.spool-dir` 下 `file-name.*` 分段；不改文件、不推进 ship offset |
+| `jdbc` | 可选：当 `gateway.audit.jdbc.url` 已配时 `SELECT` 审计表；失败返回诚实空态 + note |
+| 分页 | `limit`（默认 50，上限 200）+ `before`（epoch ms，**排他**上界）；响应 `nextBefore` 供「加载更早」 |
+| 安全 | 语句截断（512）+ 可选 `SqlMasker`（跟随 `mask-statements`）+ 弱口令形态二次脱敏；**永不**回传 JDBC 密码 / 脱敏密钥 |
+| 过滤 | 廉价 `protocol`（精确忽略大小写）、`operation`（子串） |
+
+### 18.3 诚实边界
+
+| 可读 | 仍仅 ship / 未做 |
+|---|---|
+| 内存环最近语句（lab 默认可看） | 外部 Prometheus / Grafana |
+| 本地 spool 分段只读浏览 | 全文检索 / 跨节点聚合 |
+| JDBC sink 表只读（需已建表且可连） | JDBC 真库集成验收（仍属集成范围） |
+| 管控操作审计列表（既有） | 把 spool 当作合规归档 UI（归档仍靠 destination=jdbc 或外部搬移） |
+
+### 18.4 UI
+
+- Ops「运维 / 安全」页：**审计**区块 Tabs — 管控操作 / 流量·spool。
+- 流量 Tab：来源下拉、协议/操作过滤、空态说明（审计关闭时提示开 `gateway.audit.enabled` 或改用内存环）。
+- 中文文案；状态面板（§14）保留。
+
+### 18.5 自检清单（作者）
+
+- [x] 协议无关路径 `/console/api/audit/spool`（+ `/records` 别名）；无品牌前缀
+- [x] 与 `GET /audit`（管控操作）分离；UI 双 Tab 标明
+- [x] ring + spool 默认 lab 可用；jdbc 可选且失败诚实
+- [x] 无密钥 / 无 JDBC 密码进 JSON；语句截断 + mask
+- [x] CONSOLE_ARCHITECTURE §18 + STATUS / OPS / README 同步
+- [x] `mvn test` + `npm run build` 绿
+
+**结论：设计可通过 → 进入 §18 实现。**
