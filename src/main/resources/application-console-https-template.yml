@@ -1,0 +1,36 @@
+# Lab template: copy to application-dev.yml (or import) — DO NOT commit real keystores/passwords.
+# This enables HTTPS on the *console HTTP server* (Spring Boot server.ssl).
+# Do NOT confuse with gateway.tls.* (protocol-proxy client TLS termination).
+#
+# Generate a PKCS12 lab keystore (Mac / Linux):
+#   keytool -genkeypair -alias gateway-console -keyalg RSA -keysize 2048 -validity 3650 \
+#     -storetype PKCS12 -keystore ./data/console-lab.p12 -storepass changeit \
+#     -dname "CN=localhost,OU=lab,O=gateway,L=local,ST=lab,C=CN"
+#
+# Then:
+#   export SERVER_SSL_KEY_STORE=./data/console-lab.p12
+#   export SERVER_SSL_KEY_STORE_PASSWORD=changeit
+#   mvn spring-boot:run -Dspring-boot.run.profiles=dev
+#   open https://localhost:8443/console/
+
+server:
+  port: ${SERVER_PORT:8443}
+  ssl:
+    enabled: true
+    key-store: ${SERVER_SSL_KEY_STORE:./data/console-lab.p12}
+    key-store-password: ${SERVER_SSL_KEY_STORE_PASSWORD:changeit}
+    key-store-type: PKCS12
+    key-alias: ${SERVER_SSL_KEY_ALIAS:gateway-console}
+
+# Optional: keep auth form when testing HTTPS
+gateway:
+  console:
+    auth:
+      mode: form
+      users:
+        - username: admin
+          password: admin
+          roles: CONSOLE_ADMIN
+        - username: viewer
+          password: viewer
+          roles: CONSOLE_VIEWER

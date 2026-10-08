@@ -837,6 +837,62 @@ class MySQLDatabaseEventExtractorTest {
     }
 
     @Test
+    void observesComStmtExecuteStatementIdAndBoundParamTypes() {
+        MySQLSession session = new MySQLSession("mysql-execute");
+        MySQLDatabaseEventExtractor executeExtractor = readyExtractor("mysql-execute", session,
+                MySQLCapability.CLIENT_PROTOCOL_41.getFlag());
+
+        byte[] prepare = packet(0, MySQLCommandType.COM_STMT_PREPARE.getCode(), "select ?");
+        executeExtractor.inspect(TrafficDirection.CLIENT_TO_TARGET, prepare, 0, prepare.length);
+        inspectTarget(executeExtractor, 1, prepareOk(42, 0, 1));
+        // One parameter definition + classic EOF terminator.
+        inspectTarget(executeExtractor, 2, new byte[]{0x03, 'd', 'e', 'f'});
+        inspectTarget(executeExtractor, 3, new byte[]{(byte) 0xFE, 0x00, 0x00, 0x02, 0x00});
+
+        // COM_STMT_EXECUTE: stmt_id=42, flags=0, iteration=1, null_bitmap, new_params=1, type=LONGLONG, value=7
+        byte[] executePayload = new byte[]{
+                (byte) MySQLCommandType.COM_STMT_EXECUTE.getCode(),
+                0x2A, 0x00, 0x00, 0x00,
+                0x00,
+                0x01, 0x00, 0x00, 0x00,
+                0x00,
+                0x01,
+                0x08, 0x00,
+                0x07, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00
+        };
+        List<DatabaseTrafficEvent> events = executeExtractor.inspect(TrafficDirection.CLIENT_TO_TARGET,
+                rawPacket(0, executePayload), 0, executePayload.length + 4);
+
+        assertThat(events).singleElement().satisfies(event -> {
+            assertThat(event.getOperation()).isEqualTo("COM_STMT_EXECUTE");
+            assertThat(event.getStatement()).isEqualTo("EXECUTE statement_id=42");
+            assertThat(event.getAttribute("statement_id")).contains("42");
+            assertThat(event.getAttribute("param_count")).contains("1");
+            assertThat(event.getAttribute("param_types")).contains("bigint");
+            assertThat(event.getAttribute("new_params_bound")).contains("1");
+        });
+    }
+
+    @Test
+    void observesComStmtExecuteStatementIdWhenPrepareWasNotSeen() {
+        MySQLDatabaseEventExtractor executeExtractor = new MySQLDatabaseEventExtractor("MySQL", "mysql-execute-orphan");
+        byte[] executePayload = new byte[]{
+                (byte) MySQLCommandType.COM_STMT_EXECUTE.getCode(),
+                0x07, 0x00, 0x00, 0x00,
+                0x00,
+                0x01, 0x00, 0x00, 0x00
+        };
+        List<DatabaseTrafficEvent> events = executeExtractor.extract(
+                rawPacket(0, executePayload), 0, executePayload.length + 4);
+
+        assertThat(events).singleElement().satisfies(event -> {
+            assertThat(event.getOperation()).isEqualTo("COM_STMT_EXECUTE");
+            assertThat(event.getAttribute("statement_id")).contains("7");
+            assertThat(event.getAttribute("param_count")).contains("unknown");
+        });
+    }
+
+    @Test
     void tracksPreparedStatementsAcrossPrepareAndClose() {
         MySQLSession session = new MySQLSession("mysql-prepared");
         MySQLDatabaseEventExtractor preparedExtractor = readyExtractor("mysql-prepared", session,

@@ -71,4 +71,18 @@ public interface ProtocolAdapter {
                 .map(ProtocolSession::snapshot)
                 .toList();
     }
+
+    /**
+     * Close the client-leg socket for {@code connectionId} (proxy control-plane KILL).
+     *
+     * <p>Default: unsupported. {@code AbstractProtocolAdapter} closes the mapped client
+     * socket so the relay ends; it does <em>not</em> send a protocol-level KILL to the
+     * backend. Returns {@code false} when the id is unknown.</p>
+     *
+     * @param connectionId gateway session id from {@link SessionSnapshot#connectionId()}
+     * @return true if a client socket was found and closed
+     */
+    default boolean killClientSession(String connectionId) {
+        return false;
+    }
 }

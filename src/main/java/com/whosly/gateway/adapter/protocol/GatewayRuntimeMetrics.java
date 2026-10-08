@@ -1,5 +1,7 @@
 package com.whosly.gateway.adapter.protocol;
 
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicLong;
 
 /** Lightweight process-local counters for production operations visibility. */
@@ -35,4 +37,17 @@ public final class GatewayRuntimeMetrics {
     public long opaqueTunnelsDenied() { return opaqueTunnelsDenied.get(); }
     public long backendFailovers() { return backendFailovers.get(); }
     public long policyDenials() { return policyDenials.get(); }
+
+    /** Stable, readable counters for REST / Actuator exposure. */
+    public Map<String, Long> snapshot() {
+        Map<String, Long> values = new LinkedHashMap<>();
+        values.put("connectionsAccepted", connectionsAccepted());
+        values.put("connectionsRejectedLimit", connectionsRejectedLimit());
+        values.put("connectionsRejectedPolicy", connectionsRejectedPolicy());
+        values.put("opaqueTunnelsEntered", opaqueTunnelsEntered());
+        values.put("opaqueTunnelsDenied", opaqueTunnelsDenied());
+        values.put("backendFailovers", backendFailovers());
+        values.put("policyDenials", policyDenials());
+        return Map.copyOf(values);
+    }
 }

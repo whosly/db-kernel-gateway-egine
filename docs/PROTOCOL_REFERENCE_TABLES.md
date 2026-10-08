@@ -8,6 +8,8 @@
 > "状态"列表示当前实现状态：已实现 / 仅透传 / 规划中。规划中的条目允许出现，但
 > **不得在实现中声称已支持**（见 `docs/rules/database-protocol-rules.md` §1.1）。
 
+> 本分支「做到了什么 / 缺口」见 [`STATUS_AND_GAPS.md`](STATUS_AND_GAPS.md)；文档导航见 [`README.md`](README.md)。
+
 ## 1. MySQL
 
 ### 1.1 Capability flags

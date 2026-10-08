@@ -7,6 +7,8 @@ Before changing database protocol code, read and follow:
 - `docs/rules/database-protocol-rules.md`: protocol rules.
 - `docs/rules/ai-error-handling-rules.md`: how failures must be handled.
 - `docs/PROTOCOL_REFERENCE_TABLES.md`: mirror of the code-owned reference tables.
+- `docs/STATUS_AND_GAPS.md`: branch status and gap table (what is actually done).
+- `docs/README.md`: documentation index.
 
 ## Scope and layering
 
@@ -58,6 +60,19 @@ Before changing database protocol code, read and follow:
 
 - Do not log plaintext credentials, authentication payloads, cancel keys, salt,
   tokens, or connection strings that carry credentials.
+
+## Build toolchain
+
+- `pom.xml` targets Java 17 (`maven.compiler.source/target`) — **keep it at 17**;
+  do not bump to 21 for virtual threads.
+- Optional virtual threads (JDK 21+) go through reflective
+  `com.whosly.gateway.adapter.protocol.VirtualThreadExecutors` (MethodHandles).
+  There must be **no** direct `Thread.ofVirtual()` /
+  `Executors.newThreadPerTaskExecutor` symbols in production code.
+- On JDK 17 the helper returns empty and callers fall back to platform fixed
+  pools; `gateway.virtual-threads=false` always uses the fallback.
+- `mvn test` must pass on the declared JDK 17 toolchain. See
+  `docs/STATUS_AND_GAPS.md` P0-1.
 
 ## Working agreements
 

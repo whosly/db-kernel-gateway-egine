@@ -1,381 +1,491 @@
 # 数据库内核网关引擎
 
-一个基于 Java 17 和 Spring Boot 的数据库协议网关。客户端连接网关端口，网关把
-MySQL 或 PostgreSQL wire protocol 流量透明转发到真实数据库，同时为后续 SQL 审计、
-风控和观测能力预留协议层扩展点。
+基于 **Java 17** 的透明数据库协议网关：客户端连网关端口，网关把 **MySQL / PostgreSQL** wire 流量转发到真实目标库，并在**明文阶段**提供 SQL 观测、可选审计留痕与结果集脱敏等扩展点。第三协议 **SQL Server（TDS）** 为 **P0 透明中继 + P1-lite 明文观测**（Login7/SQL_BATCH；见 [`docs/SQLSERVER_TDS_PLAN.md`](docs/SQLSERVER_TDS_PLAN.md)），**不是**与 MySQL/PostgreSQL 对等的完整观测/脱敏/cancel 实现。
 
-## 当前能力
+> 网关不伪造握手能力、不校验也不保存客户端明文密码；认证与结果由目标库完成。  
+> 能力边界以本 README「功能清单」与 [`docs/STATUS_AND_GAPS.md`](docs/STATUS_AND_GAPS.md) 为准——规划中的能力不会写成「已实现」。
 
-- 支持 MySQL、PostgreSQL 透明代理转发；真实认证由目标数据库完成，网关不保存、不校验、
-  不记录明文密码或认证载荷。
-- 明文阶段可观测 SQL 流量：MySQL `COM_QUERY` / `COM_STMT_PREPARE`，PostgreSQL
-  `Query` / `Parse` / `Bind` / `Execute`，用于审计与风控。
-- 按连接维护协议状态机：连接、协商、认证、就绪、执行、流式、关闭。
-  - MySQL：命令周期（`READY` → `EXECUTING` → `READY`）、事务状态（`OK`/`EOF` 状态位）、
-    `affected rows`、`warning count`、当前库、错误 SQLSTATE、结果集列数与行数、客户端
-    身份（含 `COM_CHANGE_USER`）、`COM_RESET_CONNECTION` 状态复位、大包（`>= 2^24-1`）分片重组。
-  - PostgreSQL：事务状态（`ReadyForQuery`）、`ParameterStatus` 会话参数、`CommandComplete`
-    命令标签、`RowDescription` 字段数与 `DataRow` 行数、`ErrorResponse` severity/SQLSTATE、
-    `BackendKeyData`、扩展查询（`ParseComplete` / `BindComplete` / `CloseComplete` /
-    `NoData` / `PortalSuspended` / `Sync` 同步点）、`NotificationResponse` 通道、COPY 数据计数。
-- 识别 `CancelRequest` 并通过取消键索引与所属会话关联；网关只做关联，不代发 cancel。
-- 观测按命令声明的响应形态分支（`OK` / `RESULTSET` / `COLUMN_LIST` / `PREPARE` / `EOF_ONLY`
-  / `RAW_STRING` / `STREAM` / `NO_RESPONSE` / `UNKNOWN`），不再用首字节猜测；无法解释响应时
-  暂停观测并在下一个客户端命令处再同步，会话状态带观测置信度
-  （`CONFIRMED` / `UNCERTAIN` / `SUSPENDED`）。
-- 审计出口可按需启用 SQL 字面量脱敏：`DatabaseTrafficObserver.masking(sink)` 在事件进入审计
-  存储前把字符串与数值字面量替换为 `?`，**转发给数据库的字节完全不受影响**。
-- **结果集脱敏（MySQL 文本协议 + PostgreSQL，已接线）**：`MaskingRule` bean 被
-  `MaskingRuleRegistry` 收集，`MaskingEngine` 负责「一列一规则」与 fail-closed 判定（内置置 NULL、
-  固定值、部分保留、SHA-256 哈希、AES-GCM 可逆加密）；`MySQLResultSetMaskingInterceptor` /
-  `PostgreSQLResultSetMaskingInterceptor` 在 REWRITE 相位**逐行**改写：**只有被规则命中的列会变**。
-  列元数据不全、行值个数与表头不符、命中列的值无法在该类型上表示，一律
-  **拒绝该结果集**（协议原生错误），绝不返回本该脱敏却未脱敏的数据；元数据随命令周期失效
-  （PostgreSQL 在 `ReadyForQuery` 后清除），不会被下一个结果集复用。
-  **未注册任何规则时整条路径不启用**，转发与今天逐字节一致。
-- **二进制结果集的支持边界**按「**能否为该类型产出合法的二进制值**」界定（客户端会用自己请求的
-  类型去解析这些字节，填错就是损坏的结果集，而不是脱敏后的结果集）：
-  - **置 NULL 对任何类型都可用**——写协议自身的 NULL 标记，不需要重新编码（PostgreSQL 的
-    `DataRow` 在两种格式下帧完全相同，差别只在值编码）；
-  - 非空改写仅在该类型的二进制表示**可复现**时允许：PostgreSQL 的 `text`/`varchar`/`bpchar`/
-    `name`/`char`/`json`/`xml`/`bytea` 就是原始字节，`jsonb` 需补一个版本字节；
-  - 其余类型（定长数值、时间、布尔、`uuid`、未知 OID）的非空改写**拒绝**；
-  - **MySQL 的二进制行（预处理语句执行结果）同样支持**，但它按列类型布局并带 null 位图，
-    因此多两条边界：值的位置取决于前面每个值的宽度，**置 NULL 是「去掉字节 + 置位」两件事**；
-    支持的类型只有两组（可按下方清单核对）：**长度前缀 + 字节**（`varchar`/`varbinary`/`char`/
-    `binary`/`tinyblob`/`blob`/`mediumblob`/`longblob`/`json`/`enum`/`set`）与**定长整数/浮点**
-    （`tinyint` 1、`smallint` 2、`mediumint` 4、`int` 4、`bigint` 8、`year` 2、`float` 4、
-    `double` 8，均小端）；**打包十进制（`decimal`）、时间与日期类型、`bit`、`geometry` 以及
-    任何未知类型一律拒绝**。解析后必须**恰好走完载荷**——只要有剩余字节就说明某个类型的宽度
-    被读错，此时**拒绝而不是错位**。这条自检把"对协议布局的假设"变成可验证的结果，但它是
-    **结构性检查而非密码学保证**：单列行或补偿性错误理论上仍可能恰好对齐。
-  PostgreSQL 的 `RowDescription` 不携带可空性，按「可脱敏」方向取 `nullable=true` 并写明；
-  MySQL 则依据列定义的 `NOT_NULL` 标志。
-- ⚠️ **区分「规则不匹配」与「脱敏不生效」**：`NullingRule` 只在**可空**列上匹配，所以在 `NOT NULL`
-  列上它**不匹配、不脱敏、也不报错**。MySQL 会把字面量/常量列标为 `NOT NULL`，因此
-  `select 'a@b.com' as email` 这类列用置 NULL 规则不会有任何效果（真库集成测试实测确认）；
-  需要保护 `NOT NULL` 列时，请使用不要求可空的规则（固定值、部分保留、哈希、加密）。
-- 需要整条消息的改写由**协议层给出消息边界**（MySQL 逻辑包、PostgreSQL typed/启动家族/
-  SSL 回应），数据路径不重复实现分帧；会话进入 TLS/压缩后立即停止持有。
-- 改写只在需要整条消息时才持有字节，且受两个**可配置**上界约束：
-  `gateway.rewrite.max-message-bytes`（默认 1048576，即 1 MiB）与
-  `gateway.rewrite.max-hold-millis`（默认 1000）。超过任一上界直接拒绝并返回协议原生错误，
-  不做"原样放行"。
-- 每连接的协议状态由**单一监视器**串行化：两个方向共享同一个观测器，临界区只覆盖协议
-  状态，审计与风控在临界区之外执行，因此慢 sink 不会拖住另一方向；会话状态通过同一
-  监视器下的不可变快照发布（`getActiveSessionSnapshots()`），供审计、风控与后续池化消费。
-- 网关自身错误映射为协议原生错误：目标不可达时 MySQL 回 `ERR_Packet`（`1042` / `08S01`），
-  PostgreSQL 回 `ErrorResponse`（`08006`）；目标数据库错误一律原样透传。
-- 识别 `LOAD DATA LOCAL INFILE`（MySQL）与 `COPY`（PostgreSQL）的流式阶段，流式期间不解析命令。
-- TLS、压缩、GSS 等不可明文解析的链路按 opaque tunnel 处理，优先保证转发正确性。
-- 可通过 `ProtocolAdapter#getActiveSessions()` 查看当前连接观测到的协议状态，或通过
-  `ProtocolAdapter#getActiveSessionSnapshots()` 获取可消费快照：协议名、连接状态、观测
-  置信度、是否处于事务、客户端身份与默认库、会话脏度、连接与最近活动时间，并直接给出
-  "观测是否可信"与"可否无重置复用"的判定（为后续连接池化预留）。
+## 目录
 
-> 说明：网关是透明代理，不重写目标数据库的结果集与错误；也不对客户端虚报尚未实现的能力。
-> 主流数据库代理（PgBouncer、MySQL Router、Vitess、Envoy 的协议过滤器）在数据平面上都不靠"跨线程共享可变状态 + 加锁"来保证正确，而是让每条连接的协议状态在任一时刻只属于一个执行体。
-> 协议参考表（能力位、状态位、命令码、错误码映射、消息类型、类型 OID）见
-> `docs/PROTOCOL_REFERENCE_TABLES.md`。
+- [分支与验证基线](#分支与验证基线)
+- [功能清单](#功能清单)
+- [端口速查](#端口速查)
+- [环境要求](#环境要求)
+- [配置说明](#配置说明)
+- [快速开始 · MySQL](#快速开始--mysql)
+- [快速开始 · PostgreSQL](#快速开始--postgresql)
+- [快速开始 · SQL Server（P0）](#快速开始--sql-serverp0)
+- [构建与测试](#构建与测试)
+- [演示](#演示)
+- [审计与脱敏](#审计与脱敏)
+- [数据库管控台](#数据库管控台)
+- [Docker 一键启动](#docker-一键启动)
+- [文档索引](#文档索引)
+- [开发约定](#开发约定)
+
+## 分支与验证基线
+
+| 项 | 本分支（`future/database-wire-protocol-foundation`） |
+|---|---|
+| 默认单元测试 | **436** 条全绿（JDK 17；`pom` 排除 `*IntegrationTest`；以 STATUS §1 为准） |
+| 真库集成 `-Pintegration-test` | **14 / 14** 全绿（2026-09-24，本地 Docker MySQL `:13308` + PostgreSQL `:5432`） |
+| JDK / 编译 | `pom` 目标 **17**；虚拟线程经 `VirtualThreadExecutors` **反射**在 JDK 21+ 启用，JDK 17 回退平台线程池（STATUS P0-1） |
+| 核心数据路径 | 透明代理、查询/结果、预处理、错误透传、脱敏 happy path、PG `COPY` — **已在集成中 live-proven** |
+
+详细缺口与证据表：**[`docs/STATUS_AND_GAPS.md`](docs/STATUS_AND_GAPS.md)**。
+
+## 功能清单
+
+状态约定（与 STATUS 对齐，措辞面向使用者）：
+
+| 标记 | 含义 |
+|---|---|
+| **已实现** | 代码已接线，默认可用或默认路径已验证 |
+| **已接线·默认关** | 实现齐全，需显式配置才启用 |
+| **部分** | 有实现，但产品边界/类型覆盖/验收测试不完整 |
+| **未实现** | 本分支无可用实现 |
+
+完整协议枚举见 [`docs/PROTOCOL_REFERENCE_TABLES.md`](docs/PROTOCOL_REFERENCE_TABLES.md)。
+
+| 能力 | 状态 | 说明 |
+|---|---|---|
+| MySQL / PostgreSQL 透明代理 | **已实现** | 真实认证在目标库；网关不保存、不校验、不记录明文密码；集成 live-proven |
+| 查询 / 结果转发 | **已实现** | 含大结果集、多语句（MySQL）、事务；集成 live-proven |
+| 预处理语句转发 | **已实现** | MySQL / PG prepared 路径集成 live-proven |
+| 目标错误透传 | **已实现** | 目标库错误原样转发；集成 live-proven |
+| 网关自身错误 → 协议原生包 | **已实现** | 如目标不可达：MySQL `1042/08S01`，PG `08006` |
+| 明文 SQL 观测 | **已实现** | MySQL `COM_QUERY` / `COM_STMT_PREPARE`；PG `Query` / `Parse` / `Bind` / `Execute` 等 |
+| 协议状态机 + 置信度 | **已实现** | 连接→协商→认证→就绪→执行→流式→关闭；`CONFIRMED` / `UNCERTAIN` / `SUSPENDED` |
+| 大包重组 / 流式识别 | **已实现** | MySQL 大包；`LOAD DATA LOCAL` / PG `COPY` 期间不解析命令 |
+| PG `COPY` 流转发 | **已实现** | 集成 live-proven |
+| 结果集脱敏（happy path） | **已接线·默认关** | 无 `MaskingRule` 时逐字节透明；有规则时 fail-closed 改写；文本/常见二进制 happy path 集成 live-proven |
+| 结果集脱敏（类型边界） | **部分** | decimal/时间/`geometry`/未知类型等非空改写常拒绝；MySQL `bit` 与 PG 整数/bool/浮点二进制可改写；见 STATUS §4.2 |
+| 审计 spool / JDBC 搬运 | **已接线·默认关** | fail-closed；P0-3 专用单测已补；真库 JDBC 验收仍属集成 |
+| 连接上限 / CIDR / idle | **已实现** | `max-connections`、`allowed-client-cidrs`、`idle-timeout-seconds` |
+| 后端 failover / 路由 | **部分** | `backend-endpoints` 顺序 failover；可选 `gateway.routing.*` 按库名/用户/权重（默认关；协议无关） |
+| PG Cancel | **部分** | `CancelRequest` 与 `BackendKeyData` **仅关联索引**；**不代发** cancel；MySQL `COM_PROCESS_KILL` 透传 |
+| 风控策略 | **部分** | `DenyListDatabaseRiskPolicy` 可配置拒绝清单；空配置默认 `allowAll()` |
+| TLS / 压缩 | **部分** | 默认 opaque / 可选拒绝；**可选 TLS 终止**（`gateway.tls.*`，协议无关）；压缩后仍 opaque |
+| NIO 事件驱动 | **未实现** | 阻塞 socket + 每连接线程（可选虚拟线程） |
+| 连接池化 | **已接线·默认关** | `gateway.pool.enabled`；`reset-mode=none\|protocol`；protocol=MySQL `COM_RESET_CONNECTION` / PG `DISCARD ALL` |
+| Actuator / HTTP 指标出口 | **已接线·内存计数** | `/gateway/metrics` + `/actuator/gateway`；无远程 Micrometer |
+| 非交互启动 | **已实现** | `Application` 自动 start；`gateway.cli.interactive` 默认 false |
+| SQL Server（TDS）透明中继 | **部分（P0 + P1-lite）** | `SqlServerProtocolAdapter` 注册 `sqlserver`/`mssql`；双工字节转发 + TDS framing；**明文** Login7/SQL_BATCH 观测（非路由）。**无** 脱敏 / Attention cancel / 深 token / 协议 reset / 真库集成证明。计划：[`docs/SQLSERVER_TDS_PLAN.md`](docs/SQLSERVER_TDS_PLAN.md) |
+| Oracle | **未实现** | stub：`gateway.proxy-db-type=oracle` 启动失败并提示 |
+
+> 主流代理在数据平面上也不靠「跨线程共享可变协议状态」保证正确——本仓库同样让每条连接的协议状态在任一时刻只属于一个执行体。
+
+### 结果集脱敏边界（摘要）
+
+- **一列一规则**；未命中列保持原值；元数据不全或无法表示改写值 → **拒绝结果集**。
+- MySQL：文本行 + 预处理二进制行（长度前缀类型、常见整数/浮点、`bit`）；`decimal`/时间/`geometry`/未知类型的非空改写拒绝。
+- PostgreSQL：文本格式 + 可复现二进制（`text`/`bytea`/`json(b)`、`int2/4/8`、`bool`、`float4/8`）；`numeric`/时间/`uuid`/未知 OID 的非空改写拒绝；置 NULL 对任意类型可用。
+- `NullingRule` **只匹配可空列**：MySQL 字面量列常为 `NOT NULL`，置 NULL 规则不会生效——需固定值/哈希/加密等。
+
+细节以代码为准；排期缺口见 STATUS（P1-5）。
+
+
+## 扩展新数据库（P2-7）
+
+1. 实现 `ProtocolAdapter`（通常继承 `AbstractProtocolAdapter`）与 framing/session。
+2. （可选）实现 `BackendSessionReset` 做池化 wire reset。
+3. `ProtocolAdapterRegistry.register("mydb", MyDbAdapter::new, MyDbReset::new)`（或仅 adapter）。
+4. 设置 `gateway.proxy-db-type=mydb`。池/TLS/路由等治理由基类继承，无需改 `PooledBackendProvider` / `RoutingBackendProvider`。
+5. 身份感知路由：在 `acquire` 前填充 `RoutingContext`（database/username）；未填充时走默认 failover 列表。
+
+内置：`mysql`、`postgresql`（别名 `postgres`）、`sqlserver`（别名 `mssql`，**P0 中继 + P1-lite 观测**）。预留 stub：`oracle` — 选择后启动失败并提示未实现。SQL Server 阶段见 [`docs/SQLSERVER_TDS_PLAN.md`](docs/SQLSERVER_TDS_PLAN.md)。
+
+### 启用协议 reset
+
+```yaml
+gateway:
+  pool:
+    enabled: true
+    reset-mode: protocol   # 默认 none（仅 close-if-unsafe）
+```
+
+### 启用按库/用户路由（P1-4）
+
+```yaml
+gateway:
+  backend-endpoints: host1:3306,host2:3306   # 默认/未命中时的 failover
+  routing:
+    enabled: true
+    rules:
+      - match-database: app_a
+        endpoints: hostA:3306,hostA2:3306:2   # 可选 :weight
+      - match-username: readonly
+        endpoints: hostR:3306
+```
+
+组合顺序：**Routing → Pool → Failover/Fixed**。`routing.enabled=false`（默认）时行为与仅 failover 相同。Oracle / SQL Server 适配器填充同一 `RoutingContext` 即可复用。
+
+
+## 端口速查
+
+| 协议 | `proxy-db-type` | 网关监听（客户端连） | 目标库（示例） | 模板 |
+|---|---|---|---|---|
+| MySQL | `mysql` | **33307** | 13308（lab Docker）/ 3306 | `application-mysql-template.yml` |
+| PostgreSQL | `postgresql` / `postgres` | **35433** | 5432 | `application-postgresql-template.yml` |
+| SQL Server（TDS） | `sqlserver` / `mssql` | **31433** | 1433 | `application-sqlserver-template.yml` |
+
+共享治理（任意 `proxy-db-type`）：`gateway.pool.*`、`gateway.tls.*`、`gateway.routing.*`、`gateway.risk.*`、`gateway.audit.*` — 状态见上方功能清单与 STATUS。
 
 ## 环境要求
 
-- JDK 17+
+- JDK 17+（编译目标 17；JDK 21+ 运行时可选用虚拟线程）
 - Maven 3.6+
-- 本地或远端 MySQL / PostgreSQL
-- 可选：`mysql` 或 `psql` 命令行客户端，用于手工验证代理链路
+- 本地或远端 MySQL / PostgreSQL（集成示例端口：MySQL **13308**、PostgreSQL **5432**）；SQL Server 目标 **1433**（P0 可选，无默认集成）
+- 可选：`mysql` / `psql` / SQL Server 客户端（如 `sqlcmd`、JDBC）做手工验证
 
 ## 配置说明
 
-通用默认配置在：
+| 文件 | 用途 |
+|---|---|
+| `src/main/resources/application.yml` | 通用默认（嵌套 `gateway.target.*`，与 `GatewayConfig` 对齐） |
+| `src/main/resources/application-dev.yml` | 本地开发（已 gitignore） |
+| `application-mysql-template.yml` / `application-postgresql-template.yml` / `application-sqlserver-template.yml` | 推荐复制为 `application-dev.yml` 的模板 |
 
-```text
-src/main/resources/application.yml
-```
+**以 `GatewayConfig` 的 `@Value` 为准**：默认 `application.yml` 与模板均使用嵌套键 `gateway.target.*` 和 `gateway.idle-timeout-seconds`（P0-2 已对齐）。本地开发仍建议复制模板为 `application-dev.yml`。详见 [`docs/STATUS_AND_GAPS.md`](docs/STATUS_AND_GAPS.md) §3。
 
-本地开发配置建议放在：
+| 键 | 含义 |
+|---|---|
+| `server.port` | Spring HTTP（Web / 预留管控） |
+| `gateway.proxy-port` | 数据库协议代理端口（客户端连这里） |
+| `gateway.proxy-db-type` | `mysql` \| `postgresql` \| `sqlserver`/`mssql`（经 registry）；`oracle` stub |
+| `gateway.target.host` / `port` / `username` / `password` / `database` | 主后端（**嵌套**） |
+| `gateway.backend-endpoints` | 可选 `host:port,host:port` failover |
+| `gateway.routing.enabled` / `rules` | 可选按库名/用户/权重路由（默认关） |
+| `gateway.max-connections` | 并发连接上限（代码默认 200） |
+| `gateway.idle-timeout-seconds` | 客户端 `SoTimeout`；`0` 关闭（**不是** `idle-timeout-millis`） |
+| `gateway.allowed-client-cidrs` | 可选 CIDR 白名单 |
+| `gateway.virtual-threads` | 是否尝试虚拟线程执行器 |
+| `gateway.require-cleartext-inspection` | 拒绝 TLS opaque（未设时随审计开关） |
+| `gateway.rewrite.max-message-bytes` / `max-hold-millis` | 改写持有上界 |
+| `gateway.audit.*` | 见 [审计与脱敏](#审计与脱敏) |
+| `gateway.risk.denied-operations` | 逗号分隔协议操作名拒绝清单（空=allow-all） |
+| `gateway.risk.denied-statement-keywords` | 逗号分隔语句关键字子串拒绝清单（空=allow-all） |
+| `gateway.catalog.databases[]` | 支持库**类型**目录（id/maturity/enabled/ports/notes）；`GET /console/api/v1/databases` |
+| `gateway.instances[]` | 协议无关**实例**注册表（可多类型混部）；非空=多 listener；空则合成 `id=default` |
 
-```text
-src/main/resources/application-dev.yml
-```
-
-`application-dev.yml` 已在 `.gitignore` 中忽略，适合放本机数据库地址和密码。
-
-端口含义：
-
-- `server.port`：Spring Boot HTTP 端口，用于 Web/Actuator 等入口。
-- `gateway.proxy-port`：数据库协议代理端口，数据库客户端连接这个端口。
-- `gateway.target.port`：真实后端数据库端口。
-
-## MySQL 网关
-
-复制 MySQL 配置模板：
+## 快速开始 · MySQL
 
 ```bash
 cp src/main/resources/application-mysql-template.yml src/main/resources/application-dev.yml
+# 编辑 application-dev.yml：target 指向本机库，password 换成你的口令（勿提交）
+mvn spring-boot:run -Dspring-boot.run.profiles=dev
 ```
 
-按本地 MySQL 信息修改 `application-dev.yml`：
+模板要点（占位符，非真实密码）：
 
 ```yaml
-server:
-  port: 8080
-
 gateway:
   proxy-db-type: mysql
   proxy-port: 33307
   target:
     host: localhost
-    port: 13308
+    port: 13308          # 示例：本地 Docker 映射端口
     username: root
-    password: change-me
+    password: change-me  # 占位符
     database: mysql
 ```
 
-启动服务：
-
-```bash
-mvn spring-boot:run -Dspring-boot.run.profiles=dev
-```
-
-启动成功后会看到类似日志：
-
-```text
-Starting MySQL protocol adapter on port 33307
-MySQL protocol adapter started successfully
-```
-
-另开一个终端，通过网关端口连接：
+客户端：
 
 ```bash
 mysql --protocol=tcp -h 127.0.0.1 -P 33307 -uroot -p
 ```
 
-进入 MySQL 后执行：
-
-```sql
-select 1;
-```
-
-能正常返回结果，说明链路已经打通：
-
 ```text
-mysql client -> gateway:33307 -> target mysql:13308
+mysql client -> gateway:33307 -> target mysql (:13308 等)
 ```
-
-效果示意：
 
 ![MySQL gateway flow](assets/mysql-gateway-flow.gif)
 
-## PostgreSQL 网关
-
-复制 PostgreSQL 配置模板：
+## 快速开始 · PostgreSQL
 
 ```bash
 cp src/main/resources/application-postgresql-template.yml src/main/resources/application-dev.yml
+mvn spring-boot:run -Dspring-boot.run.profiles=dev
 ```
 
-按本地 PostgreSQL 信息修改 `application-dev.yml`：
-
 ```yaml
-server:
-  port: 8080
-
 gateway:
   proxy-db-type: postgresql
   proxy-port: 35433
   target:
     host: localhost
-    port: 5432
+    port: 5432           # 示例：本地 Docker / 本机 PG
     username: postgres
-    password: change-me
+    password: change-me  # 占位符
     database: postgres
 ```
-
-启动服务：
-
-```bash
-mvn spring-boot:run -Dspring-boot.run.profiles=dev
-```
-
-启动成功后会看到类似日志：
-
-```text
-Starting POSTGRESQL protocol adapter on port 35433
-PostgreSQL protocol adapter started successfully
-```
-
-另开一个终端，通过网关端口连接：
 
 ```bash
 psql -h 127.0.0.1 -p 35433 -U postgres -d postgres
 ```
 
-进入 PostgreSQL 后执行：
-
-```sql
-select 1;
-```
-
-能正常返回结果，说明链路已经打通：
-
 ```text
-psql client -> gateway:35433 -> target postgresql:5432
+psql client -> gateway:35433 -> target postgresql (:5432 等)
 ```
-
-效果示意：
 
 ![PostgreSQL gateway flow](assets/postgresql-gateway-flow.gif)
 
-## 测试
 
-运行单元测试：
+## 快速开始 · SQL Server（P0 + P1-lite 观测）
+
+> **诚实边界**：可启动的透明 TDS 双工中继 + **明文** Login7/SQL_BATCH 观测；**不是** MySQL/PG 对等产品（无结果集脱敏、无 Attention/cancel、无深 token、无协议 reset、Login7 不参与路由）。阶段见 [`docs/SQLSERVER_TDS_PLAN.md`](docs/SQLSERVER_TDS_PLAN.md)。
+>
+> **管控台 SQL 工作台**：classpath 含 `mssql-jdbc` 时，RUNNING 实例可经 **proxy listenPort** 执行 SQL（与 MySQL/PG 同路径）。
 
 ```bash
-mvn test
+cp src/main/resources/application-sqlserver-template.yml src/main/resources/application-dev.yml
+# 编辑 application-dev.yml：target 指向本机 SQL Server，password 换成你的口令（勿提交）
+# 本地 Docker 实验室示例 SA：Aa123456.（含末尾点号；见 docs/OPS.md）— 生产另行配置
+mvn spring-boot:run -Dspring-boot.run.profiles=dev
 ```
 
-运行真实数据库集成测试：
+```yaml
+gateway:
+  proxy-db-type: sqlserver   # 或 mssql
+  proxy-port: 31433
+  target:
+    host: localhost
+    port: 1433
+    username: sa
+    password: change-me      # 模板占位；勿提交真实密码
+    database: master
+```
+
+```text
+SQL client / JDBC -> gateway:31433 -> target SQL Server (:1433)
+```
+
+JDBC 示例（encrypt 按环境调整）：
+`jdbc:sqlserver://localhost:31433;databaseName=master;encrypt=false;trustServerCertificate=true`
+
+## 构建与测试
+
+对照 commit：本仓库当前 HEAD（以 `git rev-parse HEAD` / STATUS §1 为准）。
 
 ```bash
+# 默认：非集成单元测试（见 STATUS §1 计数）
+mvn test
+
+# 真库集成（需本地 Docker / 库 + 本地属性文件）
 mvn -Pintegration-test test
 ```
 
-集成测试的本地连接信息放在：
+集成连接信息放在 **`src/test/resources/integration-test-local.properties`**（已 gitignore，**勿提交密码**）。  
+无 local props 时 `-Pintegration-test` **跳过**（`assumeTrue`），不硬失败——见 [`docs/OPS.md`](docs/OPS.md)。  
+示例端口（无密钥）：MySQL host 端口 `13308`，PostgreSQL `5432`。
 
-```text
-src/test/resources/integration-test-local.properties
+集成覆盖（2026-09-24 本机验证 **14/14**）：
+
+- MySQL / PG：查询、预处理、事务、目标错误透传
+- MySQL：大结果集、多语句、跨包载荷
+- PG：`COPY` 流
+- 结果集脱敏 happy path（文本/二进制/置 NULL/固定值）与无规则透明对照
+
+审计专用单测见 `src/test/.../audit/`（P0-3）；真库 JDBC 验收仍属集成范围。
+
+提交前：`mvn clean test` 必须在本机 JDK 17 上全绿。
+
+## 演示
+
+流程图示（仓库已有）：
+
+- [`assets/mysql-gateway-flow.gif`](assets/mysql-gateway-flow.gif)
+- [`assets/postgresql-gateway-flow.gif`](assets/postgresql-gateway-flow.gif)
+
+终端验证录屏 / 动画（若存在）：
+
+- [`assets/demo-mysql-pg-gateway.gif`](assets/demo-mysql-pg-gateway.gif) — 单元/集成 PASS 摘要演示（无真实密码）
+
+### 文本演示走查（无录屏时）
+
+```bash
+# 1) 打包（可跳过测试加快）
+mvn -q -DskipTests package
+
+# 2) 单元基线
+mvn -q test
+# 期望：Failures: 0, Errors: 0（计数见 STATUS）
+
+# 3) 真库集成（需 Docker MySQL:13308 + PG:5432 与 integration-test-local.properties）
+mvn -Pintegration-test test
+# 期望：14 条 IntegrationTest 全绿（MySQL + PG + masking）
+
+# 4) （可选）按「快速开始」启动网关后，用 mysql/psql 连 proxy-port 做手工查询
 ```
 
-该文件同样已被忽略，不应提交真实密码。
+## 审计与脱敏
 
-集成测试覆盖的不只是转发：**结果集脱敏**在真库上也被验证——MySQL 的文本协议与二进制协议
-（预处理语句）各一条、PostgreSQL 的置 NULL 与固定值各一条，外加"未注册规则时逐字节透明"的
-对照用例；脱敏用例同时断言**未被规则命中的列保持原值**，所以"网关会不会误改数据"这类问题
-在真库上有回归防线。
+启用后链路：`观测事件 → MaskingTrafficObserver（可选） → SpoolingTrafficObserver → AuditSpool`。
 
-## 审计留痕（可选，默认关闭）
+| 原则 | 行为 |
+|---|---|
+| 默认关闭 | 不建文件、不因审计拒流量 |
+| 开启后 fail-closed | sink 失败 → 协议原生错误拒绝操作（观测指标仍可 fail-open） |
+| 先脱敏后落盘 | `mask-statements` 默认 true |
+| 分级耐久 | `grade-writes`：可证明只读走窗口档，写/DDL/不可解析走严格 |
 
-启用后链路为：`观测事件 → MaskingTrafficObserver（先脱敏） → SpoolingTrafficObserver → AuditSpool`。
+存储保证（规则 §8.5）：append-only + CRC32、group commit、`STRICT`/`WINDOW`、有界队列与磁盘配额、崩溃截断半条、I/O 失败熔断。
 
-- **默认关闭**：不创建文件、不引入持久化依赖，也没有任何路径会因审计而拒绝流量。开启即表示
-  接受「审计不可用则拒绝操作」这一语义。
-- **必达语义（fail-closed）**：审计 sink 投递失败会拒绝该操作并返回协议原生错误，而不是放行
-  一条没被记录的操作。对照：普通观测（指标、看板）仍然是 fail-open。
-- **先脱敏后落盘**：语句在进入 spool 之前已按脱敏策略处理，审计存储不保留策略本应隐藏的值。
-- **按语句分级**：开启 `grade-writes` 时，只有被证明「只读」的语句才走窗口档；写语句、DDL、
-  无法解析的语句一律严格——分级只在能被证明的方向上放宽。
-
-按规则 §8.5 实现的存储保证：
-
-- **append-only + 校验和**：每条记录携带会话标识、会话内单调序号（幂等键）与 CRC32。
-  长度前缀用于识别"崩溃留下的半条"，校验和用于识别"写坏了"——两者不会被混为一谈。
-- **group commit**：单写者线程把队列中已积累的记录合成一批，一次 `fdatasync` 覆盖整批。
-  吞吐由「批大小 × 刷盘速率」决定，而单条记录最多等一次刷盘。
-- **严格 / 窗口两档**（`AuditDurability`）：`STRICT` 下 `append` 只在落盘后返回
-  （审计先于执行）；`WINDOW` 下入队即返回，崩溃最多丢一个未刷盘批次。
-- **有界 + 拒绝而非丢弃**：队列有上限（满则先等待、再拒绝），磁盘有配额（触顶即拒绝）。
-  任何"记不下来"的情况都以 `AuditSpoolException` 上报，绝不静默丢弃。
-- **崩溃恢复**：打开时截断不完整或损坏的尾部，文件始终是一段合法记录序列；关闭时先把
-  已接收的记录刷完再退出。
-- **I/O 失败即熔断**：一旦刷盘发生 I/O 错误，后续 `append` 全部拒绝直到人工介入——继续
-  接受记录等于在审计链上留空洞。
-
-配置项（`gateway.audit.*`，均可用 `GATEWAY_AUDIT_*` 环境变量覆盖）：
+### `gateway.audit.*` 配置
 
 | 键 | 默认 | 说明 |
 |---|---|---|
-| `enabled` | `false` | 是否启用审计留痕 |
-| `spool-dir` / `file-name` | `./audit` / `audit.spool` | spool 位置；生产建议放**独立磁盘**，避免与被代理库争 IO |
-| `durability` | `strict` | `strict` \| `window`；非法值启动即失败 |
-| `batch-size` / `max-batch-delay-millis` | `32` / `1` | group commit 的两个触发阈值 |
-| `max-pending-records` / `max-enqueue-wait-millis` | `4096` / `10` | 队列上界与入队等待，超时即拒绝 |
-| `max-spool-bytes` | `1073741824` | 磁盘配额，触顶即拒绝 |
-| `segment-bytes` | `67108864` | 段大小：超过即轮转；**已投递的段可整段删除**，这是磁盘能回收的前提 |
-| `grade-writes` | `true` | 按语句分级（写严格、只读走窗口） |
-| `mask-statements` | `true` | 审计存储是否先脱敏；`false` 表示保存原始语句 |
-| `destination` | `spool` | `spool`（本地文件即最终态）\| `jdbc`（搬运到独立数据库）；非法值启动即失败 |
-| `ship-interval-millis` / `ship-batch-size` | `1000` / `500` | 搬运频率与批量（`destination=jdbc` 时生效） |
-| `jdbc.url` / `jdbc.username` / `jdbc.password` | 空 | 必须独立于被代理库的数据源 |
-| `jdbc.table` | `gateway_audit_record` | 表名；需建 `PRIMARY KEY (session_id, record_sequence)` |
-
-验收（`AuditTrailAcceptanceTest`）：并发写入下「每条语句**恰好一次**、按会话保序」；开启审计
-**不改变**转发给数据库的字节（规则 2.10）；组提交把刷盘摊薄到整批，且单条 append 延迟被
-「批窗口 + 一次刷盘」界定。
+| `enabled` | `false` | 是否启用 |
+| `spool-dir` / `file-name` | `./audit` / `audit.spool` | 生产建议独立磁盘 |
+| `durability` | `strict` | `strict` \| `window` |
+| `batch-size` / `max-batch-delay-millis` | `32` / `1` | group commit |
+| `max-pending-records` / `max-enqueue-wait-millis` | `4096` / `10` | 队列上界 |
+| `max-spool-bytes` | `1073741824` | 磁盘配额 |
+| `segment-bytes` | `67108864` | 段轮转 |
+| `grade-writes` | `true` | 按语句分级 |
+| `mask-statements` | `true` | 落盘前脱敏语句 |
+| `destination` | `spool` | `spool` \| `jdbc` |
+| `ship-interval-millis` / `ship-batch-size` | `1000` / `500` | JDBC 搬运 |
+| `jdbc.url` / `username` / `password` / `table` | 空 / `gateway_audit_record` | 须独立于被代理库；主键见 `docs/sql/audit-sink-schema.sql` |
 
 ### 运维要点
 
-- **监控 `AuditSpool.failure()`**：一旦刷盘发生 I/O 错误，spool 会熔断并拒绝后续记录（相应操作
-  被拒绝）。这是必须告警的状态，恢复需要人工介入。
-- **严格档的延迟 = 一次 fsync**，所以每条**写**语句要等一次刷盘。本仓库 CI 环境（虚拟化存储）
-  实测：800 条记录 / 99 次刷盘，append `p50 ≈ 6 ms`、`p99 ≈ 19 ms`——瓶颈是该环境
-  **fsync ≈ 5 ms**，不是分帧或队列。上线前请在目标硬件上复测，若 p99 不可接受，按此顺序处理：
-  ① spool 放快盘（并独立于目标库）→ ② 提高并发写者/批窗口以增大批 → ③ 保持 `grade-writes`
-  （默认已开，只读流量不付这个代价）→ ④ 最后才考虑整体改 `window` 档，并显式记录该窗口大小。
-- **spool 放独立磁盘**：审计 fsync 与目标库自身 WAL 的 fsync 会争抢 IO，同盘部署会同时拉低两者。
-- **配额与队列是硬边界**：触顶即拒绝（fail-closed）。长期触顶说明投递能力不足，应扩容或接入
-  异步投递，而不是放宽上界——放宽只是把「拒绝」推迟成「内存耗尽」。
-- **配额要按"最长只进不出的时间"来定**：`destination=jdbc` 时目的端不可用，记录只进不出，
-  spool 填满后**操作会被拒绝**（这是设计使然，不是故障）。同时监控检查点与 spool 大小的差距，
-  它就是「未投递积压」。`destination=spool` 时磁盘只受人工归档节奏影响，配额要覆盖两次归档之间的量。
-- **归档 `spool` 目的端时不要动活动段**：活动段正在被写；把已写满的旧段整体搬走即可，
-  重启后 spool 会自动从现存的段继续。
-- **目的端表必须能去重**：主键缺失等于放弃「恰好一次」，重放会重复计数，审计报表将无法自证。
-- **停机刷盘**：优雅停机先把已接收的记录刷完；非优雅停机在 `strict` 档不会丢已确认的语句。
-- **审计目录不进版本控制**（`.gitignore` 已忽略 `audit/`、`*.spool`）：其中是真实业务语句。
+完整 **开启清单 / 告警清单 / 集成跳过策略** 见 **[`docs/OPS.md`](docs/OPS.md)**（P2-5）。
 
-### 搬运到数据库（`destination=jdbc`）
+摘要：默认非交互启动；`GET /gateway/status`、`GET /gateway/metrics`、`GET /actuator/gateway` 看运行态与内存计数；**管控台**见 `/console` 与上文「数据库管控台」。审计 spool 熔断与配额见 OPS 告警表。`destination=jdbc` 建表：`docs/sql/audit-sink-schema.sql`。
 
-`AuditShipper` 用独立线程把 spool 搬进数据库，语义是 **至少一次 + 目的端去重**：
+### 脱敏开关
 
-- 检查点（`<spool>.offset`，原子替换）**只在整批写库成功后推进**，所以崩溃只会「重发一批」，绝不会跳过记录；
-- 目的端表必须建 `PRIMARY KEY (session_id, record_sequence)`（建表脚本见
-  `docs/sql/audit-sink-schema.sql`）：网关把重复键当成「已存在」，于是库侧收敛为**恰好一次**；
-- 目的端不可用时搬运停止并保留检查点，记录继续留在 spool，不丢；
-- 检查点指向 spool 之外（spool 被替换或截断）时按 `0` 重发——宁可重复，绝不跳过；
-- 搬运**不做删除**：spool 的保留与轮转是运维策略，不是投递路径的职责。
-
-验收（`shipsEveryStatementToTheDatabaseExactlyOnceAcrossReplays`）：20 条语句写库后行数正确；再搬一次
-不新增；**删掉检查点模拟崩溃重放**，全量重发后行数仍不变。
-
-### 脱敏开关一览（如何关闭脱敏）
-
-网关有三处和「脱敏」有关的东西，开关各不相同：
-
-| 层 | 现状 | 默认 | 如何关闭 |
-|---|---|---|---|
-| **审计语句脱敏**（写入 spool 的内容） | 已生效 | **开** | `gateway.audit.mask-statements=false`（或环境变量 `GATEWAY_AUDIT_MASK_STATEMENTS=false`） |
-| **结果集脱敏**（改写返回给客户端的数据） | **已接线（MySQL + PostgreSQL）** | 关 | 不注册任何 `MaskingRule` bean——空注册表就是「不脱敏」，也是 `MaskingEngine.isActive()` 的判据 |
-| **转发字节** | 从不改写 | — | 无需配置：未改写的消息一律写出原始字节 |
-
-一致性要求（规则 §8.2）：审计里保存的内容必须与脱敏策略一致。若结果集脱敏开启而
-`mask-statements=false`，审计就会保存脱敏规则想隐藏的原始语句——两层应当使用同一套策略。
-
-### 轮转与磁盘回收
-
-记录按**段**存放（`audit.spool.000001`、`audit.spool.000002`…）：写者只追加到最新段，段超过
-`segment-bytes` 就轮转（**在帧边界轮转**，不会把一条记录切开），检查点记录的是「段号 + 段内偏移」。
-
-回收规则只有两条，且都朝安全方向：
-
-- **只删除完全落在检查点之前的段**，且**活动段永不删除**——所以「先推进检查点、再删除」的崩溃
-  只会留下一个多余的段，绝不会少一条记录；
-- 检查点用段号定位，因此删掉旧段之后它仍然指向同一条记录（这正是检查点必须带段号的原因）。
-
-磁盘行为按目的端不同：
-
-| 目的端 | 磁盘是否会回收 | 运维动作 |
+| 层 | 默认 | 如何关闭 |
 |---|---|---|
-| `jdbc` | **是**，每次搬运后自动删除已投递的段 | 配额按「目的端最长可接受停机时间」定 |
-| `spool`（默认） | **否**，本地文件就是审计成品，删了就没了 | 定期把已写满的段归档搬走（活动段在被写，不要动） |
+| 审计语句脱敏 | 开（若启用审计） | `gateway.audit.mask-statements=false` |
+| 结果集脱敏 | 关（无规则即不启用） | 不注册 `MaskingRule` bean；或在管控台实例抽屉配置 H2 规则 |
+| 列加密（EncryptingRule） | 关 | yaml `gateway.masking.key-base64` 或管控台「运维/安全」配置脱敏密钥 |
+| 转发字节 | 从不因观测改写 | — |
+
+结果集脱敏与 `mask-statements` 应使用同一套策略，避免审计留下规则想隐藏的原文（规则 §8.2）。
+
+
+## 数据库管控台
+
+> **API v1（破坏性）**：基准路径 `/console/api/v1`；完整契约见 [`docs/CONSOLE_API_V1.md`](docs/CONSOLE_API_V1.md)。Vue 已同变更；旧 `/console/api/*` 不再提供业务接口。
+
+
+内置 **协议无关 · 实例中心** 管控台（无 Node 构建）：
+
+| 入口 | 说明 |
+|---|---|
+| UI | [http://localhost:8080/console](http://localhost:8080/console)（`server.port` 可改） |
+| 类型目录 API | `GET /console/api/v1/databases` |
+| 实例 API | `GET/POST /console/api/v1/instances`（`?status=&dbType=&q=`）；`PUT /instances/{id}`；`/status|metrics|start|stop`；`POST …/clone`；`POST …/import`；`POST …/bulk` |
+| 会话 | `GET …/instances/{id}/sessions`；`DELETE …/sessions/{connectionId}`（关客户端腿） |
+| 健康探测 | `POST|GET …/instances/{id}/health-check`（TCP + 可选 JDBC，~3s） |
+| 导出 / 导入 | `GET …/instances/export`、`GET …/config/export`（无密码）；`POST …/instances/import` |
+| SQL IDE | 对象树 `GET …/schema/catalog`；列 `…/schema/columns`；执行 `POST …/sql/execute`（经代理；多语句）；取消 `POST …/sql/cancel` 或 `/sql/executions/{id}/cancel`（尽力而为）；历史/片段 `/sql/history` `/sql/snippets`；多结果 Tab · CSV/JSON · EXPLAIN |
+| 鉴权 | `gateway.console.auth.mode=open\|token\|form\|oidc`（默认 auto：有 token→token，否则 open）；form 用户 `gateway.console.auth.users`；oidc 见 docs §17（显式 URI / Keycloak / discovery）；角色 CONSOLE_ADMIN/OPERATOR/VIEWER + 权限串（见 CONSOLE_ARCHITECTURE §22） |
+| HTTPS | Spring `server.ssl.*`；模板 `application-console-https-template.yml`（管控台 HTTP 服务 TLS，勿与 `gateway.tls.*` 协议代理 TLS 混淆） |
+| 最近语句 | `GET …/instances/{id}/recent-statements`（内存环，重启丢失） |
+| 脱敏规则 API | `GET/POST/PUT/DELETE /console/api/v1/instances/{id}/masking-rules`（协议无关） |
+| 列提示 | `GET /console/api/v1/instances/{id}/schema/columns?table=`（JDBC metadata；失败 502） |
+| 安全 | `GET/PUT/DELETE /console/api/v1/security/masking-key`；`GET /console/api/v1/audit`（`action`/`limit`） |
+| 审计状态 | `GET /console/api/v1/audit/status`（非密钥：enabled/destination/spoolDir/…） |
+| 流量审计内容 | `GET /console/api/v1/audit/spool`（别名 `/audit/records`；ring/spool/可选 jdbc；分页 `before`） |
+| 指标时序 | `GET /console/api/v1/metrics/history?instanceId=&limit=`（进程内环；总览火花图） |
+| 风控 | `GET/PUT /console/api/v1/risk-policy`（H2 覆盖 + 热挂；空=allow-all） |
+| 连接池 | 实例 `metrics`/`status` 含 `pool.{enabled,idleCount,maxIdle}` |
+| 控制面加密 | `gateway.console.secret-key-base64`（32 字节 AES Base64）→ 密码/密钥 `enc:v1:`；缺省实验室明文；生产 `require-secret-encryption=true` 缺钥拒写（503） |
+| 可选 API Token | `gateway.console.api-token`（读写）；`gateway.console.read-token`（仅 GET）；`Authorization: Bearer` 或 `X-Console-Token` |
+| 设计 | [`docs/CONSOLE_ARCHITECTURE.md`](docs/CONSOLE_ARCHITECTURE.md) §11–§15 · [`CONSOLE_DESIGN.md`](docs/CONSOLE_DESIGN.md) |
+
+一等实体是 **网关实例**（监听端口 + `dbType` 标签），不是按 MySQL/PG 分拆的控制台。管控台以 `proxyMode`/`proxyModeLabel` 标注能力：**网关代理**（MySQL/PG 协议网关）vs **透明代理**（SQL Server 字节中继）；启停仍走既有 ProtocolAdapter。  
+类型目录（`gateway.catalog`）与实例注册表（`gateway.instances`）分离。  
+`gateway.instances` 非空时，同 JVM 为每个 enabled+creatable 实例启动独立 listener（MySQL+PG 可混部）；空列表仍合成 `id=default`。遗留 `/gateway/*` 操作 legacy 实例（匹配 `proxy-*`）。
+
+目录配置示例：
+
+```yaml
+gateway:
+  catalog:
+    databases:
+      - id: mysql
+        displayName: MySQL
+        enabled: true
+        maturity: ga
+        defaultProxyPort: 33307
+        defaultTargetPort: 3306
+      - id: postgresql
+        displayName: PostgreSQL
+        enabled: true
+        maturity: ga
+        defaultProxyPort: 35433
+        defaultTargetPort: 5432
+      - id: sqlserver
+        displayName: SQL Server
+        enabled: true
+        maturity: partial
+        defaultProxyPort: 31433
+        defaultTargetPort: 1433
+  # instances:   # 可选；省略则合成 default
+  #   - id: gw-1
+  #     name: 业务库代理
+  #     db-type: mysql
+  #     listen-port: 33307
+```
+
+既有 `/gateway/*` 与 `/actuator/gateway` **保留**。
+
+
+
+## Docker 一键启动
+
+实验室 Compose 栈（**非生产**）。本仓库在无 Docker 的环境仍可开发；请在已安装 Docker Desktop / Engine 的 Mac/Linux 上执行：
+
+```bash
+cp .env.example .env   # fill secret key
+# 生成控制面密钥：openssl rand -base64 32
+docker compose up -d --build
+# open http://localhost:8080/console/
+# mysql client → 127.0.0.1:33307 ; psql → 127.0.0.1:35433
+```
+
+| 服务 | 端口映射 | 说明 |
+|---|---|---|
+| `mysql` | `13308→3306` | 密码 `Aa123456.`（含末尾点）；库 `demo` |
+| `postgres` | `15432→5432` | 同密码风格；用户/库 `demo` |
+| `gateway` | `8080`、`33307`、`35433` | profile `docker`；SPA 于 `/console/` |
+| `console-ui`（可选） | `5173` | `docker compose --profile dev-ui up`；主路径仍为 jar 内 SPA |
+
+相关文件：`Dockerfile`（多阶段 Temurin 17，`mvn -DskipTests package`）、`docker-compose.yml`、`.env.example`、`src/main/resources/application-docker.yml`（及 `deploy/docker/` 副本）、`.dockerignore`。  
+镜像构建跳过测试以加速；**CI / 本地请跑 `mvn test`**。Lab 密码勿用于生产。
+
+### OIDC Keycloak 实验室（可选）
+
+```bash
+docker compose -f docker-compose.keycloak.yml up -d
+cp src/main/resources/application-oidc-keycloak-template.yml src/main/resources/application-dev.yml
+mvn spring-boot:run -Dspring-boot.run.profiles=dev
+# http://localhost:8080/console/login → 「使用 SSO 登录」
+```
+
+Keycloak：`http://localhost:8081/`（admin/admin）；realm 用户见 [`deploy/keycloak/README.md`](deploy/keycloak/README.md)。  
+一路径说明：[`docs/OPS.md`](docs/OPS.md)。**默认 `mvn test` 不需要 Docker。**
+
+## 文档索引
+
+完整导航见 [`docs/README.md`](docs/README.md)。
+
+| 文档 | 内容 |
+|---|---|
+| [`AGENTS.md`](AGENTS.md) | 分层、透明性不变量、安全与工作约定 |
+| [`docs/STATUS_AND_GAPS.md`](docs/STATUS_AND_GAPS.md) | **本分支现状 / P0–P2 缺口** |
+| [`docs/SQLSERVER_TDS_PLAN.md`](docs/SQLSERVER_TDS_PLAN.md) | **SQL Server（TDS）接入计划** |
+| [`docs/OPS.md`](docs/OPS.md) | 运维开启 / 告警 / 本地 lab 密码说明 |
+| [`docs/PROTOCOL_REFERENCE_TABLES.md`](docs/PROTOCOL_REFERENCE_TABLES.md) | 协议表镜像（真源为代码枚举） |
+| [`docs/rules/database-protocol-rules.md`](docs/rules/database-protocol-rules.md) | 协议规则（应当怎样） |
+| [`docs/rules/ai-error-handling-rules.md`](docs/rules/ai-error-handling-rules.md) | 失败处理流程 |
 
 ## 开发约定
 
-开发规矩集中在 `AGENTS.md` 与 `docs/rules/`，本文件不重复维护：
-
-- `AGENTS.md`：仓库级硬约束（分层、透明性不变量、单源规则、安全、工作约定）。
-- `docs/rules/database-protocol-rules.md`：数据库协议规则。
-- `docs/rules/ai-error-handling-rules.md`：失败处理流程。
-- `docs/PROTOCOL_REFERENCE_TABLES.md`：协议参考表镜像（真源为代码枚举）。
-
-提交前 `mvn clean test` 必须全绿。
+开发规矩以 `AGENTS.md` 与 `docs/rules/` 为准，本文件不重复维护细则。  
+协议改动完成前：`mvn clean test` 全绿；参考表变更先改枚举再改镜像文档。

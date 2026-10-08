@@ -11,6 +11,7 @@ import java.util.Optional;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /** Periodically ships spool records to a final destination. */
 public final class AuditShipper implements AutoCloseable {
@@ -22,6 +23,7 @@ public final class AuditShipper implements AutoCloseable {
     private final AuditShippingOffset offset;
     private final int batchSize;
     private final long intervalMillis;
+    private final AtomicBoolean running = new AtomicBoolean(false);
     private final ScheduledExecutorService scheduler =
             Executors.newSingleThreadScheduledExecutor(r -> {
                 Thread t = new Thread(r, "audit-shipper");
@@ -39,7 +41,12 @@ public final class AuditShipper implements AutoCloseable {
     }
 
     public void start() {
+        running.set(true);
         scheduler.scheduleWithFixedDelay(this::shipSafely, intervalMillis, intervalMillis, TimeUnit.MILLISECONDS);
+    }
+
+    public boolean isRunning() {
+        return running.get() && !scheduler.isShutdown();
     }
 
     private void shipSafely() {
@@ -80,6 +87,7 @@ public final class AuditShipper implements AutoCloseable {
 
     @Override
     public void close() {
+        running.set(false);
         scheduler.shutdownNow();
         try {
             shipOnce();

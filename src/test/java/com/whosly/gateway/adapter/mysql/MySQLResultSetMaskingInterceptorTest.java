@@ -164,7 +164,8 @@ class MySQLResultSetMaskingInterceptorTest {
         MySQLDatabaseEventExtractor extractor = commandPhaseExtractor();
         MySQLResultSetMaskingInterceptor interceptor = interceptor(extractor,
                 new NullingRule("null-flags", 10, ColumnSelector.named("flags")));
-        feedResultSet(extractor, MySQLCommandType.COM_STMT_EXECUTE, column("flags", 0x10));
+        // geometry (0xFF) remains an unknown binary layout.
+        feedResultSet(extractor, MySQLCommandType.COM_STMT_EXECUTE, column("flags", 0xFF));
 
         byte[] row = binaryRow(extractor, littleEndian(1, 1));
         observeTarget(extractor, row);
@@ -172,7 +173,7 @@ class MySQLResultSetMaskingInterceptorTest {
         TrafficDecision decision = interceptor.intercept(
                 RawBackedMessage.of(TrafficDirection.TARGET_TO_CLIENT, row, 0, row.length));
 
-        // A BIT value's width is not reproduced, so where it ends is unknown: the row is
+        // An unknown layout means where the value ends cannot be trusted: the row is
         // refused rather than parsed with a guess that would shift every value behind it.
         assertThat(decision.action()).isEqualTo(TrafficAction.DENY);
     }

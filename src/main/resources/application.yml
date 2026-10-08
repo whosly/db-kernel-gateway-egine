@@ -4,29 +4,202 @@ server:
 spring:
   application:
     name: db-kernel-gateway
+  # Console control-plane DB (NOT the proxied business database).
+  # Override via gateway.console.jdbc-url / username / password (see ConsoleDataSourceEnvironmentPostProcessor).
+  # Passwords sealed with gateway.console.secret-key-base64 when set (enc:v1:…); else lab plaintext + WARN. require-secret-encryption=true rejects plaintext writes.
+  datasource:
+    url: jdbc:h2:file:${gateway.console.db-path:./data/gateway-console};MODE=PostgreSQL;AUTO_SERVER=FALSE;DB_CLOSE_DELAY=-1
+    driver-class-name: org.h2.Driver
+    username: ${gateway.console.username:sa}
+    password: ${gateway.console.password:}
+  h2:
+    console:
+      enabled: ${GATEWAY_H2_CONSOLE:false}
+      path: /h2-console
 
-# Gateway proxy configuration
+# Gateway proxy configuration — keys MUST match GatewayConfig @Value bindings.
+# Prefer copying application-*-template.yml to application-dev.yml for local runs.
 gateway:
+  # Control-plane H2 file path (console-managed instances). Relative to process cwd.
+  console:
+    db-path: ${GATEWAY_CONSOLE_DB_PATH:./data/gateway-console}
+    # Optional JDBC override (when set, used instead of embedded file path). Other DBs are best-effort.
+    # jdbc-url: ${GATEWAY_CONSOLE_JDBC_URL:}
+    username: ${GATEWAY_CONSOLE_DB_USER:sa}
+    password: ${GATEWAY_CONSOLE_DB_PASSWORD:}
+    # 32-byte AES key Base64 for control-plane password/secret encryption. Empty = lab plaintext.
+    # secret-key-base64: ${GATEWAY_CONSOLE_SECRET_KEY_BASE64:}
+    secret-key-base64: ${GATEWAY_CONSOLE_SECRET_KEY_BASE64:}
+    # Production hardening: true → reject create/update that would store plaintext passwords (503).
+    # Default false keeps lab / docker-compose open. Pair with secret-key-base64.
+    require-secret-encryption: ${GATEWAY_CONSOLE_REQUIRE_SECRET_ENCRYPTION:false}
+    # Optional API token for /console/api/** (Bearer or X-Console-Token). Blank = open (lab).
+    api-token: ${GATEWAY_CONSOLE_API_TOKEN:}
+    # Optional read-only token (GET/HEAD only). Writes still need api-token when set.
+    read-token: ${GATEWAY_CONSOLE_READ_TOKEN:}
+
+    # Auth: open | token | form | oidc (blank = auto: token if api-token/read-token set, else open)
+    auth:
+      mode: ${GATEWAY_CONSOLE_AUTH_MODE:}
+      # form users (plaintext lab passwords; prefer env in real deploys)
+      # users:
+      #   - username: admin
+      #     password: admin
+      #     roles: CONSOLE_ADMIN
+      #   - username: viewer
+      #     password: viewer
+      #     roles: CONSOLE_VIEWER
+      oidc:
+        registration-id: console
+        issuer-uri: ${GATEWAY_CONSOLE_OIDC_ISSUER:}
+        client-id: ${GATEWAY_CONSOLE_OIDC_CLIENT_ID:}
+        client-secret: ${GATEWAY_CONSOLE_OIDC_CLIENT_SECRET:}
+        scopes: openid,profile,email
+        # keycloak | blank. Keycloak path defaults only when provider=keycloak AND endpoint URIs blank.
+        provider: ${GATEWAY_CONSOLE_OIDC_PROVIDER:}
+        # Prefer explicit URIs for lab/tests (no network discovery). If any set, all of auth/token/jwk required.
+        authorization-uri: ${GATEWAY_CONSOLE_OIDC_AUTH_URI:}
+        token-uri: ${GATEWAY_CONSOLE_OIDC_TOKEN_URI:}
+        jwk-set-uri: ${GATEWAY_CONSOLE_OIDC_JWK_URI:}
+        user-info-uri: ${GATEWAY_CONSOLE_OIDC_USERINFO_URI:}
+        user-name-attribute: sub
+        role-claim: ${GATEWAY_CONSOLE_OIDC_ROLE_CLAIM:roles}
+        admin-role-values: CONSOLE_ADMIN,admin,console-admin
+        viewer-role-values: CONSOLE_VIEWER,viewer,console-viewer
+    metrics-history:
+      interval-seconds: ${GATEWAY_CONSOLE_METRICS_INTERVAL:5}
+      capacity: ${GATEWAY_CONSOLE_METRICS_CAPACITY:120}
+  # Result-set encrypt strategy key (console masking-rules strategy=encrypt).
+  # Or set via 管控台「安全」UI (stored encrypted when secret-key-base64 is set).
+  # Never commit real keys.
+  # masking:
+  #   key-id: ${GATEWAY_MASKING_KEY_ID:default}
+  #   key-base64: ${GATEWAY_MASKING_KEY_BASE64}
   # Proxy listen port (protocol-specific adapter binds here)
   proxy-port: ${GATEWAY_PROXY_PORT:3307}
-  # Target database (fallback when backend-endpoints is empty)
-  target-host: ${GATEWAY_TARGET_HOST:127.0.0.1}
-  target-port: ${GATEWAY_TARGET_PORT:3306}
-  target-username: ${GATEWAY_TARGET_USERNAME:}
-  target-password: ${GATEWAY_TARGET_PASSWORD:}
-  target-database: ${GATEWAY_TARGET_DATABASE:}
+  proxy-db-type: ${GATEWAY_PROXY_DB_TYPE:mysql}
+  # Target database (nested keys bound by gateway.target.*)
+  target:
+    host: ${GATEWAY_TARGET_HOST:127.0.0.1}
+    port: ${GATEWAY_TARGET_PORT:3306}
+    username: ${GATEWAY_TARGET_USERNAME:}
+    password: ${GATEWAY_TARGET_PASSWORD:}
+    database: ${GATEWAY_TARGET_DATABASE:}
   # Comma-separated failover list: host:port,host:port
-  # When set, overrides single target-host/target-port for BackendProvider.
+  # When set, appended after gateway.target for BackendProvider (deduped).
   backend-endpoints: ${GATEWAY_BACKEND_ENDPOINTS:}
+
+  # Multi-backend routing by database name and/or username (protocol-agnostic).
+  # Default off — existing target + backend-endpoints failover unchanged.
+  # Adapters supply RoutingContext; Oracle / SQL Server reuse the same rules once wired.
+  routing:
+    enabled: ${GATEWAY_ROUTING_ENABLED:false}
+    # rules:
+    #   - match-database: app_a
+    #     endpoints: hostA:3306,hostA2:3306:2
+    #   - match-username: readonly
+    #     endpoints: hostR:3306
   virtual-threads: ${GATEWAY_VIRTUAL_THREADS:true}
+
+  # Backend connection pool (protocol-agnostic; default off). Safe reuse only when
+  # SessionSnapshot is CONFIRMED + clean + not in a transaction; otherwise close.
+  # reset-mode: none (default, close-if-unsafe) | protocol (MySQL COM_RESET_CONNECTION /
+  # PostgreSQL DISCARD ALL via BackendSessionReset SPI; other DBs register their own).
+  pool:
+    enabled: ${GATEWAY_POOL_ENABLED:false}
+    max-idle: ${GATEWAY_POOL_MAX_IDLE:8}
+    reset-mode: ${GATEWAY_POOL_RESET_MODE:none}
+  # Client-leg TLS terminate (stunnel-style; shared by every proxy-db-type).
+  # Off unless enabled AND keystore-path is set. Never commit real keystore passwords.
+  # tls:
+  #   enabled: false
+  #   keystore-path: /path/to/gateway.p12
+  #   keystore-password: ${GATEWAY_TLS_KEYSTORE_PASSWORD:}
+  #   keystore-type: PKCS12
+  #   key-alias: gateway
   # require-cleartext-inspection: true
   # When true, TLS/opaque tunnel sessions are denied (fail-closed for audit).
-  # Default false: opaque tunnels are allowed but not inspected.
-  max-connections: ${GATEWAY_MAX_CONNECTIONS:256}
-  idle-timeout-millis: ${GATEWAY_IDLE_TIMEOUT_MILLIS:0}
-  proxy-db-type: ${GATEWAY_PROXY_DB_TYPE:mysql}
+  # Default unset: follows gateway.audit.enabled.
+  max-connections: ${GATEWAY_MAX_CONNECTIONS:200}
+  # Client SoTimeout in seconds; 0 disables. Bound as gateway.idle-timeout-seconds.
+  idle-timeout-seconds: ${GATEWAY_IDLE_TIMEOUT_SECONDS:0}
+  # Optional CIDR allowlist (empty = allow all clients)
+  # allowed-client-cidrs: ${GATEWAY_ALLOWED_CLIENT_CIDRS:}
+  # Risk policy: empty lists keep DatabaseRiskPolicy.allowAll() (backward compatible).
+  # risk:
+  #   denied-operations: ${GATEWAY_RISK_DENIED_OPERATIONS:}          # e.g. COM_QUIT,Drop
+  #   denied-statement-keywords: ${GATEWAY_RISK_DENIED_KEYWORDS:}  # e.g. drop table,truncate
+  # Interactive stdin CLI (default false — non-blocking start for spring-boot:run / service)
+  cli:
+    interactive: ${GATEWAY_CLI_INTERACTIVE:false}
+
+  # Type catalog (pluggable adapters). Queryable via GET /console/api/supported-databases.
+  # Separate from instance registry (gateway.instances). Maturity: ga | partial | planned | stub.
+  catalog:
+    databases:
+      - id: mysql
+        displayName: MySQL
+        enabled: true
+        maturity: ga
+        defaultProxyPort: 33307
+        defaultTargetPort: 3306
+        notes: "Wire proxy GA — 可作为实例 dbType"
+      - id: postgresql
+        displayName: PostgreSQL
+        enabled: true
+        maturity: ga
+        defaultProxyPort: 35433
+        defaultTargetPort: 5432
+        notes: "Wire proxy GA — 可作为实例 dbType"
+      - id: sqlserver
+        displayName: SQL Server
+        enabled: true
+        maturity: partial
+        defaultProxyPort: 31433
+        defaultTargetPort: 1433
+        notes: "TDS P0 透明中继；深度能力 ON HOLD — 目录可见"
+      - id: oracle
+        displayName: Oracle
+        enabled: false
+        maturity: stub
+        defaultProxyPort: 31521
+        defaultTargetPort: 1521
+        notes: "预留 stub；consoleCreateAllowed=false"
+
+  # Instance registry (protocol-agnostic). Empty → synthesize id=default from proxy-* / target.*
+  # Non-empty → each enabled creatable entry gets its own ProtocolAdapter listener (same JVM).
+  # Defaults stay single-instance safe: leave this commented unless you need multi-listener.
+  # instances:
+  #   - id: gw-mysql-1
+  #     name: 业务库代理
+  #     db-type: mysql
+  #     listen-host: 0.0.0.0
+  #     listen-port: 33307
+  #     enabled: true
+  #     # optional target overrides; password inherits gateway.target.password when omitted
+  #     # target-host: 127.0.0.1
+  #     # target-port: 3306
+  #     # target-database: app
+  #     # target-username: root
+  #   - id: gw-pg-1
+  #     name: 分析库代理
+  #     db-type: postgresql
+  #     listen-port: 35433
+  #     enabled: true
+  #     # target-host: 127.0.0.1
+  #     # target-port: 5432
 
 logging:
   level:
     root: INFO
     com.whosly.gateway: INFO
+
+# Ops surface (P2-3 / P2-4): REST /gateway/* + Actuator /actuator/gateway
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,gateway
+  endpoint:
+    gateway:
+      enabled: true

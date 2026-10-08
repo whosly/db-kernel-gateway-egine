@@ -1,0 +1,44 @@
+# Activated by SPRING_PROFILES_ACTIVE=docker (Compose lab stack).
+# Passwords are lab-only (Aa123456. with trailing dot) — never production-safe.
+server:
+  port: ${SERVER_PORT:8080}
+
+gateway:
+  console:
+    db-path: ${GATEWAY_CONSOLE_DB_PATH:/app/data/console/gateway-console}
+    secret-key-base64: ${GATEWAY_CONSOLE_SECRET_KEY_BASE64:}
+    api-token: ${GATEWAY_CONSOLE_API_TOKEN:}
+  # Process-level defaults (legacy /gateway); multi-instance below is primary.
+  proxy-db-type: mysql
+  proxy-port: 33307
+  target:
+    host: mysql
+    port: 3306
+    username: root
+    password: Aa123456.
+    database: demo
+  cli:
+    interactive: false
+  instances:
+    - id: lab-mysql
+      name: Docker Lab MySQL
+      db-type: mysql
+      listen-host: 0.0.0.0
+      listen-port: 33307
+      enabled: true
+      target-host: mysql
+      target-port: 3306
+      target-database: demo
+      target-username: root
+      target-password: Aa123456.
+    - id: lab-pg
+      name: Docker Lab PostgreSQL
+      db-type: postgresql
+      listen-host: 0.0.0.0
+      listen-port: 35433
+      enabled: true
+      target-host: postgres
+      target-port: 5432
+      target-database: demo
+      target-username: demo
+      target-password: Aa123456.

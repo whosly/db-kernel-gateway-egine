@@ -56,13 +56,35 @@ class PostgreSQLBinaryValuesTest {
     void refusesTypesWhoseBinaryEncodingIsNotReproduced() {
         // A client reads these bytes with the type it asked for: filling them with a text
         // mask would be a corrupted result set, not a masked one.
-        for (String typeName : new String[]{"int4", "int8", "numeric", "float8", "bool",
-                "timestamp", "timestamptz", "date", "uuid", "oid:987654"}) {
+        for (String typeName : new String[]{"numeric", "timestamp", "timestamptz", "date", "uuid", "oid:987654"}) {
             assertThatThrownBy(() -> PostgreSQLBinaryValues.encode(binary("column", typeName), text("***")))
                     .as("binary %s", typeName)
                     .isInstanceOf(MaskingException.class)
                     .hasMessageContaining("cannot carry a non-null masked value");
         }
+    }
+
+    @Test
+    void writesFixedWidthIntegerAndBooleanBinaryValues() {
+        assertThat(PostgreSQLBinaryValues.encode(binary("id", "int4"), text("7")))
+                .containsExactly(0, 0, 0, 7);
+        assertThat(PostgreSQLBinaryValues.encode(binary("id", "int2"), text("258")))
+                .containsExactly(0x01, 0x02);
+        assertThat(PostgreSQLBinaryValues.encode(binary("id", "int8"), text("1")))
+                .containsExactly(0, 0, 0, 0, 0, 0, 0, 1);
+        assertThat(PostgreSQLBinaryValues.encode(binary("ok", "bool"), text("t")))
+                .containsExactly(1);
+        assertThat(PostgreSQLBinaryValues.encode(binary("ok", "bool"), text("false")))
+                .containsExactly(0);
+        assertThat(PostgreSQLBinaryValues.encode(binary("ratio", "float8"), text("1.5")))
+                .isEqualTo(java.nio.ByteBuffer.allocate(8).putDouble(1.5d).array());
+    }
+
+    @Test
+    void refusesNonNumericMaskForIntegerBinaryColumns() {
+        assertThatThrownBy(() -> PostgreSQLBinaryValues.encode(binary("id", "int4"), text("***")))
+                .isInstanceOf(MaskingException.class)
+                .hasMessageContaining("not an integer");
     }
 
     @Test

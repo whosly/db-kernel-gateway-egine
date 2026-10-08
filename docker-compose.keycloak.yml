@@ -1,0 +1,39 @@
+# Keycloak OIDC lab — Mac Docker Desktop / Linux Engine（非生产）
+#
+# 单独启动 IdP：
+#   docker compose -f docker-compose.keycloak.yml up -d
+#
+# 与主实验室栈一起（可选）：
+#   docker compose -f docker-compose.yml -f docker-compose.keycloak.yml up -d
+#
+# 网关配置见 docs/OPS.md「OIDC Keycloak 一路径」与
+# src/main/resources/application-oidc-keycloak-template.yml
+#
+# Lab 口令（勿用于生产）：
+#   Keycloak 管理控制台 http://localhost:8081/  → admin / admin
+#   realm gateway 用户：console-admin / admin（CONSOLE_ADMIN）
+#                       console-viewer / viewer（CONSOLE_VIEWER）
+#   OIDC client：gateway-console / change-me（Confidential）
+
+services:
+  keycloak:
+    image: quay.io/keycloak/keycloak:24.0.5
+    command: ["start-dev", "--import-realm"]
+    environment:
+      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN:-admin}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-admin}
+      KC_HTTP_PORT: "8080"
+      KC_HEALTH_ENABLED: "true"
+      KC_HOSTNAME_STRICT: "false"
+      KC_HOSTNAME_STRICT_HTTPS: "false"
+    ports:
+      - "${KEYCLOAK_HOST_PORT:-8081}:8080"
+    volumes:
+      - ./deploy/keycloak/realm-gateway.json:/opt/keycloak/data/import/realm-gateway.json:ro
+    # 故意不挂持久卷：删容器重建即重新 import realm（实验室友好）
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/8080"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 45s

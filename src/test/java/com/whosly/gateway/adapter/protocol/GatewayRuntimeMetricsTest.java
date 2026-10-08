@@ -15,4 +15,11 @@ class GatewayRuntimeMetricsTest {
         m.recordConnectionAccepted();
         assertThat(m.connectionsAccepted()).isZero();
     }
+    @Test void snapshotContainsStableKeys() {
+        GatewayRuntimeMetrics m = new GatewayRuntimeMetrics();
+        m.recordConnectionRejectedPolicy();
+        assertThat(m.snapshot())
+                .containsEntry("connectionsRejectedPolicy", 1L)
+                .containsKeys("connectionsAccepted", "backendFailovers", "policyDenials");
+    }
 }

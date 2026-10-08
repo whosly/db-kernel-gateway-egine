@@ -39,4 +39,21 @@ class PostgreSQLCancelKeyRegistryTest {
         registry.unregister(null);
         assertThat(registry.size()).isEqualTo(1);
     }
+
+    /**
+     * Product contract (P1-3): the registry only correlates CancelRequest keys with
+     * sessions. It never opens a backend socket or synthesises a cancel message —
+     * transparent proxying leaves cancel delivery to the client's own short-lived
+     * CancelRequest connection.
+     */
+    @Test
+    void documentsAssociateOnlyProductContract() {
+        PostgreSQLCancelKeyRegistry registry = new PostgreSQLCancelKeyRegistry();
+        registry.register("postgresql-a", 4711, 9911);
+
+        assertThat(registry.findTargetSessionId(4711, 9911)).contains("postgresql-a");
+        // Association is lookup-only: size stays 1 and no side-channel cancel is issued.
+        assertThat(registry.size()).isEqualTo(1);
+        assertThat(registry.findTargetSessionId(4711, 9911)).contains("postgresql-a");
+    }
 }
