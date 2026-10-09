@@ -361,6 +361,24 @@ public class ConsoleApiController {
     }
 
     /**
+     * In-flight console SQL workspace executions for this instance (cancel registry).
+     * Distinct from wire proxy sessions ({@link #listSessions(String)}).
+     */
+    public Map<String, Object> listSqlExecutions(String id) {
+        if (sqlExecuteService == null) {
+            throw new IllegalStateException("SQL execute service is not available");
+        }
+        GatewayInstance instance = instanceRegistry.findById(id)
+                .orElseThrow(() -> new IllegalArgumentException("Unknown gateway instance id: " + id));
+        List<Map<String, Object>> items = sqlExecuteService.listRunning(instance.id());
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("instanceId", instance.id());
+        body.put("items", items);
+        body.put("total", items.size());
+        return body;
+    }
+
+    /**
      * Best-effort cancel by executionId (protocol-agnostic).
      */
     public Map<String, Object> cancelSqlExecution(String executionId) {

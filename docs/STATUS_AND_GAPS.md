@@ -15,7 +15,7 @@
 | 本环境 `mvn test`（`JAVA_HOME`=JDK 17） | **BUILD SUCCESS：Tests run 592, Failures 0, Errors 0, Skipped 0** | surefire；含告警阈值 + 列加密 E2E + SQL IDE + form/token/open 鉴权 |
 | `pom.xml` 编译目标 | `maven.compiler.source/target=17` | **保持 17**；不升到 21 |
 
-**结论**：编译目标保持 17；VT 仅在 JDK 21+ 运行期启用。管控台已完成 Phase B/B+/C partial/E lite，并完成本轮**实例编辑/克隆/导入/筛选/批量**与 **SQL 工作台经代理 listenPort**；完整 SQL IDE（MaxGUI-lite）与本地 form/token 鉴权 + HTTPS 模板已落地；OIDC 为配置路径；**审计 spool 内容浏览**已落地；**SQL 多语句 + 尽力而为取消**已落地；**列加密 E2E**（密钥轮换 + verify）已落地（非 KMS）；**管控台告警阈值**（H2 + 进程内评估）已落地；**细粒度 RBAC**（VIEWER/OPERATOR/ADMIN + 权限串，§22）已落地；外部 Prometheus·Grafana / PagerDuty 仍不做。见 P0 / P1 / P2。
+**结论**：编译目标保持 17；VT 仅在 JDK 21+ 运行期启用。管控台已完成 Phase B/B+/C partial/E lite，并完成本轮**实例编辑/克隆/导入/筛选/批量**与 **SQL 工作台经代理 listenPort**；完整 SQL IDE（MaxGUI-lite）与本地 form/token 鉴权 + HTTPS 模板已落地；OIDC 为配置路径；**审计 spool 内容浏览**已落地；**SQL 多语句 + 尽力而为取消**已落地；**列加密 E2E**（密钥轮换 + verify）已落地（非 KMS）；**管控台告警阈值**（H2 + 进程内评估）已落地；**细粒度 RBAC**（VIEWER/OPERATOR/ADMIN + 权限串，§22）已落地；**SQL 工作台会话联动**（工作台执行中 ↔ 代理会话，§23）已落地；外部 Prometheus·Grafana / PagerDuty 仍不做。见 P0 / P1 / P2。
 
 ## 2. 能力总览（按主题）
 

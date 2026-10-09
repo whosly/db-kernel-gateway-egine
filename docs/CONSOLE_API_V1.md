@@ -83,6 +83,7 @@
 | 方法 | 旧路径 | 新路径 | 成功体 |
 |---|---|---|---|
 | POST | `/instances/{id}/sql/execute` | **`/instances/{id}/sql/executions`** | 执行结果对象 |
+| GET | —（新增） | **`/instances/{id}/sql/executions`** | 进行中的工作台执行 `{ instanceId, items, total }`（`instances:read`；非代理会话） |
 | POST | `/instances/{id}/sql/cancel` | **`/instances/{id}/sql/executions/cancel`** | 取消结果（body 含 `executionId`） |
 | POST | `/sql/executions/{executionId}/cancel` | `/sql/executions/{executionId}/cancel` | 取消结果 |
 | GET/DELETE | `/sql/history` | `/sql/history` | GET → `{ items, total }`；DELETE → `{ ok, deleted }` |

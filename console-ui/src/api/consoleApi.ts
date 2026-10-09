@@ -95,6 +95,13 @@ export function executeSql(
   )
 }
 
+/** In-flight console SQL executions (工作台执行中) for this instance. */
+export function listSqlExecutions(instanceId: string) {
+  return apiGet<{ instanceId?: string; items: import('./types').SqlExecutionRow[]; total: number }>(
+    `/instances/${encodeURIComponent(instanceId)}/sql/executions`,
+  )
+}
+
 export function cancelSql(instanceId: string, executionId: string) {
   return apiPost<SqlCancelResult>(
     `/instances/${encodeURIComponent(instanceId)}/sql/executions/cancel`,

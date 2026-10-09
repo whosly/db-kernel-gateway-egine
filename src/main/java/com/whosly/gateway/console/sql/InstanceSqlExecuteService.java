@@ -164,7 +164,9 @@ public class InstanceSqlExecuteService {
         props.setProperty("loginTimeout", String.valueOf(Math.min(queryTimeoutSec, 10)));
 
         String execId = hasText(executionId) ? executionId.trim() : UUID.randomUUID().toString();
-        RunningExecution running = new RunningExecution(execId, listener.id());
+        RunningExecution running = new RunningExecution(execId, listener.id(),
+                truncateForAudit(script, 200), statements.size(), viaProxy, proxyPort,
+                creds.username(), currentConsoleUser());
         RunningExecution prev = runningById.putIfAbsent(execId, running);
         if (prev != null) {
             throw new IllegalArgumentException("executionId 已在执行中：" + execId);
@@ -206,6 +208,7 @@ public class InstanceSqlExecuteService {
                 int stmtTimeoutSec = Math.max(1, (int) Math.ceil(Math.min(remainingMs, timeout) / 1000.0));
 
                 String statement = statements.get(i);
+                running.currentIndex.set(i);
                 long stmtStarted = System.nanoTime();
                 Map<String, Object> one;
                 try (Statement stmt = conn.createStatement()) {
@@ -354,6 +357,54 @@ public class InstanceSqlExecuteService {
             throw new IllegalArgumentException("executionId 不属于该实例");
         }
         return cancel(executionId);
+    }
+
+    /**
+     * In-flight console SQL executions (the cancel registry), newest first.
+     * These are control-plane JDBC runs from the SQL workspace — distinct from wire
+     * proxy sessions returned by {@code /instances/{id}/sessions}.
+     *
+     * @param instanceId optional filter; blank = all instances
+     */
+    public List<Map<String, Object>> listRunning(String instanceId) {
+        List<RunningExecution> snapshot = new ArrayList<>(runningById.values());
+        snapshot.sort((a, b) -> b.startedAt.compareTo(a.startedAt));
+        java.time.Instant now = java.time.Instant.now();
+        List<Map<String, Object>> out = new ArrayList<>();
+        for (RunningExecution r : snapshot) {
+            if (hasText(instanceId) && !instanceId.equals(r.instanceId)) {
+                continue;
+            }
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("executionId", r.executionId);
+            m.put("instanceId", r.instanceId);
+            m.put("sqlPreview", r.sqlPreview);
+            m.put("statementCount", r.statementCount);
+            m.put("currentStatementIndex", r.currentIndex.get());
+            m.put("startedAt", r.startedAt.toString());
+            m.put("elapsedMs", java.time.Duration.between(r.startedAt, now).toMillis());
+            m.put("viaProxy", r.viaProxy);
+            m.put("proxyPort", r.proxyPort > 0 ? r.proxyPort : null);
+            m.put("targetUser", r.targetUser);
+            m.put("initiatedBy", r.initiatedBy);
+            m.put("cancelRequested", r.cancelled.get());
+            out.add(m);
+        }
+        return out;
+    }
+
+    private static String currentConsoleUser() {
+        try {
+            org.springframework.security.core.Authentication auth =
+                    org.springframework.security.core.context.SecurityContextHolder.getContext().getAuthentication();
+            if (auth == null || !auth.isAuthenticated()) {
+                return null;
+            }
+            String name = auth.getName();
+            return "anonymousUser".equals(name) ? null : name;
+        } catch (RuntimeException | LinkageError e) {
+            return null;
+        }
     }
 
     /** Package-visible for tests. */
@@ -663,10 +714,29 @@ public class InstanceSqlExecuteService {
         final AtomicBoolean cancelled = new AtomicBoolean(false);
         final AtomicReference<Statement> statement = new AtomicReference<>();
         final AtomicReference<Connection> connection = new AtomicReference<>();
+        final java.util.concurrent.atomic.AtomicInteger currentIndex = new java.util.concurrent.atomic.AtomicInteger(0);
+        final java.time.Instant startedAt = java.time.Instant.now();
+        final String sqlPreview;
+        final int statementCount;
+        final boolean viaProxy;
+        final int proxyPort;
+        final String targetUser;
+        final String initiatedBy;
 
         RunningExecution(String executionId, String instanceId) {
+            this(executionId, instanceId, null, 1, false, -1, null, null);
+        }
+
+        RunningExecution(String executionId, String instanceId, String sqlPreview, int statementCount,
+                         boolean viaProxy, int proxyPort, String targetUser, String initiatedBy) {
             this.executionId = executionId;
             this.instanceId = instanceId;
+            this.sqlPreview = sqlPreview;
+            this.statementCount = statementCount;
+            this.viaProxy = viaProxy;
+            this.proxyPort = proxyPort;
+            this.targetUser = targetUser;
+            this.initiatedBy = initiatedBy;
         }
 
         boolean requestCancel() {

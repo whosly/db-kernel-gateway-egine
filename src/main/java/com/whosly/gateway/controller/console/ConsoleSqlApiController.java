@@ -26,6 +26,13 @@ public class ConsoleSqlApiController {
         return api.executeSql(id, body);
     }
 
+    /** In-flight console SQL executions (工作台执行中), not wire proxy sessions. */
+    @GetMapping("/instances/{id}/sql/executions")
+    @PreAuthorize("@consoleAuthz.has('" + INSTANCES_READ + "')")
+    public Map<String, Object> listSqlExecutions(@PathVariable("id") String id) {
+        return api.listSqlExecutions(id);
+    }
+
     @PostMapping("/instances/{id}/sql/executions/cancel")
     @PreAuthorize("@consoleAuthz.has('" + SQL_EXECUTE + "')")
     public Map<String, Object> cancelSql(@PathVariable("id") String id,

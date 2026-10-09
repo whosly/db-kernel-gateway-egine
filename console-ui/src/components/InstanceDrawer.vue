@@ -509,7 +509,7 @@ watch(tab, (v) => {
                 <td>{{ s.clientDatabase || '—' }}</td>
                 <td>{{ s.state }}</td>
                 <td>{{ s.inTransaction ? '是' : '否' }}</td>
-                <td><button type="button" class="danger" :disabled="!has(Perm.SESSIONS_KILL)" :title="!has(Perm.SESSIONS_KILL) ? '需要 sessions:kill' : ''" @click="onKill(s)">断开</button></td>
+                <td><button v-if="has(Perm.SESSIONS_KILL)" type="button" class="danger" @click="onKill(s)">断开</button></td>
               </tr>
             </tbody>
           </table>

@@ -21,6 +21,7 @@ import type {
   SqlSnippet,
   SqlStatementResult,
 } from '../api/types'
+import SqlSessionsPanel from '../components/SqlSessionsPanel.vue'
 
 const { has } = usePermissions()
 const toast = inject<(m: string) => void>('toast', () => {})
@@ -82,7 +83,7 @@ const expandedTables = ref<
 const history = ref<SqlHistoryEntry[]>([])
 const snippets = ref<SqlSnippet[]>([])
 const snippetName = ref('')
-const sidePanel = ref<'tree' | 'history' | 'snippets'>('tree')
+const sidePanel = ref<'tree' | 'history' | 'snippets' | 'sessions'>('tree')
 
 const selected = computed(() => instances.value.find((i) => i.id === instanceId.value) || null)
 
@@ -301,6 +302,11 @@ async function cancelRunning() {
   }
 }
 
+/** Panel cancelled our own in-flight run → unblock the editor too. */
+function onPanelCancelled(executionId: string) {
+  if (executionId === currentExecutionId.value) abortController?.abort()
+}
+
 function runExplain() {
   const db = (selected.value?.dbType || '').toLowerCase()
   const sql = (activeTab.value?.sql || '').trim().replace(/;$/, '')
@@ -415,7 +421,7 @@ onMounted(async () => {
   <div class="sql-ide">
     <p class="lead">
       SQL IDE 挂在<strong>网关实例</strong>上：执行经<strong>代理 listenPort</strong>（脱敏/观测/风控生效）；
-      左侧对象树为<strong>直连目标 JDBC 元数据</strong>。多语句（;）· 取消（尽力而为）· 多 Tab · 历史 · 片段 · 导出 · EXPLAIN。
+      左侧对象树为<strong>直连目标 JDBC 元数据</strong>；「会话」页区分<strong>工作台执行中</strong>与<strong>代理会话</strong>。多语句（;）· 取消（尽力而为）· 多 Tab · 历史 · 片段 · 导出 · EXPLAIN。
     </p>
 
     <div class="bar">
@@ -441,7 +447,7 @@ onMounted(async () => {
         v-if="running"
         type="button"
         class="danger-btn"
-        :disabled="!currentExecutionId"
+        :disabled="!currentExecutionId || !has(Perm.SQL_EXECUTE)"
         @click="cancelRunning"
       >
         取消
@@ -467,9 +473,19 @@ onMounted(async () => {
           <button type="button" :class="{ on: sidePanel === 'tree' }" @click="sidePanel = 'tree'">对象树</button>
           <button type="button" :class="{ on: sidePanel === 'history' }" @click="sidePanel = 'history'">历史</button>
           <button type="button" :class="{ on: sidePanel === 'snippets' }" @click="sidePanel = 'snippets'">片段</button>
+          <button type="button" :class="{ on: sidePanel === 'sessions' }" @click="sidePanel = 'sessions'">会话</button>
         </div>
 
-        <div v-if="sidePanel === 'tree'" class="panel">
+        <div v-if="sidePanel === 'sessions'" class="panel">
+          <SqlSessionsPanel
+            :instance-id="instanceId"
+            :instance-running="selected?.status === 'RUNNING'"
+            :local-execution-id="currentExecutionId"
+            @cancelled="onPanelCancelled"
+          />
+        </div>
+
+        <div v-else-if="sidePanel === 'tree'" class="panel">
           <div class="panel-head">
             <span>Schema</span>
             <button class="link" type="button" :disabled="!instanceId || catalogLoading" @click="loadCatalog">

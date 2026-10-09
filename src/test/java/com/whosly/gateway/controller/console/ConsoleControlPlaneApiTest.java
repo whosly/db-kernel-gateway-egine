@@ -41,6 +41,7 @@ class ConsoleControlPlaneApiTest {
     private ProtocolAdapter runningAdapter;
     private RecentTrafficRing ring;
     private GatewayConfig gatewayConfig;
+    private com.whosly.gateway.console.sql.InstanceSqlExecuteService sqlExec;
 
     @BeforeEach
     void setUp() {
@@ -106,9 +107,25 @@ class ConsoleControlPlaneApiTest {
         MetricsHistorySampler sampler = new MetricsHistorySampler(registry, runtime, 5, 20);
         // do not start scheduler in unit test — call sampleNow manually when needed
 
+        sqlExec = mock(com.whosly.gateway.console.sql.InstanceSqlExecuteService.class);
         console = new ConsoleApiController(
                 catalog, registry, runningAdapter, new GatewayRuntimeMetrics(), gatewayConfig,
-                null, null, null, health, ring, runtime, null, sampler, null, null, null, null, null);
+                null, null, null, health, ring, runtime, null, sampler, sqlExec, null, null, null, null);
+    }
+
+    @Test
+    void sqlExecutionsListIsSeparateFromWireSessions() {
+        Map<String, Object> exec = new LinkedHashMap<>();
+        exec.put("executionId", "e-1");
+        exec.put("instanceId", "gw-run");
+        when(sqlExec.listRunning("gw-run")).thenReturn(List.of(exec));
+
+        Map<String, Object> body = console.listSqlExecutions("gw-run");
+        assertThat(body.get("instanceId")).isEqualTo("gw-run");
+        assertThat(body.get("total")).isEqualTo(1);
+        assertThat(console.listSessions("gw-run").get("total")).isEqualTo(0);
+        assertThatThrownBy(() -> console.listSqlExecutions("nope"))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test

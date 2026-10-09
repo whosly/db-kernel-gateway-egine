@@ -1317,3 +1317,20 @@ GET /console/api/audit/spool?limit=50&before=&source=auto|ring|spool|jdbc&protoc
 - [x] `mvn test` + `npm run build` 绿；STATUS / README 同步
 
 **结论：§22 已实现（全局三角色 + 权限串；实例级 ACL 下轮；open 模式不变）。**
+
+---
+
+## 23. SQL 工作台 · 会话联动（工作台执行中 ↔ 代理会话）
+
+> SQL 工作台左侧新增「会话」页，按所选实例展示两类对象；**语义刻意分开**，避免把控制面 JDBC 执行与数据面 wire 连接混为一谈。
+
+| 区块 | 来源 | 标识 | 操作 | 权限 |
+|---|---|---|---|---|
+| **工作台执行中** | `InstanceSqlExecuteService` 取消注册表（进程内，执行结束即移除） | `executionId` | 取消（`Statement.cancel` + 关闭连接，尽力而为） | 查看 `instances:read`；取消 `sql:execute` |
+| **代理会话** | 适配器 `SessionSnapshot`（listenPort 上的客户端连接，含工作台与外部客户端） | `connectionId` | 断开（仅关客户端腿，不向后端发 KILL） | 查看 `instances:read`；断开 `sessions:kill`（无权限则**隐藏**按钮） |
+
+- API：`GET /console/api/v1/instances/{id}/sql/executions` → `{ instanceId, items[], total }`，字段 `executionId · sqlPreview（截断 200）· statementCount · currentStatementIndex · startedAt · elapsedMs · viaProxy · proxyPort · targetUser · initiatedBy · cancelRequested`；不含密码/结果。取消/断开沿用既有 `POST …/sql/executions/cancel`、`DELETE …/sessions/{connectionId}`。
+- UX：确认后执行；手动刷新 + 5s 自动刷新（页签可见时）；本页发起的执行标「本页」，从面板取消会同时中止编辑器等待。
+- 诚实边界：不做 executionId ↔ connectionId 精确关联（驱动/代理未透传客户端标记）；不做实例级 ACL；取消不是 TDS Attention / PG CancelRequest。
+
+**结论：§23 已实现。**

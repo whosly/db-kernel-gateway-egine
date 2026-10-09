@@ -292,6 +292,22 @@ export interface SessionRow {
   lastActivity?: string | null
 }
 
+/** In-flight console SQL workspace execution (cancel registry) — not a wire proxy session. */
+export interface SqlExecutionRow {
+  executionId: string
+  instanceId: string
+  sqlPreview?: string | null
+  statementCount?: number
+  currentStatementIndex?: number
+  startedAt?: string
+  elapsedMs?: number
+  viaProxy?: boolean
+  proxyPort?: number | null
+  targetUser?: string | null
+  initiatedBy?: string | null
+  cancelRequested?: boolean
+}
+
 export interface HealthCheckResult {
   ok: boolean
   latencyMs: number
