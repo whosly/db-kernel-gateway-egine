@@ -1418,3 +1418,29 @@ UNIQUE(principal_type, principal, instance_id)
 
 **结论：§24 已实现（实例级 ACL；非完整 IAM）。**
 
+## 25. 管控台 UI 视觉与交互改版（自检）
+
+> 状态：**已落地（frontend-only）** · 无 API 契约变更
+
+### 25.1 目标
+
+深色云控制台观感：侧栏层级、顶栏状态芯片、卡片/表格/抽屉/SQL 分栏更清晰；统一 spacing / radius / focus；空态与软加载；中文文案与「网关代理 / 透明代理」语义保留。
+
+### 25.2 实现要点
+
+| 层 | 文件 | 内容 |
+|---|---|---|
+| 令牌 | `console-ui/src/styles/tokens.css` | 色板、阴影、字号、间距、动效 |
+| 全局 | `console-ui/src/styles/main.css` | 按钮/表单/徽章/空态/骨架/Toast/滚动条 |
+| Shell | `layouts/ConsoleLayout.vue` | 图标导航、健康芯片、鉴权/用户芯片 |
+| 页面 | Overview / Instances / Sql / Login / Catalog / Alerts / Ops | 样式与空态/抽屉动效 |
+
+### 25.3 非目标
+
+不引入大型 UI 组件库；不改 `/console/api/v1`；不做完整主题切换（令牌已为后续 light 预留结构）。
+
+### 25.4 自检
+
+- [x] `npm run build`（vue-tsc）绿
+- [x] 代理模式徽章与 RBAC 显隐逻辑未改契约
+- [x] focus-visible / 对比度按深色面板检查

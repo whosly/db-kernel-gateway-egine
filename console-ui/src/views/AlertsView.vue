@@ -318,9 +318,10 @@ function sevClass(s?: string) {
 .panel {
   background: var(--bg-card);
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   padding: 1rem 1.1rem;
   margin-bottom: 1rem;
+  box-shadow: var(--shadow-sm);
 }
 .banner.hot { border-color: #ef4444; background: rgba(239, 68, 68, 0.08); }
 .badge {

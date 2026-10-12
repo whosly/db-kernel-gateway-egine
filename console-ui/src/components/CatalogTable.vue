@@ -5,8 +5,8 @@ defineProps<{ rows: CatalogEntry[] }>()
 </script>
 
 <template>
-  <div class="table-wrap">
-    <table>
+  <div class="wrap">
+    <table v-if="rows.length" class="data-table">
       <thead>
         <tr>
           <th>类型 ID</th>
@@ -34,25 +34,31 @@ defineProps<{ rows: CatalogEntry[] }>()
           </td>
           <td>{{ row.maturity }}</td>
           <td>{{ row.creatable ? '是' : '否' }}</td>
-          <td>{{ row.defaultProxyPort }} → {{ row.defaultTargetPort }}</td>
+          <td class="mono">{{ row.defaultProxyPort }} → {{ row.defaultTargetPort }}</td>
           <td class="notes">{{ row.notes || '—' }}</td>
         </tr>
       </tbody>
     </table>
+    <div v-else class="empty-state">
+      <strong>目录为空</strong>
+      <p>尚未注册可管理的数据库类型适配器。</p>
+    </div>
   </div>
 </template>
 
 <style scoped>
-.table-wrap {
+.wrap {
   overflow: auto;
   border: 1px solid var(--border);
-  border-radius: var(--radius);
+  border-radius: var(--radius-lg);
   background: var(--bg-card);
+  box-shadow: var(--shadow-sm);
 }
-table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
-th, td { text-align: left; padding: 0.7rem 0.85rem; border-bottom: 1px solid var(--border); vertical-align: top; }
-th { color: var(--text-muted); font-weight: 600; background: var(--bg-elevated); }
-.notes { color: var(--text-muted); max-width: 280px; }
-.hint { color: var(--text-muted); font-size: 0.75rem; margin-top: 0.25rem; }
+.data-table { margin: 0; width: 100%; }
+.data-table th { position: sticky; top: 0; z-index: 1; }
+.data-table tbody tr:hover { background: var(--bg-hover); }
+.notes { color: var(--text-muted); max-width: 280px; font-size: 0.8rem; }
+.hint { color: var(--text-muted); font-size: 0.72rem; margin-top: 0.25rem; }
 .muted { color: var(--text-muted); }
+.mono { font-family: var(--font-mono); font-size: 0.8rem; }
 </style>

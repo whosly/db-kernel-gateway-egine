@@ -324,9 +324,11 @@ async function onImportFile(ev: Event) {
 
     <p v-if="error" class="err">{{ error }}</p>
 
-    <div v-if="!filtered.length" class="empty">
-      <p v-if="!instances.length">暂无网关实例。点击「新建实例」或「导入 JSON」开始。</p>
-      <p v-else>无匹配结果。请调整搜索或筛选条件。</p>
+    <div v-if="!filtered.length" class="empty-state">
+      <strong v-if="!instances.length">暂无网关实例</strong>
+      <strong v-else>无匹配结果</strong>
+      <p v-if="!instances.length">点击「新建实例」或「导入 JSON」开始管理监听实例。</p>
+      <p v-else>请调整搜索或筛选条件。</p>
     </div>
 
     <div v-else class="card-grid">
@@ -444,40 +446,44 @@ async function onImportFile(ev: Event) {
 </template>
 
 <style scoped>
-.toolbar { display: flex; justify-content: space-between; gap: 1rem; align-items: flex-start; margin-bottom: 0.75rem; flex-wrap: wrap; }
-.actions { display: flex; flex-wrap: wrap; gap: 0.5rem; }
-.lead { color: var(--text-muted); margin: 0; max-width: 48rem; }
+.toolbar { display: flex; justify-content: space-between; gap: 1rem; align-items: flex-start; margin-bottom: 0.85rem; flex-wrap: wrap; }
+.actions { display: flex; flex-wrap: wrap; gap: 0.45rem; }
+.lead { color: var(--text-muted); margin: 0; max-width: 48rem; line-height: 1.5; }
 .filters {
-  display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center;
-  margin-bottom: 1rem; padding: 0.65rem 0.75rem;
-  background: var(--bg-elevated); border: 1px solid var(--border); border-radius: var(--radius);
+  display: flex; flex-wrap: wrap; gap: 0.45rem; align-items: center;
+  margin-bottom: 1rem; padding: 0.7rem 0.8rem;
+  background: var(--bg-elevated); border: 1px solid var(--border); border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
 }
 .search { min-width: 12rem; flex: 1; }
 .err { color: var(--danger); }
-.empty {
-  padding: 2.5rem 1rem; text-align: center; color: var(--text-muted);
-  border: 1px dashed var(--border); border-radius: var(--radius);
-}
 .card-wrap { position: relative; display: flex; flex-direction: column; gap: 0.35rem; }
-.sel { position: absolute; top: 0.65rem; left: 0.65rem; z-index: 2; }
-.card-extra { display: flex; gap: 0.35rem; padding: 0 0.25rem; }
+.sel {
+  position: absolute; top: 0.75rem; left: 0.75rem; z-index: 2;
+  background: color-mix(in srgb, var(--bg-card) 85%, transparent);
+  border-radius: 4px; padding: 0.1rem;
+}
+.card-extra { display: flex; gap: 0.35rem; padding: 0 0.15rem; }
 .overlay {
-  position: fixed; inset: 0; background: rgba(0,0,0,0.5);
+  position: fixed; inset: 0; background: var(--bg-overlay);
   display: grid; place-items: center; z-index: 45; padding: 1rem;
+  backdrop-filter: blur(3px);
 }
 .dialog {
   width: min(640px, 100%);
   background: var(--bg-elevated);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 1.25rem;
-  box-shadow: var(--shadow);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-xl);
+  padding: 1.25rem 1.3rem;
+  box-shadow: var(--shadow-lg);
+  max-height: min(90vh, 900px);
+  overflow: auto;
 }
-.dialog header { display: flex; justify-content: space-between; align-items: center; }
-.dialog h2 { margin: 0; }
+.dialog header { display: flex; justify-content: space-between; align-items: center; gap: 0.75rem; }
+.dialog h2 { margin: 0; font-size: 1.1rem; letter-spacing: -0.02em; }
 .muted { color: var(--text-muted); font-size: 0.85rem; }
-.tiny { font-size: 0.75rem; }
-.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem 1rem; margin-top: 0.75rem; }
+.tiny { font-size: 0.72rem; }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0.55rem 0.9rem; margin-top: 0.75rem; }
 .check { display: flex; align-items: center; gap: 0.5rem; margin: 0.75rem 0 1rem; color: var(--text-muted); }
 .check.inline { margin: 0; }
 .check input { width: auto; }

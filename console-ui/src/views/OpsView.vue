@@ -478,9 +478,10 @@ function sourceLabel(s?: string) {
 .panel {
   background: var(--bg-card);
   border: 1px solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--radius-lg);
   padding: 1rem 1.1rem;
   margin-bottom: 1rem;
+  box-shadow: var(--shadow-sm);
 }
 .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
 @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }

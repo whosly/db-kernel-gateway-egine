@@ -41,7 +41,7 @@ function arc(start: number, sweep: number) {
 <template>
   <div class="donut-wrap">
     <svg viewBox="0 0 100 100" class="donut">
-      <circle cx="50" cy="50" r="40" fill="transparent" stroke="#2d3a4d" stroke-width="12" />
+      <circle cx="50" cy="50" r="40" fill="transparent" stroke="var(--border)" stroke-width="12" />
       <path
         v-for="s in slices"
         :key="s.status"
@@ -61,9 +61,9 @@ function arc(start: number, sweep: number) {
 </template>
 
 <style scoped>
-.donut-wrap { display: flex; gap: 1rem; align-items: center; }
-.donut { width: 140px; height: 140px; }
-.legend { list-style: none; margin: 0; padding: 0; color: var(--text-muted); font-size: 0.85rem; }
-.legend li { display: flex; align-items: center; gap: 0.4rem; margin: 0.25rem 0; }
-.dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+.donut-wrap { display: flex; gap: 1.1rem; align-items: center; flex-wrap: wrap; }
+.donut { width: 132px; height: 132px; }
+.legend { list-style: none; margin: 0; padding: 0; color: var(--text-muted); font-size: 0.8rem; }
+.legend li { display: flex; align-items: center; gap: 0.45rem; margin: 0.28rem 0; font-weight: 500; }
+.dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; box-shadow: 0 0 0 2px color-mix(in srgb, currentColor 20%, transparent); }
 </style>

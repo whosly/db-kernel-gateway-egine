@@ -75,5 +75,5 @@ onMounted(() => {
 <template>
   <RouterView v-if="$route.name === 'login'" />
   <ConsoleLayout v-else />
-  <div v-if="toast" class="toast">{{ toast }}</div>
+  <div v-if="toast" class="toast" role="status" aria-live="polite">{{ toast }}</div>
 </template>

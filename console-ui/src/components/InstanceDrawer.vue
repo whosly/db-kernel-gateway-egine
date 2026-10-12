@@ -844,21 +844,31 @@ watch(tab, (v) => {
 
 <style scoped>
 .overlay {
-  position: fixed; inset: 0; background: rgba(0,0,0,0.45);
+  position: fixed; inset: 0; background: var(--bg-overlay);
   display: flex; justify-content: flex-end; z-index: 40;
+  backdrop-filter: blur(2px);
+  animation: fade-in var(--dur) var(--ease);
 }
+@keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
 .drawer {
-  width: min(480px, 100%);
+  width: min(520px, 100%);
   background: var(--bg-elevated);
-  border-left: 1px solid var(--border);
-  padding: 1.25rem;
+  border-left: 1px solid var(--border-strong);
+  padding: 1.2rem 1.25rem 1.5rem;
   overflow: auto;
-  box-shadow: var(--shadow);
+  box-shadow: var(--shadow-drawer);
+  animation: slide-in var(--dur-slow) var(--ease);
 }
-header { display: flex; justify-content: space-between; align-items: flex-start; }
-h2 { margin: 0; }
+@keyframes slide-in { from { transform: translateX(12px); opacity: 0.85; } to { transform: none; opacity: 1; } }
+header { display: flex; justify-content: space-between; align-items: flex-start; gap: 0.75rem; }
+h2 { margin: 0; font-size: 1.1rem; letter-spacing: -0.02em; }
 .sub, .muted { color: var(--text-muted); font-size: 0.85rem; }
-.tabs { display: flex; gap: 0.5rem; margin-top: 1rem; }
+.tabs { display: flex; gap: 0.35rem; margin-top: 1rem; flex-wrap: wrap; }
+.tabs button {
+  border-radius: var(--radius-pill);
+  padding: 0.35rem 0.75rem;
+  font-size: 0.78rem;
+}
 .tabs button.active {
   background: var(--accent);
   border-color: var(--accent);
