@@ -204,7 +204,7 @@ h4 { margin: 0.6rem 0 0.15rem; font-size: 0.85rem; }
   font-size: 0.68rem; padding: 0 0.3rem; border-radius: 4px; margin-left: 0.25rem;
   background: var(--accent-soft, rgba(59,130,246,.15)); color: var(--text);
 }
-.tag.warn { background: rgba(245, 158, 11, 0.18); color: #f59e0b; }
+.tag.warn { background: var(--warn-soft); color: var(--warn); }
 .link { background: none; border: 0; color: var(--text); cursor: pointer; white-space: nowrap; }
 .link.danger { color: var(--danger, #ef4444); }
 .link:disabled { opacity: 0.5; cursor: not-allowed; }

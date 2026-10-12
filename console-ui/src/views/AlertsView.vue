@@ -323,7 +323,7 @@ function sevClass(s?: string) {
   margin-bottom: 1rem;
   box-shadow: var(--shadow-sm);
 }
-.banner.hot { border-color: #ef4444; background: rgba(239, 68, 68, 0.08); }
+.banner.hot { border-color: var(--danger); background: var(--danger-soft); }
 .badge {
   display: inline-block;
   margin-left: 0.5rem;
@@ -332,8 +332,8 @@ function sevClass(s?: string) {
   background: var(--bg-elevated, #1e293b);
   font-size: 0.8rem;
 }
-.badge.on { background: #ef4444; color: #fff; }
-.badge.crit { background: #b91c1c; color: #fff; }
+.badge.on { background: var(--danger); color: #fff; }
+.badge.crit { background: var(--danger); color: #fff; }
 .grid { display: grid; grid-template-columns: 1.4fr 1fr; gap: 1rem; }
 @media (max-width: 1000px) { .grid { grid-template-columns: 1fr; } }
 .tbl { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
@@ -356,10 +356,10 @@ function sevClass(s?: string) {
   font-size: 0.7rem;
   margin-right: 0.25rem;
 }
-.sev-crit { background: #7f1d1d; color: #fecaca; }
-.sev-warn { background: #78350f; color: #fde68a; }
-.sev-info { background: #1e3a5f; color: #bfdbfe; }
-.hot-dot { color: #ef4444; font-weight: 600; }
+.sev-crit { background: var(--sev-crit-bg); color: var(--sev-crit-fg); }
+.sev-warn { background: var(--sev-warn-bg); color: var(--sev-warn-fg); }
+.sev-info { background: var(--sev-info-bg); color: var(--sev-info-fg); }
+.hot-dot { color: var(--danger); font-weight: 600; }
 .msg { margin-top: 0.5rem; }
 code { font-size: 0.85em; }
 </style>

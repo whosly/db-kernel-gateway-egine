@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, provide, onMounted } from 'vue'
+import { ensureThemeBootstrapped } from './composables/useTheme'
 import { useRouter } from 'vue-router'
 import ConsoleLayout from './layouts/ConsoleLayout.vue'
 import { setUnauthorizedHandler } from './api/client'
@@ -63,6 +64,7 @@ provide('logout', doLogout)
 provide('refreshAuth', refreshAuth)
 
 onMounted(() => {
+  ensureThemeBootstrapped()
   setUnauthorizedHandler(() => {
     if (router.currentRoute.value.name !== 'login') {
       router.push({ name: 'login' })

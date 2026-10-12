@@ -915,8 +915,8 @@ code { font-size: 0.8em; }
 }
 
 .health-row { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin-top: 0.5rem; }
-.badge.ok { background: #1b5e20; color: #c8e6c9; }
-.badge.bad { background: #b71c1c; color: #ffcdd2; }
+.badge.ok { background: var(--ok-soft); color: var(--ok); }
+.badge.bad { background: var(--danger-soft); color: var(--danger); }
 table.mini { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
 table.mini th, table.mini td { border-bottom: 1px solid var(--border); padding: 0.35rem 0.25rem; text-align: left; }
 .mono { font-family: ui-monospace, monospace; font-size: 0.75rem; word-break: break-all; }

@@ -2,6 +2,7 @@
 import { computed, inject, onMounted, ref, type Ref } from 'vue'
 import { useRoute, RouterLink, RouterView } from 'vue-router'
 import { getOverview } from '../api/consoleApi'
+import ThemeSwitcher from '../components/ThemeSwitcher.vue'
 
 const route = useRoute()
 const title = computed(() => (route.meta.title as string) || '管控台')
@@ -121,6 +122,7 @@ const roleLabel = computed(() => {
           <span class="crumb">控制面</span>
         </div>
         <div class="topbar-right">
+          <ThemeSwitcher />
           <span
             v-if="healthChip"
             class="chip"
@@ -162,7 +164,7 @@ const roleLabel = computed(() => {
 .sidebar {
   width: var(--sidebar-w);
   flex-shrink: 0;
-  background: color-mix(in srgb, var(--bg-elevated) 92%, #000);
+  background: var(--bg-sidebar);
   border-right: 1px solid var(--border);
   padding: 1.1rem 0.85rem 1rem;
   display: flex;
@@ -280,7 +282,7 @@ const roleLabel = computed(() => {
   gap: 1rem;
   padding: 0 1.35rem;
   border-bottom: 1px solid var(--border);
-  background: color-mix(in srgb, var(--bg) 78%, var(--bg-elevated));
+  background: var(--bg-topbar);
   backdrop-filter: blur(10px);
   position: sticky;
   top: 0;

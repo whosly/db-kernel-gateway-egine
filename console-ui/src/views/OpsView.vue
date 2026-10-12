@@ -497,7 +497,7 @@ pre { font-size: 0.75rem; overflow: auto; max-height: 280px; }
 .msg { margin-top: 0.5rem; }
 .jdbc-sink-hint { margin-top: 0.75rem; padding: 0.65rem 0.75rem; border: 1px solid var(--border); border-radius: 6px; background: var(--panel-2, transparent); }
 .jdbc-sink-hint h4 { margin: 0 0 0.35rem; font-size: 0.9rem; }
-.jdbc-sink-hint .warn { color: #b45309; }
+.jdbc-sink-hint .warn { color: var(--warn); }
 .audit { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
 .audit th, .audit td { border-bottom: 1px solid var(--border); padding: 0.4rem 0.35rem; text-align: left; vertical-align: top; }
 code { font-size: 0.85em; }
@@ -520,12 +520,12 @@ code { font-size: 0.85em; }
 .tabs button.active {
   background: var(--bg-elevated, #1e293b);
   color: var(--text, #e2e8f0);
-  border-color: #3b82f6;
+  border-color: var(--accent);
 }
 .inline { display: flex; align-items: center; gap: 0.35rem; font-size: 0.85rem; color: var(--text-muted); }
 .inline select { margin-left: 0.25rem; }
 .empty-hint {
-  background: rgba(59, 130, 246, 0.08);
+  background: var(--accent-soft);
   border: 1px dashed var(--border);
   border-radius: 8px;
   padding: 0.65rem 0.85rem;

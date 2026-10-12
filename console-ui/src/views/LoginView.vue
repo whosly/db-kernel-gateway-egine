@@ -2,6 +2,7 @@
 import { inject, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { getAuthMode, login } from '../api/consoleApi'
+import ThemeSwitcher from '../components/ThemeSwitcher.vue'
 
 const router = useRouter()
 const refreshAuth = inject<() => Promise<void>>('refreshAuth', async () => {})
@@ -60,6 +61,9 @@ function ssoLogin() {
 
 <template>
   <div class="login">
+    <div class="login-theme">
+      <ThemeSwitcher />
+    </div>
     <div class="login-card">
       <div class="brand-row">
         <div class="mark" aria-hidden="true">
@@ -104,10 +108,16 @@ function ssoLogin() {
   display: grid;
   place-items: center;
   padding: 1.5rem;
+  position: relative;
   background:
-    radial-gradient(900px 480px at 20% 0%, rgba(79, 140, 255, 0.12), transparent 55%),
-    radial-gradient(700px 400px at 90% 20%, rgba(45, 212, 191, 0.08), transparent 50%),
+    radial-gradient(900px 480px at 20% 0%, var(--ambient-1), transparent 55%),
+    radial-gradient(700px 400px at 90% 20%, var(--ambient-2), transparent 50%),
     var(--bg);
+}
+.login-theme {
+  position: absolute;
+  top: 1rem;
+  right: 1rem;
 }
 .login-card {
   width: min(26rem, 94vw);
@@ -117,7 +127,7 @@ function ssoLogin() {
   padding: 1.65rem 1.5rem 1.35rem;
   border-radius: var(--radius-xl);
   border: 1px solid var(--border);
-  background: color-mix(in srgb, var(--bg-elevated) 92%, #000);
+  background: var(--bg-elevated);
   box-shadow: var(--shadow-lg);
 }
 .brand-row {
