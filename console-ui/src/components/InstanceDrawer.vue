@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { usePermissions, Perm } from '../composables/usePermissions'
-import { computed, inject, onMounted, reactive, ref, watch } from 'vue'
+import { computed, inject, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
+import type { ConfirmFn } from '../composables/useConfirm'
 import type {
   GatewayInstance,
   HealthCheckResult,
@@ -41,6 +42,7 @@ const props = defineProps<{ instance: GatewayInstance | null }>()
 const emit = defineEmits<{ close: []; delete: []; save: [UpdateInstancePayload]; clone: [] }>()
 
 const toast = inject<(m: string) => void>('toast', () => {})
+const askConfirm = inject<ConfirmFn>('confirm', async () => false)
 const secretEnc = ref<SecretEncryptionStatus | null>(null)
 const maskingKey = ref<MaskingKeyStatus | null>(null)
 const tab = ref<'info' | 'masking' | 'sessions' | 'recent' | 'acl'>('info')
@@ -210,7 +212,13 @@ async function submitAclBinding() {
 
 async function removeAclBinding(row: InstanceAclBinding) {
   if (!props.instance) return
-  if (!confirm(`删除绑定 ${row.principalType}/${row.principal}？`)) return
+  const ok = await askConfirm({
+    title: '删除 ACL 绑定',
+    message: `删除绑定 ${row.principalType}/${row.principal}？`,
+    danger: true,
+    confirmLabel: '删除',
+  })
+  if (!ok) return
   try {
     await deleteInstanceAclBinding(props.instance.id, row.id)
     toast('已删除 ACL 绑定')
@@ -337,7 +345,13 @@ async function submitRule() {
 
 async function removeRule(rule: MaskingRule) {
   if (!props.instance) return
-  if (!confirm(`删除规则「${rule.name}」？`)) return
+  const ok = await askConfirm({
+    title: '删除脱敏规则',
+    message: `删除规则「${rule.name}」？`,
+    danger: true,
+    confirmLabel: '删除',
+  })
+  if (!ok) return
   try {
     await deleteMaskingRule(props.instance.id, rule.id)
     toast('已删除脱敏规则')
@@ -390,7 +404,13 @@ async function loadSessions() {
 
 async function onKill(row: SessionRow) {
   if (!props.instance) return
-  if (!confirm(`断开会话 ${row.connectionId}？（仅关闭客户端腿）`)) return
+  const ok = await askConfirm({
+    title: '断开会话',
+    message: `断开会话 ${row.connectionId}？\n仅关闭客户端腿，不向后端发 KILL。`,
+    danger: true,
+    confirmLabel: '断开',
+  })
+  if (!ok) return
   try {
     await killSession(props.instance.id, row.connectionId)
     toast('已断开客户端会话')
@@ -436,7 +456,13 @@ onMounted(() => {
   loadRules()
   loadSecretEnc()
   loadMaskingKey()
+  window.addEventListener('keydown', onDrawerKey)
 })
+onUnmounted(() => window.removeEventListener('keydown', onDrawerKey))
+
+function onDrawerKey(e: KeyboardEvent) {
+  if (e.key === 'Escape' && props.instance) emit('close')
+}
 watch(
   () => props.instance?.id,
   () => {

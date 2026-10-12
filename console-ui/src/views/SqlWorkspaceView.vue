@@ -324,7 +324,12 @@ function runExplain() {
 function onKey(e: KeyboardEvent) {
   if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
     e.preventDefault()
-    run()
+    const ta = e.target as HTMLTextAreaElement | null
+    const selected =
+      ta && typeof ta.selectionStart === 'number' && ta.selectionStart !== ta.selectionEnd
+        ? ta.value.slice(ta.selectionStart, ta.selectionEnd).trim()
+        : ''
+    run(selected || undefined)
   }
 }
 
@@ -441,7 +446,7 @@ onMounted(async () => {
         <input v-model.number="maxRows" type="number" min="1" max="1000" />
       </label>
       <button class="primary" :disabled="running || !instanceId || !has(Perm.SQL_EXECUTE)" :title="!has(Perm.SQL_EXECUTE) ? '需要 sql:execute' : ''" @click="run()">
-        {{ running ? '执行中…' : '运行 (Ctrl/⌘+Enter)' }}
+        {{ running ? '执行中…' : '运行 (Ctrl/⌘+Enter · 选区优先)' }}
       </button>
       <button
         v-if="running"
@@ -493,8 +498,15 @@ onMounted(async () => {
             </button>
           </div>
           <p v-if="catalogError" class="err tiny">{{ catalogError }}</p>
-          <p v-else-if="!catalog" class="muted tiny">选择实例后加载对象树</p>
-          <ul v-else class="tree">
+          <div v-else-if="!catalog" class="empty-mini">
+            <strong>尚未加载对象树</strong>
+            <p class="muted tiny">选择网关实例后自动加载；也可手动刷新。</p>
+          </div>
+          <div v-else-if="catalog && !(catalog.tables || []).length" class="empty-mini">
+            <strong>无表对象</strong>
+            <p class="muted tiny">目标库可能为空，或元数据不可见（权限/驱动限制）。</p>
+          </div>
+          <ul v-else-if="catalog && (catalog.tables || []).length" class="tree">
             <li v-for="(tables, schema) in tablesBySchema" :key="String(schema)">
               <button
                 class="tree-node"
@@ -753,4 +765,13 @@ th {
 .danger-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .result-tabs { display: flex; flex-wrap: wrap; gap: 0.25rem; margin: 0.5rem 0; }
 .tab-err { color: var(--danger) !important; }
+.empty-mini {
+  padding: 0.85rem 0.5rem;
+  text-align: center;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  margin: 0.35rem 0;
+}
+.empty-mini strong { display: block; font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 0.25rem; }
+
 </style>

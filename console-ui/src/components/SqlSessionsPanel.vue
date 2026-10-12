@@ -4,6 +4,7 @@ import { cancelSql, killSession, listSessions, listSqlExecutions } from '../api/
 import type { SessionRow, SqlExecutionRow } from '../api/types'
 import { Perm, usePermissions } from '../composables/usePermissions'
 import { usePolling } from '../composables/usePolling'
+import type { ConfirmFn } from '../composables/useConfirm'
 
 /**
  * SQL 工作台「会话」面板：
@@ -21,6 +22,7 @@ const emit = defineEmits<{ (e: 'cancelled', executionId: string): void }>()
 
 const { has } = usePermissions()
 const toast = inject<(m: string) => void>('toast', () => {})
+const askConfirm = inject<ConfirmFn>('confirm', async () => false)
 
 const executions = ref<SqlExecutionRow[]>([])
 const sessions = ref<SessionRow[]>([])
@@ -70,7 +72,13 @@ watch(
 )
 
 async function onCancel(row: SqlExecutionRow) {
-  if (!confirm(`取消工作台执行 ${row.executionId.slice(0, 8)}…？（尽力而为：Statement.cancel + 关闭连接）`)) return
+  const ok = await askConfirm({
+    title: '取消执行',
+    message: `取消工作台执行 ${row.executionId.slice(0, 8)}…？\n尽力而为：Statement.cancel + 关闭连接。`,
+    danger: true,
+    confirmLabel: '取消执行',
+  })
+  if (!ok) return
   try {
     const body = await cancelSql(props.instanceId, row.executionId)
     toast(body.found === false ? body.message || '执行已结束' : body.message || '已请求取消')
@@ -82,7 +90,13 @@ async function onCancel(row: SqlExecutionRow) {
 }
 
 async function onKill(row: SessionRow) {
-  if (!confirm(`断开代理会话 ${row.connectionId}？\n仅关闭客户端腿，不向后端发 KILL；若该连接正被工作台执行使用，执行会失败。`)) return
+  const ok = await askConfirm({
+    title: '断开代理会话',
+    message: `断开代理会话 ${row.connectionId}？\n仅关闭客户端腿，不向后端发 KILL；若该连接正被工作台执行使用，执行会失败。`,
+    danger: true,
+    confirmLabel: '断开',
+  })
+  if (!ok) return
   try {
     await killSession(props.instanceId, row.connectionId)
     toast('已断开代理会话')

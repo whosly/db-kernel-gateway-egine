@@ -130,7 +130,14 @@ async function onStop(id: string) {
       </div>
     </div>
     <h3 class="page-section-title">实例</h3>
-    <div class="card-grid">
+    <div v-if="data && !(data.instances || []).length" class="empty-state">
+      <strong>暂无实例</strong>
+      <p>前往「网关实例」新建或导入，即可在此总览运行状态。</p>
+      <div class="cta">
+        <button class="primary" type="button" @click="router.push('/instances')">管理实例</button>
+      </div>
+    </div>
+    <div v-else class="card-grid">
       <InstanceCard
         v-for="inst in data?.instances || []"
         :key="inst.id"

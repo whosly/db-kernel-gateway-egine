@@ -4,7 +4,7 @@
 > **更新原则**：只写有代码/测试/配置证据的结论；「规划中」不得写成「已实现」。  
 > **导航**：见 [README.md](README.md)。
 >
-> **近况**：Vue console Phase A/A+/B/B+ + **C partial / E lite** — 审计状态 · 进程内 metrics history · 风控规则热挂 · 连接池徽章 · 可选 read-token。**boundary**：`runtime`↛`console`（`runtime.spi`）+ console API controllers 按域拆分。
+> **近况**：Vue console Phase A/A+/B/B+ + **C partial / E lite** — 审计状态 · 进程内 metrics history · 风控规则热挂 · 连接池徽章 · 可选 read-token；**UI**：改版 + 浅色默认主题切换 + **UX 微抛光**（类型化 Toast、应用内确认、窄屏侧栏、筛选计数、Esc/SQL 选区）。**boundary**：`runtime`↛`console`（`runtime.spi`）+ console API controllers 按域拆分。
 
 ## 1. 构建与测试基线
 
@@ -33,7 +33,7 @@
 | TLS 终止 / 明文强制 | **partial（improved）** | 可选 `gateway.tls.*` 客户端 TLS 终止（共享基础设施）；未启用时仍 opaque / `require-cleartext-inspection` |
 | NIO / 事件驱动 | **missing（刻意）** | 阻塞流 + 每连接线程/VT；**不以 NIO 重写为当前方向**（见 P2-1） |
 | JDBC 旁路路径 | **legacy（已标注）** | `DatabaseConnectionService` `@Deprecated`；wire 路径未使用 |
-| 运维产品化 | **partial（improved）** | 非交互默认启动；`/gateway/*` + `/actuator/gateway`；**管控台** `/console`（实例中心 + **告警阈值**）；**同 JVM 多 listener**（`GatewayListenerRuntime`）；交互 CLI 默认关 |
+| 运维产品化 | **partial（improved）** | 非交互默认启动；`/gateway/*` + `/actuator/gateway`；**管控台** `/console`（实例中心 + **告警阈值**；UI 改版/主题/UX 微抛光）；**同 JVM 多 listener**（`GatewayListenerRuntime`）；交互 CLI 默认关 |
 
 ## 3. 配置键（以 `GatewayConfig` 绑定为准）
 

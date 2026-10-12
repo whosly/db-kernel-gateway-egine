@@ -1437,10 +1437,36 @@ UNIQUE(principal_type, principal, instance_id)
 
 ### 25.3 非目标
 
-不引入大型 UI 组件库；不改 `/console/api/v1`；不做完整主题切换（令牌已为后续 light 预留结构）。
+不引入大型 UI 组件库；不改 `/console/api/v1`。主题切换见后续提交（浅色默认 + light/dark/system）。
 
 ### 25.4 自检
 
 - [x] `npm run build`（vue-tsc）绿
 - [x] 代理模式徽章与 RBAC 显隐逻辑未改契约
 - [x] focus-visible / 对比度按深色面板检查
+
+## 26. 管控台 UX 微抛光（自检）
+
+> 状态：**已落地（frontend-only）** · 无 API / ACL 契约变更  
+> 计划草稿：`docs/scratch/UX_POLISH_2026-10-12.md`
+
+### 26.1 本轮落地
+
+| 项 | 说明 |
+|---|---|
+| 类型化 Toast | 成功/错误/信息左边条 + 圆点；错误更长驻留；可点 × 关闭；文案启发式推断类型 |
+| 应用内确认框 | `ConfirmDialog` + `provide('confirm')` 替代 `window.confirm`；主题一致；Esc/遮罩取消 |
+| 窄屏侧栏 | ≤900px 抽屉式导航 + 顶栏汉堡按钮 + 遮罩；路由切换自动收起 |
+| 实例筛选 | 「显示 N / M」+「清除筛选」；空态 CTA（新建/导入/清筛选） |
+| 键盘 | Esc 关闭新建对话框与实例抽屉；SQL Ctrl/⌘+Enter **优先运行选区** |
+| 表格 | `.data-table` / `.tbl` 等表头 sticky |
+
+### 26.2 非目标
+
+不做 Monaco/行号、不做完整表单校验框架、不接 Prometheus / TDS / Oracle。
+
+### 26.3 自检
+
+- [x] `npm run build`（vue-tsc）绿
+- [x] 浏览器冒烟：浅色/深色/确认框/空筛选/移动导航/Toast（`/workspace/browser-smoke/ux-*.png`）
+- [x] 无残留 `window.confirm`

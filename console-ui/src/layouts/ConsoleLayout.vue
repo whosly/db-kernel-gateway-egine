@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, inject, onMounted, ref, type Ref } from 'vue'
+import { computed, inject, onMounted, ref, watch, type Ref } from 'vue'
 import { useRoute, RouterLink, RouterView } from 'vue-router'
 import { getOverview } from '../api/consoleApi'
 import ThemeSwitcher from '../components/ThemeSwitcher.vue'
@@ -13,6 +13,11 @@ const logout = inject<() => void>('logout', () => {})
 
 const healthChip = ref<{ running: number; total: number; bound: number } | null>(null)
 const healthErr = ref(false)
+const sidebarOpen = ref(false)
+
+function closeSidebar() {
+  sidebarOpen.value = false
+}
 
 async function refreshHealthChip() {
   try {
@@ -32,6 +37,10 @@ async function refreshHealthChip() {
 onMounted(() => {
   refreshHealthChip()
   setInterval(refreshHealthChip, 12000)
+})
+
+watch(() => route.path, () => {
+  sidebarOpen.value = false
 })
 
 const nav = [
@@ -68,8 +77,9 @@ const roleLabel = computed(() => {
 </script>
 
 <template>
-  <div class="shell">
-    <aside class="sidebar">
+  <div class="shell" :class="{ 'nav-open': sidebarOpen }">
+    <div v-if="sidebarOpen" class="nav-scrim" aria-hidden="true" @click="closeSidebar" />
+    <aside class="sidebar" :class="{ open: sidebarOpen }" id="console-sidebar">
       <div class="brand">
         <div class="brand-mark" aria-hidden="true">
           <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2">
@@ -118,6 +128,18 @@ const roleLabel = computed(() => {
     <main class="main">
       <header class="topbar">
         <div class="topbar-left">
+          <button
+            type="button"
+            class="menu-btn ghost"
+            aria-label="打开导航"
+            :aria-expanded="sidebarOpen"
+            aria-controls="console-sidebar"
+            @click="sidebarOpen = !sidebarOpen"
+          >
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+              <path d="M4 7h16M4 12h16M4 17h16" stroke-linecap="round" />
+            </svg>
+          </button>
           <h1>{{ title }}</h1>
           <span class="crumb">控制面</span>
         </div>
@@ -361,21 +383,37 @@ const roleLabel = computed(() => {
   margin: 0 auto;
 }
 
+.menu-btn {
+  display: none;
+  padding: 0.35rem !important;
+  color: var(--text-secondary) !important;
+  border-radius: var(--radius-sm);
+}
+.nav-scrim { display: none; }
+
 @media (max-width: 900px) {
-  .shell { flex-direction: column; }
+  .menu-btn { display: grid; place-items: center; }
+  .nav-scrim {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: var(--bg-overlay);
+    z-index: 35;
+    backdrop-filter: blur(2px);
+  }
   .sidebar {
-    position: relative;
-    height: auto;
-    width: 100%;
-    border-right: 0;
-    border-bottom: 1px solid var(--border);
+    position: fixed;
+    left: 0;
+    top: 0;
+    height: 100vh;
+    width: min(var(--sidebar-w), 86vw);
+    z-index: 40;
+    transform: translateX(-105%);
+    transition: transform var(--dur-slow) var(--ease);
+    box-shadow: var(--shadow-lg);
+    border-right: 1px solid var(--border);
   }
-  .nav {
-    flex-direction: row;
-    flex-wrap: wrap;
-    overflow: visible;
-  }
-  .nav-item { flex: 1 1 auto; }
-  .sidebar-foot { display: none; }
+  .sidebar.open { transform: translateX(0); }
+  .sidebar-foot { display: flex; }
 }
 </style>

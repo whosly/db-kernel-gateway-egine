@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, inject, ref } from 'vue'
+import type { ConfirmFn } from '../composables/useConfirm'
 import {
   createAlertThreshold,
   deleteAlertThreshold,
@@ -13,6 +14,7 @@ import { usePolling } from '../composables/usePolling'
 import { usePermissions, Perm } from '../composables/usePermissions'
 
 const { has } = usePermissions()
+const askConfirm = inject<ConfirmFn>('confirm', async () => false)
 
 const thresholds = ref<AlertThreshold[]>([])
 const active = ref<ActiveAlert[]>([])
@@ -137,7 +139,13 @@ async function save() {
 
 async function remove(id: string) {
   if (!has(Perm.ALERTS_WRITE)) { msg.value = '需要 alerts:write'; return }
-  if (!confirm('删除该告警阈值？')) return
+  const ok = await askConfirm({
+    title: '删除告警阈值',
+    message: '删除该告警阈值？',
+    danger: true,
+    confirmLabel: '删除',
+  })
+  if (!ok) return
   busy.value = true
   try {
     await deleteAlertThreshold(id)

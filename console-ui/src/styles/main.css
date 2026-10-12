@@ -188,6 +188,14 @@ label {
   font-size: var(--fs-md);
   margin-bottom: 0.35rem;
 }
+.empty-state p { margin: 0.25rem 0 0.85rem; }
+.empty-state .cta {
+  display: flex;
+  justify-content: center;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-top: 0.35rem;
+}
 .skeleton {
   background: linear-gradient(90deg, var(--bg-elevated) 25%, var(--bg-hover) 50%, var(--bg-elevated) 75%);
   background-size: 200% 100%;
@@ -205,18 +213,47 @@ label {
   position: fixed;
   right: 1.25rem;
   bottom: 1.25rem;
+  display: flex;
+  align-items: flex-start;
+  gap: 0.55rem;
   background: var(--bg-elevated);
   border: 1px solid var(--border-strong);
-  padding: 0.75rem 1.05rem;
+  padding: 0.7rem 0.55rem 0.7rem 0.85rem;
   border-radius: var(--radius);
   box-shadow: var(--shadow);
   z-index: 80;
-  max-width: 380px;
+  max-width: min(400px, calc(100vw - 2rem));
   font-size: var(--fs-sm);
   line-height: 1.45;
   animation: toast-in var(--dur-slow) var(--ease);
   backdrop-filter: blur(8px);
+  border-left-width: 3px;
 }
+.toast-ok { border-left-color: var(--ok); }
+.toast-err { border-left-color: var(--danger); }
+.toast-info { border-left-color: var(--accent); }
+.toast-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-top: 0.35rem;
+  flex-shrink: 0;
+  background: var(--accent);
+}
+.toast-ok .toast-dot { background: var(--ok); box-shadow: 0 0 0 3px var(--ok-soft); }
+.toast-err .toast-dot { background: var(--danger); box-shadow: 0 0 0 3px var(--danger-soft); }
+.toast-info .toast-dot { background: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.toast-body { flex: 1; min-width: 0; word-break: break-word; }
+.toast-x {
+  flex-shrink: 0;
+  padding: 0.1rem 0.45rem !important;
+  font-size: 1.1rem !important;
+  line-height: 1 !important;
+  color: var(--text-muted) !important;
+  border: 0 !important;
+  background: transparent !important;
+}
+.toast-x:hover { color: var(--text) !important; background: var(--bg-hover) !important; }
 @keyframes toast-in {
   from { opacity: 0; transform: translateY(8px); }
   to { opacity: 1; transform: translateY(0); }
@@ -253,7 +290,10 @@ table.audit th {
   font-size: var(--fs-xs);
   text-transform: none;
   letter-spacing: 0.02em;
-  background: color-mix(in srgb, var(--bg-elevated) 85%, transparent);
+  background: color-mix(in srgb, var(--bg-elevated) 92%, transparent);
+  position: sticky;
+  top: 0;
+  z-index: 1;
 }
 
 /* —— Utilities —— */

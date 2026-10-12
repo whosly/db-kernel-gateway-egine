@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { usePermissions, Perm } from '../composables/usePermissions'
-import { ref } from 'vue'
+import { ref, inject } from 'vue'
+import type { ConfirmFn } from '../composables/useConfirm'
 import {
   deleteMaskingKey,
   downloadConfigExport,
@@ -28,6 +29,7 @@ import type {
 } from '../api/types'
 import { usePolling } from '../composables/usePolling'
 const { has } = usePermissions()
+const askConfirm = inject<ConfirmFn>('confirm', async () => false)
 
 const summary = ref<Record<string, unknown> | null>(null)
 const health = ref<Record<string, unknown> | null>(null)
@@ -162,7 +164,13 @@ async function runVerify() {
 }
 
 async function clearKey() {
-  if (!confirm('清除管控台脱敏密钥并回退到 yaml 配置？')) return
+  const ok = await askConfirm({
+    title: '清除脱敏密钥',
+    message: '清除管控台脱敏密钥并回退到 yaml 配置？',
+    danger: true,
+    confirmLabel: '清除',
+  })
+  if (!ok) return
   keyBusy.value = true
   keyMsg.value = null
   try {
