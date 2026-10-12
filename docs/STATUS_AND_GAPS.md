@@ -25,7 +25,7 @@
 | SQL Server（TDS）透明转发 | **partial（P0 + P1-lite 观测）** | `SqlServerProtocolAdapter` + framing + **明文** Login7/SQL_BATCH 观测；**无**脱敏/cancel/深 token/协议 reset；计划 [`SQLSERVER_TDS_PLAN.md`](SQLSERVER_TDS_PLAN.md) |
 | 明文观测 / 状态机 | **partial** | 命令/消息抽取与会话状态齐全；TLS/压缩后 opaque |
 | 结果集脱敏 / 列加密 | **partial（improved）** | MySQL/PG 接线；**encrypt E2E**：`enc:v1:<keyId>:` 密文、管控台密钥 CRUD/轮换/verify、缺钥失败闭合；**仍非**完整 KMS/HSM；类型边界见 README |
-| 审计 spool / JDBC ship | **partial（improved）** | 实现齐全；专用单测（P0-3）；**管控台可只读浏览** spool/环/可选 JDBC（`GET /console/api/audit/spool`）；默认关闭 |
+| 审计 spool / JDBC ship | **partial（improved）** | 实现齐全；专用单测（P0-3）含 **H2 JDBC sink 行断言**；shipper 状态；H2 自动建表；**管控台可只读浏览** spool/环/JDBC（`GET /console/api/v1/audit/traffic`）；默认关闭 |
 | 风控策略 | **partial** | `DenyListDatabaseRiskPolicy` + `gateway.risk.*` 装配；空配置仍 `allowAll()` |
 | 连接治理 | **partial** | `max-connections`、CIDR、idle timeout 有；配置键见 §3 |
 | 多后端 | **partial（improved）** | 有序 failover + 冷却；**可选**按库名/用户/权重路由（`gateway.routing.*`，默认关） |
@@ -75,7 +75,7 @@ Spring 实际读取的键（`@Value`）与默认 `application.yml`、模板一�
 |---|---|---|---|---|
 | P0-1 | JDK 17 与虚拟线程 API | **fixed** | `VirtualThreadExecutors` 用 MethodHandles 反射调用 `ofVirtual` / `newThreadPerTaskExecutor`；`AbstractProtocolAdapter` / `DuplexRelay` 无直接符号；`pom` 保持 17；JDK 17 回退平台池 | 已落地反射方案；JDK 21+ 运行时仍可用 VT；勿把 `pom` 升到 21 |
 | P0-2 | `application.yml` 与 `GatewayConfig` 键不一致 | **fixed** | 默认 yml 改为嵌套 `gateway.target.*` + `idle-timeout-seconds`；模板补充同键；README 移除扁平键警告 | 勿再引入扁平别名；环境变量用 `GATEWAY_IDLE_TIMEOUT_SECONDS` |
-| P0-3 | 审计专用验收测试缺失 | **fixed** | `src/test/.../audit/{AuditSpool,AuditShipper,SpoolingTrafficObserver}Test`；覆盖启用 spool/ship 与禁用 noop | JDBC destination 真库验收仍属集成范围 |
+| P0-3 | 审计专用验收测试缺失 | **fixed** | `src/test/.../audit/{AuditSpool,AuditShipper,SpoolingTrafficObserver,JdbcAuditDestination}Test`；H2 文件/内存 sink 插入断言 + 幂等重放；shipper→H2 E2E | 生产 MySQL/PG sink 仍需自备库；默认 `mvn test` 不需 Docker |
 | P0-4 | 风控默认全放行且无装配 | **fixed** | `DenyListDatabaseRiskPolicy` + `gateway.risk.denied-operations` / `denied-statement-keywords`；`GatewayConfig` 注入；空配置 allow-all | 可按需扩展 allow-list / 分级策略 |
 
 ### P1（协议完整度 / 安全边界）
@@ -97,7 +97,7 @@ Spring 实际读取的键（`@Value`）与默认 `application.yml`、模板一�
 | P2-2 | JDBC vs 协议代理分裂 | **partial（improved）** | `DatabaseConnectionService` / adapter 字段 `@Deprecated` + javadoc；STATUS §6；wire 仍走 `BackendProvider` | 无调用方后可删类；勿接入 DuplexRelay |
 | P2-3 | HTTP 管控面 / 管控台 | **partial（improved）** | Vue3+TS+Vite；H2 CRUD；脱敏热挂；B/B+/C partial/E lite/风控；实例编辑/克隆/导入/筛选/批量；**SQL IDE**：schema catalog 对象树、多 Tab、历史/片段 H2、CSV/JSON 导出、EXPLAIN；**多语句**（;≤20，遇错即停）+ **尽力而为取消**（`Statement.cancel`，非 TDS Attention/PG cancel key）；执行仍经代理 listenPort。**鉴权**：`gateway.console.auth.mode=open|token|form|oidc`；**§22 RBAC**（VIEWER/OPERATOR/ADMIN + `permissions[]`，方法级强制；open 全开）；OIDC 为**可激活** SSO（显式 URI / Keycloak 路径 / issuer discovery + 角色映射 + Login SSO 按钮）；**Keycloak 实验室 Compose**（`docker-compose.keycloak.yml` + realm import）与 OPS 一路径已就绪；**真浏览器联调需本机 Docker**（本环境可能无 Docker），非 CI 已验收联邦。管控台 HTTPS：`server.ssl.*` + `application-console-https-template.yml`。 **控制面密码强制加密**：`gateway.console.require-secret-encryption`（默认 false）；缺钥拒写 503。设计 [`CONSOLE_ARCHITECTURE.md`](CONSOLE_ARCHITECTURE.md) §16–§20（含审计 spool、多语句/取消、**列加密 E2E**）。**不做** Prometheus/Grafana 出口；encrypt **非**完整 KMS/HSM | 外部 Micrometer 见 P2-4；Keycloak lab 在有 Docker 的 Mac 上按 OPS 一路径验收 |
 | P2-4 | Metrics 出口 | **partial（improved）** | 每 listener 独立 metrics；overview 求和 + `legacyMetrics`；**E lite**：`MetricsHistorySampler` + `GET …/metrics/history` + Overview SVG 火花图（内存环） | 外部 Prometheus/Grafana 非必需 | 可选后续接 Micrometer；告警阈值见 `docs/OPS.md` |
-| P2-5 | 审计测试与运维手册 | **partial（improved）** | P0-3 单测已有；**`docs/OPS.md`** 开启清单 / 告警清单；管控台 **spool 内容浏览**（§18）；README 运维段索引 | JDBC 审计真库验收仍缺 |
+| P2-5 | 审计测试与运维手册 | **partial（improved）** | P0-3 + **JDBC H2 lab 验收**（`JdbcAuditDestination` ensureSchema/幂等；`application-audit-jdbc-h2-template.yml`；OPS 一路径；管控台 status 含 `jdbcRowCount`/`lastShip`；traffic `source=jdbc`） | 外部分离 MySQL/PG 审计库需运维自建；非业务库 |
 | P2-6 | 集成测试在 CI 可复现 | **partial（improved）** | 跳过策略写入 `integration-test.properties` + OPS；`-Pintegration-test` 无 props → `assumeTrue` skip；`-Pintegration-testcontainers` **stub only** | 真 Testcontainers 接线另开；默认 `mvn test` 仍不需 Docker |
 | P2-7 | 多库扩展点 / Oracle·SQL Server | **in-progress / partial（SQL Server P0 + P1-lite）** | 第三库定为 **SQL Server TDS**（非 Oracle）。`SqlServerProtocolAdapter` + `sqlserver`/`mssql` 注册 + TDS framing + 透明 `DuplexRelay` + **P1-lite 明文** Login7/SQL_BATCH 观测（会话标签/事件；不驱动路由）；模板 `application-sqlserver-template.yml`（31433→1433）；管控台 SQL 工作台在 classpath 含 `mssql-jdbc` 时可经 listenPort 执行；实例/目录标注 `proxyMode`：**网关代理**（MySQL/PG）vs **透明代理**（SQL Server）。Oracle 仍 stub。**仍无** 脱敏/Attention cancel/深 token/协议 reset/Login7 路由 | P1 余量（ERROR token、Docker 冒烟）；P2 深消息/脱敏/cancel；Oracle 另开 |
 

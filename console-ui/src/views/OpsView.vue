@@ -230,8 +230,9 @@ function sourceLabel(s?: string) {
           <code>localStorage.setItem('consoleApiToken','…')</code>
         </li>
         <li>
-          流量审计：配置 <code>gateway.audit.enabled=true</code> 与 spool 目录；详见
-          <code>docs/OPS.md</code>。下方可浏览状态与 <strong>spool / 内存环内容</strong>（只读）。
+          流量审计：配置 <code>gateway.audit.enabled=true</code>；本地 spool 或
+          <code>destination=jdbc</code>（独立 H2/MySQL/PG，见
+          <code>application-audit-jdbc-h2-template.yml</code>）。详见 <code>docs/OPS.md</code>。
         </li>
         <li>指标趋势：进程内环（总览页火花图）；不强制外部 Prometheus。</li>
         <li>告警阈值：侧栏「告警」或 <code>/console/api/v1/alerts/*</code>；进程内评估，非 PagerDuty。</li>
@@ -250,7 +251,34 @@ function sourceLabel(s?: string) {
         <div><dt>spoolBytesHint</dt><dd>{{ auditStatus.recordsPendingHint ?? '—' }}</dd></div>
         <div><dt>consoleAuditCount</dt><dd>{{ auditStatus.consoleAuditCount ?? 0 }}</dd></div>
       </dl>
-      <p v-else class="muted">加载中…</p>
+      <div
+        v-if="auditStatus && String(auditStatus.destination || '').toLowerCase() === 'jdbc'"
+        class="jdbc-sink-hint"
+      >
+        <h4>JDBC sink（独立审计库）</h4>
+        <p class="muted tiny">
+          与管控台 H2 / 被代理业务库分离。实验室可用
+          <code>application-audit-jdbc-h2-template.yml</code>；表结构见
+          <code>docs/sql/audit-sink-schema.sql</code>（H2 会自动建表）。
+        </p>
+        <dl class="kv">
+          <div><dt>jdbcConfigured</dt><dd>{{ auditStatus.jdbcConfigured ? '是' : '否' }}</dd></div>
+          <div><dt>dialect / table</dt><dd>{{ auditStatus.jdbcDialect || '—' }} / {{ auditStatus.jdbcTable || '—' }}</dd></div>
+          <div><dt>url</dt><dd class="tiny mono">{{ auditStatus.jdbcUrlRedacted || '—' }}</dd></div>
+          <div><dt>rowCount</dt><dd>{{ auditStatus.jdbcRowCount ?? '—' }}</dd></div>
+          <div><dt>rowsInserted / skippedDup</dt>
+            <dd>{{ auditStatus.jdbcRowsInserted ?? 0 }} / {{ auditStatus.jdbcRowsSkippedDuplicate ?? 0 }}</dd></div>
+          <div><dt>lastShipAt</dt><dd>{{ auditStatus.jdbcLastShipAt || auditStatus.shipLastAt || '—' }}</dd></div>
+          <div><dt>shipOffset / totalShipped</dt>
+            <dd>{{ auditStatus.shipOffset ?? '—' }} / {{ auditStatus.shipTotalShipped ?? 0 }}</dd></div>
+          <div v-if="auditStatus.jdbcLastError || auditStatus.shipLastError">
+            <dt>lastError</dt>
+            <dd class="warn tiny">{{ auditStatus.jdbcLastError || auditStatus.shipLastError }}</dd>
+          </div>
+        </dl>
+        <p class="muted tiny">浏览：下方「流量 / spool 审计」来源选 <strong>JDBC sink</strong>。</p>
+      </div>
+      <p v-else-if="!auditStatus" class="muted">加载中…</p>
     </div>
 
     <div class="panel">
@@ -466,6 +494,9 @@ pre { font-size: 0.75rem; overflow: auto; max-height: 280px; }
 .field textarea, .field input { width: 100%; box-sizing: border-box; }
 .actions { display: flex; gap: 0.5rem; }
 .msg { margin-top: 0.5rem; }
+.jdbc-sink-hint { margin-top: 0.75rem; padding: 0.65rem 0.75rem; border: 1px solid var(--border); border-radius: 6px; background: var(--panel-2, transparent); }
+.jdbc-sink-hint h4 { margin: 0 0 0.35rem; font-size: 0.9rem; }
+.jdbc-sink-hint .warn { color: #b45309; }
 .audit { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
 .audit th, .audit td { border-bottom: 1px solid var(--border); padding: 0.4rem 0.35rem; text-align: left; vertical-align: top; }
 code { font-size: 0.85em; }

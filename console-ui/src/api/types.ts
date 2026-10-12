@@ -345,6 +345,20 @@ export interface AuditStatus {
   recordsPendingHint?: number | null
   consoleAuditCount?: number
   help?: string
+  /** JDBC sink (destination=jdbc); password never present */
+  jdbcConfigured?: boolean
+  jdbcTable?: string
+  jdbcDialect?: string | null
+  jdbcUrlRedacted?: string | null
+  jdbcRowCount?: number | null
+  jdbcRowsInserted?: number
+  jdbcRowsSkippedDuplicate?: number
+  jdbcLastShipAt?: string | null
+  jdbcLastError?: string | null
+  shipOffset?: number | null
+  shipTotalShipped?: number
+  shipLastAt?: string | null
+  shipLastError?: string | null
 }
 
 export interface TrafficAuditEntry {

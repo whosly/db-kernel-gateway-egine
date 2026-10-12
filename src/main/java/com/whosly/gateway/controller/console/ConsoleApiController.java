@@ -862,7 +862,15 @@ public class ConsoleApiController {
         Long bytesHint = gatewayConfig.getAuditSpoolBytesHint();
         body.put("recordsPendingHint", bytesHint); // bytes in active segment; not exact record count
         body.put("consoleAuditCount", auditService != null ? auditService.count() : 0);
-        body.put("help", "流量审计见 docs/OPS.md · gateway.audit.*；本接口仅非密钥状态");
+        // JDBC sink status (password never included)
+        body.putAll(gatewayConfig.auditJdbcStatusSnapshot());
+        String dest = gatewayConfig.getAuditDestination();
+        if (dest != null && "jdbc".equalsIgnoreCase(dest.trim())) {
+            body.put("help", "destination=jdbc：spool→独立审计库搬运；运维页「流量审计」选 JDBC sink 浏览。"
+                    + " 实验室可用独立 H2 文件（勿用业务库）。见 docs/OPS.md · 审计 JDBC sink");
+        } else {
+            body.put("help", "流量审计见 docs/OPS.md · gateway.audit.*；本接口仅非密钥状态");
+        }
         return body;
     }
 

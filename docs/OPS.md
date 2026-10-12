@@ -169,15 +169,33 @@ mvn spring-boot:run -Dspring-boot.run.profiles=dev
 
 协议代理客户端 TLS 终止仍用 `gateway.tls.*`，与管控台 HTTPS 无关。
 
-## 管控台浏览流量审计（spool / 环）
+## 管控台浏览流量审计（spool / 环 / JDBC）
 
-- 状态（非密钥）：`GET /console/api/audit/status`
-- **内容浏览**：`GET /console/api/audit/spool?limit=50&source=auto|ring|spool|jdbc`
+- 状态（非密钥）：`GET /console/api/v1/audit/status`
+  - `destination=jdbc` 时额外返回 `jdbcRowCount` / `jdbcLastShipAt` / `shipOffset` / `shipLastError`（**无密码**）
+- **内容浏览**：`GET /console/api/v1/audit/traffic?limit=50&source=auto|ring|spool|jdbc`
   - lab 默认：`source=ring` 或 `auto` 回退到进程内最近语句（重启丢失）
   - 开启 `gateway.audit.enabled=true` 后可读本地 spool 分段；**不**推进 ship offset
-  - `destination=jdbc` 且配置了 `gateway.audit.jdbc.url` 时可只读审计表（须已建表，见 `docs/sql/audit-sink-schema.sql`）
-- 管控操作审计仍用：`GET /console/api/audit`（H2，与流量 spool 分离）
-- UI：运维页「审计」Tabs
+  - `destination=jdbc` 且配置了 `gateway.audit.jdbc.url` 时可只读审计表
+- 管控操作审计仍用：`GET /console/api/v1/audit/operations`（H2，与流量 spool 分离）
+- UI：运维页「审计」Tabs；destination=jdbc 时状态区展示 sink 行数 / 最近搬运
+
+## 审计 JDBC sink 一路径（实验室 H2，无 Docker）
+
+> 审计库必须与**被代理业务库**分离；也建议与管控台 `gateway-console` H2 **分文件**。
+
+1. 复制模板片段：`src/main/resources/application-audit-jdbc-h2-template.yml` 合并进本地 `application-dev.yml`（gitignore），或启动时：
+   ```bash
+   mvn spring-boot:run -Dspring-boot.run.profiles=dev \
+     -Dspring-boot.run.arguments=--spring.config.additional-location=optional:classpath:/application-audit-jdbc-h2-template.yml
+   ```
+2. 关键配置要点：`gateway.audit.enabled=true`、`destination=jdbc`、`jdbc.url=jdbc:h2:file:./data/gateway-audit-sink;…`
+3. 启动后网关对 H2 **自动 `CREATE TABLE IF NOT EXISTS`**（见 `JdbcAuditDestination.ensureSchema`；DDL 亦载于 `docs/sql/audit-sink-schema.sql`）。
+4. 产生流量：启动实例后用 SQL 工作台经代理口执行，或任意客户端连 listenPort。
+5. 验证：
+   - `GET /console/api/v1/audit/status` → `shipperRunning=true`，`jdbcRowCount` 增长
+   - 管控台 **运维 → 流量 / spool 审计 → 来源 JDBC sink**
+6. **诚实边界**：默认 `mvn test` 用内存/临时 H2 断言行数（`JdbcAuditDestinationTest`）；生产 MySQL/PG sink 需自备库；**不是**把审计写入业务库。
 
 ## 列加密（脱敏密钥）
 

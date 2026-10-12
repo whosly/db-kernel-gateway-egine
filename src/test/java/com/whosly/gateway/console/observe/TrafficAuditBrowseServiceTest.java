@@ -90,4 +90,36 @@ class TrafficAuditBrowseServiceTest {
         assertThat(body.get("total")).isEqualTo(0);
         assertThat(body.get("note").toString()).contains("未配置");
     }
+
+    @Test
+    void jdbcSourceReadsShippedRowsFromH2() throws Exception {
+        String url = "jdbc:h2:mem:browse_jdbc_" + System.nanoTime() + ";MODE=PostgreSQL;DB_CLOSE_DELAY=-1";
+        com.whosly.gateway.audit.JdbcAuditDestination dest =
+                new com.whosly.gateway.audit.JdbcAuditDestination(url, "sa", "", "gateway_audit_record");
+        dest.ensureSchema();
+        dest.writeBatch(List.of(
+                "ts=1700000001000 protocol=MySQL session=s-browse sequence=0 operation=COM_QUERY statement=select browse_me"));
+
+        GatewayConfig cfg = new GatewayConfig();
+        ReflectionTestUtils.setField(cfg, "auditEnabled", true);
+        ReflectionTestUtils.setField(cfg, "auditMaskStatements", false);
+        ReflectionTestUtils.setField(cfg, "auditSpoolDir", tempDir.toString());
+        ReflectionTestUtils.setField(cfg, "auditFileName", "audit.spool");
+        ReflectionTestUtils.setField(cfg, "auditDestination", "jdbc");
+        ReflectionTestUtils.setField(cfg, "auditJdbcUrl", url);
+        ReflectionTestUtils.setField(cfg, "auditJdbcUsername", "sa");
+        ReflectionTestUtils.setField(cfg, "auditJdbcPassword", "");
+        ReflectionTestUtils.setField(cfg, "auditJdbcTable", "gateway_audit_record");
+
+        TrafficAuditBrowseService svc = new TrafficAuditBrowseService(cfg, null);
+        Map<String, Object> body = svc.browse(10, null, "jdbc", null, null);
+        assertThat(body.get("source")).isEqualTo("jdbc");
+        assertThat(body.get("jdbcConfigured")).isEqualTo(true);
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> entries = (List<Map<String, Object>>) body.get("items");
+        assertThat(entries).isNotEmpty();
+        assertThat(entries.get(0).get("statement").toString()).contains("browse_me");
+        assertThat(entries.get(0).get("sessionId")).isEqualTo("s-browse");
+        assertThat(body.toString()).doesNotContain("auditJdbcPassword");
+    }
 }

@@ -1,0 +1,34 @@
+# 审计 JDBC sink 实验室模板（独立 H2 文件，非业务库、非管控台 H2）
+# 复制为 application-dev.yml 片段或 spring.config.import；勿提交真实生产 JDBC 密码。
+#
+# 验收路径：
+#   1) gateway.audit.enabled=true + destination=jdbc + 下方 jdbc.url
+#   2) 产生流量（代理查询或 SQL 工作台经 listenPort）
+#   3) 管控台 运维 → 流量审计 → 来源「JDBC sink」
+#   4) GET /console/api/v1/audit/status 可见 jdbcRowCount / shipLastAt
+#
+# gateway:
+#   audit:
+#     enabled: true
+#     spool-dir: ./audit
+#     destination: jdbc
+#     ship-interval-millis: 500
+#     ship-batch-size: 100
+#     jdbc:
+#       url: jdbc:h2:file:./data/gateway-audit-sink;MODE=PostgreSQL;AUTO_SERVER=FALSE;DB_CLOSE_DELAY=-1
+#       username: sa
+#       password:
+#       table: gateway_audit_record
+
+gateway:
+  audit:
+    enabled: true
+    spool-dir: ./audit
+    destination: jdbc
+    ship-interval-millis: 500
+    ship-batch-size: 100
+    jdbc:
+      url: jdbc:h2:file:./data/gateway-audit-sink;MODE=PostgreSQL;AUTO_SERVER=FALSE;DB_CLOSE_DELAY=-1
+      username: sa
+      password: ""
+      table: gateway_audit_record
