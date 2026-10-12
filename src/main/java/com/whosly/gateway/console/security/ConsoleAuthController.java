@@ -1,6 +1,7 @@
 package com.whosly.gateway.console.security;
 
 import com.whosly.gateway.console.security.ConsoleAuthProperties.AuthMode;
+import java.util.Set;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.servlet.http.HttpSession;
@@ -39,19 +40,22 @@ public class ConsoleAuthController {
     private final ConsoleAuthProperties authProperties;
     private final String apiToken;
     private final String readToken;
+    private final InstanceAclService instanceAclService;
 
     public ConsoleAuthController(AuthMode authMode,
                                  AuthenticationManager consoleAuthenticationManager,
                                  ConsoleAuthProperties authProperties,
                                  @Value("${gateway.console.api-token:}") String apiToken,
                                  @Value("${gateway.console.read-token:}") String readToken,
-                                 @Autowired(required = false) ConsoleAuditService auditService) {
+                                 @Autowired(required = false) ConsoleAuditService auditService,
+                                 @Autowired(required = false) InstanceAclService instanceAclService) {
         this.authMode = authMode;
         this.authenticationManager = consoleAuthenticationManager;
         this.authProperties = authProperties;
         this.apiToken = apiToken != null ? apiToken.trim() : "";
         this.readToken = readToken != null ? readToken.trim() : "";
         this.auditService = auditService;
+        this.instanceAclService = instanceAclService;
     }
 
     @GetMapping({"/mode", "/status"})
@@ -81,6 +85,8 @@ public class ConsoleAuthController {
             body.put("username", "anonymous");
             body.put("roles", List.of("ROLE_" + ConsoleRoles.ADMIN));
             body.put("permissions", ConsoleAuthoritySupport.allPermissionsSorted());
+            body.put("instanceAclRestricted", false);
+            body.put("instanceAccess", Map.of());
             return body;
         }
 
@@ -96,13 +102,32 @@ public class ConsoleAuthController {
             body.put("username", null);
             body.put("roles", List.of());
             body.put("permissions", List.of());
+            body.put("instanceAclRestricted", false);
+            body.put("instanceAccess", Map.of());
             return body;
         }
         body.put("username", auth.getName());
         Collection<? extends GrantedAuthority> authorities = auth.getAuthorities();
         body.put("roles", ConsoleAuthoritySupport.roleAuthorities(authorities));
-        body.put("permissions", ConsoleAuthoritySupport.permissionAuthorities(authorities));
+        List<String> perms = ConsoleAuthoritySupport.permissionAuthorities(authorities);
+        body.put("permissions", perms);
+        putInstanceAccess(body, perms);
         return body;
+    }
+
+    private void putInstanceAccess(Map<String, Object> body, List<String> permissions) {
+        if (instanceAclService == null || authMode == AuthMode.OPEN) {
+            body.put("instanceAclRestricted", false);
+            body.put("instanceAccess", Map.of());
+            return;
+        }
+        boolean restricted = instanceAclService.isCurrentUserRestricted();
+        body.put("instanceAclRestricted", restricted);
+        if (restricted) {
+            body.put("instanceAccess", instanceAclService.instanceAccessSummary(Set.copyOf(permissions)));
+        } else {
+            body.put("instanceAccess", Map.of());
+        }
     }
 
     private Map<String, Object> meFromToken(HttpServletRequest request, Map<String, Object> body) {
@@ -114,6 +139,8 @@ public class ConsoleAuthController {
             body.put("username", null);
             body.put("roles", List.of());
             body.put("permissions", List.of());
+            body.put("instanceAclRestricted", false);
+            body.put("instanceAccess", Map.of());
             return body;
         }
         String role = apiOk ? ConsoleRoles.ADMIN : ConsoleRoles.VIEWER;
@@ -122,7 +149,9 @@ public class ConsoleAuthController {
         body.put("authenticated", true);
         body.put("username", apiOk ? "api-token" : "read-token");
         body.put("roles", ConsoleAuthoritySupport.roleAuthorities(authorities));
-        body.put("permissions", ConsoleAuthoritySupport.permissionAuthorities(authorities));
+        List<String> perms = ConsoleAuthoritySupport.permissionAuthorities(authorities);
+        body.put("permissions", perms);
+        putInstanceAccess(body, perms);
         return body;
     }
 

@@ -14,6 +14,7 @@ import type {
   SecretEncryptionStatus,
   SessionRow,
   UpdateInstancePayload,
+  InstanceAclBinding,
 } from '../api/types'
 import { proxyModeBadgeClass, proxyModeHint } from '../api/proxyMode'
 import {
@@ -29,6 +30,9 @@ import {
   getMaskingKeyStatus,
   getSecretEncryptionStatus,
   updateMaskingRule,
+  listInstanceAcl,
+  upsertInstanceAclBinding,
+  deleteInstanceAclBinding,
 } from '../api/consoleApi'
 
 const { has } = usePermissions()
@@ -39,7 +43,7 @@ const emit = defineEmits<{ close: []; delete: []; save: [UpdateInstancePayload];
 const toast = inject<(m: string) => void>('toast', () => {})
 const secretEnc = ref<SecretEncryptionStatus | null>(null)
 const maskingKey = ref<MaskingKeyStatus | null>(null)
-const tab = ref<'info' | 'masking' | 'sessions' | 'recent'>('info')
+const tab = ref<'info' | 'masking' | 'sessions' | 'recent' | 'acl'>('info')
 const metrics = ref<Record<string, number>>({})
 const pool = ref<PoolStats | null>(null)
 const rules = ref<MaskingRule[]>([])
@@ -134,6 +138,87 @@ const form = reactive<MaskingRulePayload>({
 })
 
 const showStrategyFields = computed(() => form.strategy)
+
+const aclBindings = ref<InstanceAclBinding[]>([])
+const aclLoading = ref(false)
+const aclError = ref<string | null>(null)
+const aclSaving = ref(false)
+const aclForm = reactive({
+  principalType: 'user' as 'user' | 'role',
+  principal: '',
+  permissions: ['instances:read'] as string[],
+})
+const ACL_PERM_OPTIONS = [
+  'instances:read',
+  'instances:write',
+  'instances:start_stop',
+  'instances:delete',
+  'sql:execute',
+  'sessions:kill',
+  'masking:write',
+  'schema:read',
+  'metrics:read',
+]
+
+async function loadAcl() {
+  if (!props.instance || !has(Perm.ACL_MANAGE)) return
+  aclLoading.value = true
+  aclError.value = null
+  try {
+    const body = await listInstanceAcl(props.instance.id)
+    aclBindings.value = body.items || []
+  } catch (e: any) {
+    aclError.value = e?.message || String(e)
+    aclBindings.value = []
+  } finally {
+    aclLoading.value = false
+  }
+}
+
+function toggleAclPerm(p: string) {
+  const i = aclForm.permissions.indexOf(p)
+  if (i >= 0) aclForm.permissions.splice(i, 1)
+  else aclForm.permissions.push(p)
+}
+
+async function submitAclBinding() {
+  if (!props.instance) return
+  if (!aclForm.principal.trim()) {
+    toast('请填写主体（用户名或角色）')
+    return
+  }
+  if (!aclForm.permissions.length) {
+    toast('请至少选择一个权限')
+    return
+  }
+  aclSaving.value = true
+  try {
+    await upsertInstanceAclBinding(props.instance.id, {
+      principalType: aclForm.principalType,
+      principal: aclForm.principal.trim(),
+      permissions: [...aclForm.permissions],
+    })
+    toast('ACL 绑定已保存')
+    aclForm.principal = ''
+    await loadAcl()
+  } catch (e: any) {
+    toast(e?.message || String(e))
+  } finally {
+    aclSaving.value = false
+  }
+}
+
+async function removeAclBinding(row: InstanceAclBinding) {
+  if (!props.instance) return
+  if (!confirm(`删除绑定 ${row.principalType}/${row.principal}？`)) return
+  try {
+    await deleteInstanceAclBinding(props.instance.id, row.id)
+    toast('已删除 ACL 绑定')
+    await loadAcl()
+  } catch (e: any) {
+    toast(e?.message || String(e))
+  }
+}
 
 async function loadSecretEnc() {
   try {
@@ -369,6 +454,7 @@ watch(tab, (v) => {
   if (v === 'sessions') loadSessions()
   if (v === 'recent') loadRecent()
   if (v === 'masking') loadMaskingKey()
+  if (v === 'acl') loadAcl()
 })
 </script>
 
@@ -396,6 +482,11 @@ watch(tab, (v) => {
         <button :class="{ active: tab === 'sessions' }" @click="tab = 'sessions'">会话</button>
         <button :class="{ active: tab === 'recent' }" @click="tab = 'recent'">最近语句</button>
         <button :class="{ active: tab === 'masking' }" @click="tab = 'masking'">脱敏规则</button>
+        <button
+          v-if="has(Perm.ACL_MANAGE)"
+          :class="{ active: tab === 'acl' }"
+          @click="tab = 'acl'"
+        >ACL</button>
       </nav>
 
       <template v-if="tab === 'info'">
@@ -683,6 +774,70 @@ watch(tab, (v) => {
           </form>
         </section>
       </template>
+
+      <template v-else-if="tab === 'acl'">
+        <section>
+          <div class="schema-head">
+            <h4>实例 ACL</h4>
+            <button type="button" class="ghost" :disabled="aclLoading" @click="loadAcl">刷新</button>
+          </div>
+          <p class="muted tiny">
+            绑定用户或角色到本实例；有效权限 = 全局角色权限 ∩ 本绑定。
+            某主体一旦有任意实例绑定，则仅能看到已绑定实例。ADMIN / open 模式不受限。
+          </p>
+          <p v-if="aclError" class="err">{{ aclError }}</p>
+          <p v-else-if="aclLoading" class="muted">加载中…</p>
+          <p v-else-if="!aclBindings.length" class="muted">暂无绑定（无绑定时按全局角色可管全部实例）</p>
+          <table v-else class="mini">
+            <thead>
+              <tr><th>类型</th><th>主体</th><th>权限</th><th></th></tr>
+            </thead>
+            <tbody>
+              <tr v-for="b in aclBindings" :key="b.id">
+                <td>{{ b.principalType }}</td>
+                <td class="mono">{{ b.principal }}</td>
+                <td><code>{{ (b.permissions || []).join(', ') }}</code></td>
+                <td><button type="button" class="danger" @click="removeAclBinding(b)">删除</button></td>
+              </tr>
+            </tbody>
+          </table>
+        </section>
+        <section>
+          <h4>添加 / 更新绑定</h4>
+          <div class="grid2">
+            <div class="field">
+              <label>主体类型</label>
+              <select v-model="aclForm.principalType">
+                <option value="user">user（用户名）</option>
+                <option value="role">role（CONSOLE_* 角色）</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>{{ aclForm.principalType === 'role' ? '角色' : '用户名' }}</label>
+              <input
+                v-model="aclForm.principal"
+                :placeholder="aclForm.principalType === 'role' ? 'OPERATOR / VIEWER / ADMIN' : 'alice'"
+              />
+            </div>
+          </div>
+          <div class="acl-perms">
+            <label v-for="p in ACL_PERM_OPTIONS" :key="p" class="check">
+              <input
+                type="checkbox"
+                :checked="aclForm.permissions.includes(p)"
+                @change="toggleAclPerm(p)"
+              />
+              <code>{{ p }}</code>
+            </label>
+          </div>
+          <div class="form-actions">
+            <button type="button" class="primary" :disabled="aclSaving" @click="submitAclBinding">
+              {{ aclSaving ? '保存中…' : '保存绑定' }}
+            </button>
+          </div>
+        </section>
+      </template>
+
     </aside>
   </div>
 </template>
@@ -771,5 +926,7 @@ table.mini th, table.mini td { border-bottom: 1px solid var(--border); padding: 
 .edit-form .check input { width: auto; }
 .edit-actions { display: flex; gap: 0.5rem; }
 .drawer-foot { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; margin-top: 1rem; }
+.acl-perms { display: flex; flex-wrap: wrap; gap: 0.35rem 0.75rem; margin: 0.6rem 0; }
+.acl-perms .check { margin: 0; }
 @media (max-width: 640px) { .edit-form .grid2 { grid-template-columns: 1fr; } }
 </style>

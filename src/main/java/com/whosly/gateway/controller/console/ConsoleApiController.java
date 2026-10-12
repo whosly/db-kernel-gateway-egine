@@ -30,6 +30,10 @@ import com.whosly.gateway.console.persist.ConsoleSqlSnippetStore.SqlSnippetRecor
 import com.whosly.gateway.console.security.ConsoleAuditService;
 import com.whosly.gateway.console.security.ConsoleMaskingKeyService;
 import com.whosly.gateway.console.security.ConsoleSecretCipher;
+import com.whosly.gateway.console.security.ConsoleAuthz;
+import com.whosly.gateway.console.security.ConsolePermission;
+import com.whosly.gateway.console.security.InstanceAclService;
+import org.springframework.security.access.AccessDeniedException;
 import com.whosly.gateway.console.security.RiskPolicyService;
 import com.whosly.gateway.runtime.GatewayListenerRuntime.CreateInstanceRequest;
 import com.whosly.gateway.runtime.GatewayListenerRuntime.UpdateInstanceRequest;
@@ -71,6 +75,8 @@ public class ConsoleApiController {
     private final ConsoleSqlHistoryStore sqlHistoryStore;
     private final ConsoleSqlSnippetStore sqlSnippetStore;
     private final TrafficAuditBrowseService trafficAuditBrowseService;
+    private final InstanceAclService instanceAclService;
+    private final ConsoleAuthz consoleAuthz;
 
     /** Test-friendly constructor (security extras optional). */
     public ConsoleApiController(SupportedDatabaseCatalog catalog,
@@ -79,7 +85,7 @@ public class ConsoleApiController {
                                 GatewayRuntimeMetrics runtimeMetrics,
                                 GatewayConfig gatewayConfig) {
         this(catalog, instanceRegistry, protocolAdapter, runtimeMetrics, gatewayConfig,
-                null, null, null, null, null, null, null, null, null, null, null, null, null);
+                null, null, null, null, null, null, null, null, null, null, null, null, null, null, null);
     }
 
     @Autowired
@@ -100,7 +106,9 @@ public class ConsoleApiController {
                                 @Autowired(required = false) ConsoleSqlHistoryStore sqlHistoryStore,
                                 @Autowired(required = false) ConsoleSqlSnippetStore sqlSnippetStore,
                                 @Autowired(required = false) TrafficAuditBrowseService trafficAuditBrowseService,
-                                @Autowired(required = false) ConsoleSecretCipher secretCipher) {
+                                @Autowired(required = false) ConsoleSecretCipher secretCipher,
+                                @Autowired(required = false) InstanceAclService instanceAclService,
+                                @Autowired(required = false) ConsoleAuthz consoleAuthz) {
         this.catalog = catalog;
         this.instanceRegistry = instanceRegistry;
         this.protocolAdapter = protocolAdapter;
@@ -119,6 +127,8 @@ public class ConsoleApiController {
         this.sqlSnippetStore = sqlSnippetStore;
         this.trafficAuditBrowseService = trafficAuditBrowseService;
         this.secretCipher = secretCipher;
+        this.instanceAclService = instanceAclService;
+        this.consoleAuthz = consoleAuthz;
     }
 
     public Map<String, Object> supportedDatabases() {
@@ -132,7 +142,7 @@ public class ConsoleApiController {
             String status,
             String dbType,
             String q) {
-        List<GatewayInstance> instances = instanceRegistry.listInstances();
+        List<GatewayInstance> instances = filterVisibleInstances(instanceRegistry.listInstances());
         if (status != null && !status.isBlank()) {
             String s = status.trim().toUpperCase();
             instances = instances.stream()
@@ -237,6 +247,9 @@ public class ConsoleApiController {
         Map<String, Object> result = instanceRegistry.remove(id);
         if (Boolean.FALSE.equals(result.get("ok"))) {
             throw new IllegalArgumentException(String.valueOf(result.get("message")));
+        }
+        if (instanceAclService != null) {
+            instanceAclService.deleteBindingsForInstance(id);
         }
         audit("instance.delete", id, ConsoleAuditService.detail("ok", true));
         return result;
@@ -465,7 +478,7 @@ public class ConsoleApiController {
     }
 
     public Map<String, Object> overview() {
-        List<GatewayInstance> instances = instanceRegistry.listInstances();
+        List<GatewayInstance> instances = filterVisibleInstances(instanceRegistry.listInstances());
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("health", health());
         body.put("instances", instances);
@@ -596,7 +609,7 @@ public class ConsoleApiController {
 
     public List<Map<String, Object>> exportInstances() {
         List<Map<String, Object>> out = new ArrayList<>();
-        for (GatewayInstance i : instanceRegistry.listInstances()) {
+        for (GatewayInstance i : filterVisibleInstances(instanceRegistry.listInstances())) {
             out.add(toExportInstance(i));
         }
         return out;
@@ -1090,4 +1103,122 @@ public class ConsoleApiController {
     private static String blankToNull(String value) {
         return hasText(value) ? value : null;
     }
+
+    public Map<String, Object> listInstanceAcl(String id) {
+        requireInstanceExists(id);
+        if (instanceAclService == null) {
+            throw new IllegalStateException("Instance ACL service is not available");
+        }
+        List<Map<String, Object>> items = instanceAclService.listByInstance(id).stream()
+                .map(this::toAclBindingMap)
+                .collect(Collectors.toList());
+        return ConsoleApiModels.listEnvelope(items);
+    }
+
+    public Map<String, Object> replaceInstanceAcl(String id, AclReplaceBody body) {
+        requireInstanceExists(id);
+        if (instanceAclService == null) {
+            throw new IllegalStateException("Instance ACL service is not available");
+        }
+        List<InstanceAclService.BindingInput> inputs = new ArrayList<>();
+        if (body != null && body.items() != null) {
+            for (AclBindingBody b : body.items()) {
+                if (b == null) {
+                    continue;
+                }
+                inputs.add(new InstanceAclService.BindingInput(b.principalType(), b.principal(), b.permissions()));
+            }
+        }
+        List<Map<String, Object>> items = instanceAclService.replaceBindings(id, inputs).stream()
+                .map(this::toAclBindingMap)
+                .collect(Collectors.toList());
+        audit("acl.replace", id, ConsoleAuditService.detail("count", items.size()));
+        return ConsoleApiModels.listEnvelope(items);
+    }
+
+    public Map<String, Object> upsertInstanceAclBinding(String id, AclBindingBody body) {
+        requireInstanceExists(id);
+        if (instanceAclService == null) {
+            throw new IllegalStateException("Instance ACL service is not available");
+        }
+        if (body == null) {
+            throw new IllegalArgumentException("body is required");
+        }
+        var row = instanceAclService.upsertBinding(id, body.principalType(), body.principal(), body.permissions());
+        audit("acl.upsert", id, ConsoleAuditService.detail(
+                "principalType", row.principalType(),
+                "principal", row.principal(),
+                "bindingId", row.id()));
+        return toAclBindingMap(row);
+    }
+
+    public Map<String, Object> deleteInstanceAclBinding(String id, String bindingId) {
+        requireInstanceExists(id);
+        if (instanceAclService == null) {
+            throw new IllegalStateException("Instance ACL service is not available");
+        }
+        var existing = instanceAclService.listByInstance(id).stream()
+                .filter(r -> r.id().equals(bindingId))
+                .findFirst()
+                .orElseThrow(() -> new IllegalArgumentException("ACL 绑定不存在: " + bindingId));
+        instanceAclService.deleteBinding(bindingId);
+        audit("acl.delete", id, ConsoleAuditService.detail("bindingId", bindingId,
+                "principalType", existing.principalType(), "principal", existing.principal()));
+        Map<String, Object> body = new LinkedHashMap<>();
+        body.put("ok", true);
+        body.put("message", "已删除 ACL 绑定");
+        body.put("bindingId", bindingId);
+        return body;
+    }
+
+    public Map<String, Object> listAllAclBindings() {
+        if (instanceAclService == null) {
+            throw new IllegalStateException("Instance ACL service is not available");
+        }
+        List<Map<String, Object>> items = instanceAclService.listAll().stream()
+                .map(this::toAclBindingMap)
+                .collect(Collectors.toList());
+        return ConsoleApiModels.listEnvelope(items);
+    }
+
+    private void requireInstanceExists(String id) {
+        instanceRegistry.findById(id)
+                .orElseThrow(() -> new IllegalArgumentException("Unknown gateway instance id: " + id));
+    }
+
+    private Map<String, Object> toAclBindingMap(
+            com.whosly.gateway.console.persist.InstanceAclStore.InstanceAclRecord row) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        m.put("id", row.id());
+        m.put("principalType", row.principalType());
+        m.put("principal", row.principal());
+        m.put("instanceId", row.instanceId());
+        m.put("permissions", new ArrayList<>(ConsolePermission.parseInstanceScopedCsv(row.permissions())));
+        m.put("permissionsCsv", row.permissions());
+        m.put("updatedAt", row.updatedAt() != null ? row.updatedAt().toString() : null);
+        return m;
+    }
+
+    /** §24: hide instances the current principal cannot read. */
+    private List<GatewayInstance> filterVisibleInstances(List<GatewayInstance> instances) {
+        if (instances == null || instances.isEmpty()) {
+            return instances != null ? instances : List.of();
+        }
+        if (instanceAclService == null || consoleAuthz == null) {
+            return instances;
+        }
+        boolean canRead = consoleAuthz.has(ConsolePermission.INSTANCES_READ);
+        var visible = instanceAclService.visibleInstanceIds(
+                instances.stream().map(GatewayInstance::id).toList(), canRead);
+        return instances.stream().filter(i -> visible.contains(i.id())).collect(Collectors.toList());
+    }
+
+    /** §24: deny when ACL blocks the instance (after global PreAuthorize). */
+    public void requireInstanceAccess(String instanceId, String permission) {
+        if (consoleAuthz != null && !consoleAuthz.canAccessInstance(instanceId, permission)) {
+            throw new AccessDeniedException("实例 ACL 拒绝: " + instanceId + " 需要 " + permission);
+        }
+    }
+
+
 }

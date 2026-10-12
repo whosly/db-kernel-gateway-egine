@@ -1,22 +1,26 @@
 package com.whosly.gateway.console.security;
 
 import com.whosly.gateway.console.security.ConsoleAuthProperties.AuthMode;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Component;
 
 /**
- * SpEL bean for {@code @PreAuthorize("@consoleAuthz.has('instances:read')")}.
- * {@link AuthMode#OPEN} always grants (lab).
+ * SpEL bean for {@code @PreAuthorize("@consoleAuthz.has('instances:read')")}
+ * and {@code @consoleAuthz.canAccessInstance(#id, 'sql:execute')}.
+ * {@link AuthMode#OPEN} always grants (lab). Instance ACL: CONSOLE_ARCHITECTURE §24.
  */
 @Component("consoleAuthz")
 public class ConsoleAuthz {
 
     private final AuthMode authMode;
+    private final ObjectProvider<InstanceAclService> aclService;
 
-    public ConsoleAuthz(AuthMode authMode) {
+    public ConsoleAuthz(AuthMode authMode, ObjectProvider<InstanceAclService> aclService) {
         this.authMode = authMode;
+        this.aclService = aclService;
     }
 
     public boolean has(String permission) {
@@ -52,6 +56,23 @@ public class ConsoleAuthz {
             }
         }
         return false;
+    }
+
+    /**
+     * Global permission AND instance ACL (§24). OPEN → true; ADMIN bypasses ACL.
+     */
+    public boolean canAccessInstance(String instanceId, String permission) {
+        if (authMode == AuthMode.OPEN) {
+            return true;
+        }
+        if (!has(permission)) {
+            return false;
+        }
+        InstanceAclService acl = aclService.getIfAvailable();
+        if (acl == null) {
+            return true;
+        }
+        return acl.canAccessInstance(instanceId, permission, true);
     }
 
     public AuthMode mode() {

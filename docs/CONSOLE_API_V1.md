@@ -121,6 +121,22 @@ OIDC 入口仍为 Spring 标准 `/oauth2/authorization/{registrationId}`（非 c
 
 ---
 
+
+
+### 1.x 实例 ACL（§24）
+
+| 方法 | 路径 | 权限 | 成功体 |
+|---|---|---|---|
+| GET | `/instances/{id}/acl` | `acl:manage` | `{ items, total }` binding 对象 |
+| PUT | `/instances/{id}/acl` | `acl:manage` | 全量替换 → `{ items, total }`；body `{ items:[{principalType,principal,permissions[]}] }` |
+| POST | `/instances/{id}/acl/bindings` | `acl:manage` | upsert 单条 binding |
+| DELETE | `/instances/{id}/acl/bindings/{bindingId}` | `acl:manage` | `{ ok, message }` |
+| GET | `/acl/bindings` | `acl:manage` | 全量 `{ items, total }` |
+
+`GET /auth/me` 附加：`instanceAclRestricted`（bool）、`instanceAccess`（`{ [instanceId]: string[] }`，仅 restricted 时有内容）。
+
+实例域操作强制：`@consoleAuthz.canAccessInstance(#id, '…')`（全局权限 ∩ 实例 ACL；ADMIN 绕过；open 全开）。
+
 ## 2. JSON 约定
 
 ### 2.1 错误：RFC 7807 Problem Details

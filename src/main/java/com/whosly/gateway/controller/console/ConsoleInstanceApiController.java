@@ -34,31 +34,31 @@ public class ConsoleInstanceApiController {
     }
 
     @GetMapping("/instances/{id}")
-    @PreAuthorize("@consoleAuthz.has('" + INSTANCES_READ + "')")
+    @PreAuthorize("@consoleAuthz.canAccessInstance(#id, '" + INSTANCES_READ + "')")
     public GatewayInstance getInstance(@PathVariable("id") String id) {
         return api.getInstance(id);
     }
 
     @GetMapping("/instances/{id}/status")
-    @PreAuthorize("@consoleAuthz.has('" + INSTANCES_READ + "')")
+    @PreAuthorize("@consoleAuthz.canAccessInstance(#id, '" + INSTANCES_READ + "')")
     public Map<String, Object> instanceStatus(@PathVariable("id") String id) {
         return api.instanceStatus(id);
     }
 
     @GetMapping("/instances/{id}/metrics")
-    @PreAuthorize("@consoleAuthz.has('" + INSTANCES_READ + "')")
+    @PreAuthorize("@consoleAuthz.canAccessInstance(#id, '" + METRICS_READ + "')")
     public Map<String, Object> instanceMetrics(@PathVariable("id") String id) {
         return api.instanceMetrics(id);
     }
 
     @PostMapping("/instances/{id}/actions/start")
-    @PreAuthorize("@consoleAuthz.has('" + INSTANCES_START_STOP + "')")
+    @PreAuthorize("@consoleAuthz.canAccessInstance(#id, '" + INSTANCES_START_STOP + "')")
     public GatewayInstance startInstance(@PathVariable("id") String id) {
         return api.startInstance(id);
     }
 
     @PostMapping("/instances/{id}/actions/stop")
-    @PreAuthorize("@consoleAuthz.has('" + INSTANCES_START_STOP + "')")
+    @PreAuthorize("@consoleAuthz.canAccessInstance(#id, '" + INSTANCES_START_STOP + "')")
     public GatewayInstance stopInstance(@PathVariable("id") String id) {
         return api.stopInstance(id);
     }
@@ -71,20 +71,20 @@ public class ConsoleInstanceApiController {
     }
 
     @DeleteMapping("/instances/{id}")
-    @PreAuthorize("@consoleAuthz.has('" + INSTANCES_DELETE + "')")
+    @PreAuthorize("@consoleAuthz.canAccessInstance(#id, '" + INSTANCES_DELETE + "')")
     public Map<String, Object> deleteInstance(@PathVariable("id") String id) {
         return api.deleteInstance(id);
     }
 
     @PutMapping("/instances/{id}")
-    @PreAuthorize("@consoleAuthz.has('" + INSTANCES_WRITE + "')")
+    @PreAuthorize("@consoleAuthz.canAccessInstance(#id, '" + INSTANCES_WRITE + "')")
     public GatewayInstance updateInstance(@PathVariable("id") String id,
                                           @RequestBody UpdateInstanceBody body) {
         return api.updateInstance(id, body);
     }
 
     @PostMapping("/instances/{id}/actions/clone")
-    @PreAuthorize("@consoleAuthz.has('" + INSTANCES_WRITE + "')")
+    @PreAuthorize("@consoleAuthz.canAccessInstance(#id, '" + INSTANCES_WRITE + "')")
     public ResponseEntity<GatewayInstance> cloneInstance(
             @PathVariable("id") String id,
             @RequestBody(required = false) CloneInstanceBody body) {
@@ -107,20 +107,20 @@ public class ConsoleInstanceApiController {
     }
 
     @GetMapping("/instances/{id}/masking-rules")
-    @PreAuthorize("@consoleAuthz.has('" + INSTANCES_READ + "')")
+    @PreAuthorize("@consoleAuthz.canAccessInstance(#id, '" + INSTANCES_READ + "')")
     public Map<String, Object> listMaskingRules(@PathVariable("id") String id) {
         return api.listMaskingRules(id);
     }
 
     @PostMapping("/instances/{id}/masking-rules")
-    @PreAuthorize("@consoleAuthz.has('" + MASKING_WRITE + "')")
+    @PreAuthorize("@consoleAuthz.canAccessInstance(#id, '" + MASKING_WRITE + "')")
     public Map<String, Object> createMaskingRule(@PathVariable("id") String id,
                                                  @RequestBody MaskingRuleBody body) {
         return api.createMaskingRule(id, body);
     }
 
     @PutMapping("/instances/{id}/masking-rules/{ruleId}")
-    @PreAuthorize("@consoleAuthz.has('" + MASKING_WRITE + "')")
+    @PreAuthorize("@consoleAuthz.canAccessInstance(#id, '" + MASKING_WRITE + "')")
     public Map<String, Object> updateMaskingRule(@PathVariable("id") String id,
                                                  @PathVariable("ruleId") String ruleId,
                                                  @RequestBody MaskingRuleBody body) {
@@ -128,46 +128,46 @@ public class ConsoleInstanceApiController {
     }
 
     @PutMapping("/instances/{id}/masking-rules")
-    @PreAuthorize("@consoleAuthz.has('" + MASKING_WRITE + "')")
+    @PreAuthorize("@consoleAuthz.canAccessInstance(#id, '" + MASKING_WRITE + "')")
     public Map<String, Object> replaceMaskingRules(@PathVariable("id") String id,
                                                    @RequestBody List<MaskingRuleBody> bodies) {
         return api.replaceMaskingRules(id, bodies);
     }
 
     @DeleteMapping("/instances/{id}/masking-rules/{ruleId}")
-    @PreAuthorize("@consoleAuthz.has('" + MASKING_WRITE + "')")
+    @PreAuthorize("@consoleAuthz.canAccessInstance(#id, '" + MASKING_WRITE + "')")
     public Map<String, Object> deleteMaskingRule(@PathVariable("id") String id,
                                                  @PathVariable("ruleId") String ruleId) {
         return api.deleteMaskingRule(id, ruleId);
     }
 
     @PostMapping("/instances/{id}/actions/reload-masking-rules")
-    @PreAuthorize("@consoleAuthz.has('" + MASKING_WRITE + "')")
+    @PreAuthorize("@consoleAuthz.canAccessInstance(#id, '" + MASKING_WRITE + "')")
     public Map<String, Object> reloadMasking(@PathVariable("id") String id) {
         return api.reloadMasking(id);
     }
 
     @GetMapping("/instances/{id}/sessions")
-    @PreAuthorize("@consoleAuthz.has('" + INSTANCES_READ + "')")
+    @PreAuthorize("@consoleAuthz.canAccessInstance(#id, '" + INSTANCES_READ + "')")
     public Map<String, Object> listSessions(@PathVariable("id") String id) {
         return api.listSessions(id);
     }
 
     @DeleteMapping("/instances/{id}/sessions/{connectionId}")
-    @PreAuthorize("@consoleAuthz.has('" + SESSIONS_KILL + "')")
+    @PreAuthorize("@consoleAuthz.canAccessInstance(#id, '" + SESSIONS_KILL + "')")
     public Map<String, Object> killSession(@PathVariable("id") String id,
                                            @PathVariable("connectionId") String connectionId) {
         return api.killSession(id, connectionId);
     }
 
     @PostMapping("/instances/{id}/actions/health-check")
-    @PreAuthorize("@consoleAuthz.has('" + INSTANCES_START_STOP + "')")
+    @PreAuthorize("@consoleAuthz.canAccessInstance(#id, '" + INSTANCES_START_STOP + "')")
     public Map<String, Object> healthCheck(@PathVariable("id") String id) {
         return api.healthCheck(id);
     }
 
     @GetMapping("/instances/{id}/actions/health-check")
-    @PreAuthorize("@consoleAuthz.has('" + INSTANCES_READ + "')")
+    @PreAuthorize("@consoleAuthz.canAccessInstance(#id, '" + INSTANCES_READ + "')")
     public Map<String, Object> healthCheckGet(@PathVariable("id") String id) {
         return api.healthCheckGet(id);
     }
@@ -180,10 +180,43 @@ public class ConsoleInstanceApiController {
     }
 
     @GetMapping("/instances/{id}/recent-statements")
-    @PreAuthorize("@consoleAuthz.has('" + INSTANCES_READ + "')")
+    @PreAuthorize("@consoleAuthz.canAccessInstance(#id, '" + INSTANCES_READ + "')")
     public Map<String, Object> recentStatements(
             @PathVariable("id") String id,
             @RequestParam(value = "limit", defaultValue = "50") int limit) {
         return api.recentStatements(id, limit);
+    }
+
+    @GetMapping("/instances/{id}/acl")
+    @PreAuthorize("@consoleAuthz.has('" + ACL_MANAGE + "')")
+    public Map<String, Object> listInstanceAcl(@PathVariable("id") String id) {
+        return api.listInstanceAcl(id);
+    }
+
+    @PutMapping("/instances/{id}/acl")
+    @PreAuthorize("@consoleAuthz.has('" + ACL_MANAGE + "')")
+    public Map<String, Object> replaceInstanceAcl(@PathVariable("id") String id,
+                                                  @RequestBody AclReplaceBody body) {
+        return api.replaceInstanceAcl(id, body);
+    }
+
+    @PostMapping("/instances/{id}/acl/bindings")
+    @PreAuthorize("@consoleAuthz.has('" + ACL_MANAGE + "')")
+    public Map<String, Object> upsertInstanceAclBinding(@PathVariable("id") String id,
+                                                        @RequestBody AclBindingBody body) {
+        return api.upsertInstanceAclBinding(id, body);
+    }
+
+    @DeleteMapping("/instances/{id}/acl/bindings/{bindingId}")
+    @PreAuthorize("@consoleAuthz.has('" + ACL_MANAGE + "')")
+    public Map<String, Object> deleteInstanceAclBinding(@PathVariable("id") String id,
+                                                        @PathVariable("bindingId") String bindingId) {
+        return api.deleteInstanceAclBinding(id, bindingId);
+    }
+
+    @GetMapping("/acl/bindings")
+    @PreAuthorize("@consoleAuthz.has('" + ACL_MANAGE + "')")
+    public Map<String, Object> listAllAclBindings() {
+        return api.listAllAclBindings();
     }
 }

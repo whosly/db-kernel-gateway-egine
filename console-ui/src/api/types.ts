@@ -455,6 +455,24 @@ export interface AuthMeResponse {
   roles?: string[]
   permissions?: string[]
   mode?: string
+  instanceAclRestricted?: boolean
+  instanceAccess?: Record<string, string[]>
+}
+
+export interface InstanceAclBinding {
+  id: string
+  principalType: 'user' | 'role' | string
+  principal: string
+  instanceId: string
+  permissions: string[]
+  permissionsCsv?: string
+  updatedAt?: string | null
+}
+
+export interface InstanceAclBindingPayload {
+  principalType: string
+  principal: string
+  permissions: string[]
 }
 
 export interface AlertThreshold {

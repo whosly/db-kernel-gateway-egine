@@ -126,4 +126,16 @@ public final class ConsoleApiModels {
             String sql
     ) {
     }
+
+    public record AclBindingBody(
+            String principalType,
+            String principal,
+            List<String> permissions
+    ) {
+    }
+
+    public record AclReplaceBody(
+            List<AclBindingBody> items
+    ) {
+    }
 }

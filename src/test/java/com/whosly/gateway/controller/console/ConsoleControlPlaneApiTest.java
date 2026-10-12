@@ -110,7 +110,7 @@ class ConsoleControlPlaneApiTest {
         sqlExec = mock(com.whosly.gateway.console.sql.InstanceSqlExecuteService.class);
         console = new ConsoleApiController(
                 catalog, registry, runningAdapter, new GatewayRuntimeMetrics(), gatewayConfig,
-                null, null, null, health, ring, runtime, null, sampler, sqlExec, null, null, null, null);
+                null, null, null, health, ring, runtime, null, sampler, sqlExec, null, null, null, null, null, null);
     }
 
     @Test

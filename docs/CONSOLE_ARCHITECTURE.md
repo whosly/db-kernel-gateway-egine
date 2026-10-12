@@ -1252,7 +1252,7 @@ GET /console/api/audit/spool?limit=50&before=&source=auto|ring|spool|jdbc&protoc
 | 强制面 | `/console/api/v1/**` 方法级 `@PreAuthorize`（或等价）；`open` **不**强制（实验室全开） |
 | `GET /auth/me` | `{ username, roles, permissions[] }` |
 | 前端 | 按 permission 隐藏/禁用按钮；仍以 API **403** 为准 |
-| 实例级 ACL | **本轮不做**；文档记为下一阶段 |
+| 实例级 ACL | 见 **§24** |
 
 ### 22.2 权限目录（`ConsolePermission`）
 
@@ -1302,7 +1302,7 @@ GET /console/api/audit/spool?limit=50&before=&source=auto|ring|spool|jdbc&protoc
 
 | 已做 | 仍非 / 下轮 |
 |---|---|
-| 全局三角色 + 权限串 | 按实例 ACL（谁可管哪台） |
+| 全局三角色 + 权限串 | 按实例 ACL → **§24** |
 | OIDC claim → 三角色 | 外部 IdP 组同步 UI / SCIM |
 | 方法级 403 | 完整 IAM 产品 |
 
@@ -1316,7 +1316,7 @@ GET /console/api/audit/spool?limit=50&before=&source=auto|ring|spool|jdbc&protoc
 - [x] OIDC 映射扩展 OPERATOR；无外网单测
 - [x] `mvn test` + `npm run build` 绿；STATUS / README 同步
 
-**结论：§22 已实现（全局三角色 + 权限串；实例级 ACL 下轮；open 模式不变）。**
+**结论：§22 已实现（全局三角色 + 权限串；实例级 ACL 见 §24；open 模式不变）。**
 
 ---
 
@@ -1331,6 +1331,90 @@ GET /console/api/audit/spool?limit=50&before=&source=auto|ring|spool|jdbc&protoc
 
 - API：`GET /console/api/v1/instances/{id}/sql/executions` → `{ instanceId, items[], total }`，字段 `executionId · sqlPreview（截断 200）· statementCount · currentStatementIndex · startedAt · elapsedMs · viaProxy · proxyPort · targetUser · initiatedBy · cancelRequested`；不含密码/结果。取消/断开沿用既有 `POST …/sql/executions/cancel`、`DELETE …/sessions/{connectionId}`。
 - UX：确认后执行；手动刷新 + 5s 自动刷新（页签可见时）；本页发起的执行标「本页」，从面板取消会同时中止编辑器等待。
-- 诚实边界：不做 executionId ↔ connectionId 精确关联（驱动/代理未透传客户端标记）；不做实例级 ACL；取消不是 TDS Attention / PG CancelRequest。
+- 诚实边界：不做 executionId ↔ connectionId 精确关联（驱动/代理未透传客户端标记）；实例级 ACL 见 §24；取消不是 TDS Attention / PG CancelRequest。
 
 **结论：§23 已实现。**
+
+---
+
+## 24. 实例级 ACL（用户/角色 ↔ 实例权限收窄）
+
+> 作者自检通过后实现。在 §22 全局 RBAC 之上增加**按实例绑定**；权限只能 ≤ 全局角色，不能越权提权。  
+> **不做**完整 IAM / 多租户 / SCIM / 外部组同步产品；**不做** Prometheus。
+
+### 24.1 目标
+
+| 项 | 约定 |
+|---|---|
+| 绑定主体 | `principalType=user\|role` + `principal`（用户名或 `CONSOLE_*` 角色） |
+| 绑定客体 | `instanceId` + 权限 CSV（须为目录子集，且实例域权限） |
+| 强制 | 实例域操作：`全局权限 AND 实例 ACL`；**ADMIN 绕过**实例 ACL；`open` **不**强制（与 §22 一致） |
+| 列表 | 服务端过滤不可见实例（非仅前端隐藏） |
+| `/auth/me` | 可选 `instanceAclRestricted` + `instanceAccess: { id: [perms] }` |
+| 管理 API | **仅 ADMIN**（`acl:manage`） |
+
+### 24.2 判定规则（必须写清）
+
+对实例域操作（读实例、启停、SQL、脱敏、会话、schema、指标等）：
+
+1. `gateway.console.auth.mode=open` → **放行**（实验室）。
+2. 无全局权限（`@consoleAuthz.has(perm)`）→ **403**。
+3. 主体含 `ROLE_CONSOLE_ADMIN` → **绕过**实例 ACL（仍受全局权限约束；ADMIN 全集已含全部）。
+4. 收集匹配当前主体的绑定：`user`+用户名 **或** `role`+其任一 `CONSOLE_*` 角色。
+5. 若匹配绑定在**全库**为零行 → **不限制实例**（纯全局角色，兼容未配置 ACL 的存量）。
+6. 若有匹配绑定 → **仅**可访问绑定中出现的实例；该实例上有效权限 = **全局权限 ∩ 该实例上各匹配绑定权限并集**。无读权限的实例不出现在列表中。
+
+**不能提权**：ACL 授予 `security:keys` 等无效；写入时校验仅允许实例域目录。
+
+### 24.3 表结构 `gateway_instance_acl`
+
+```
+id VARCHAR(128) PK
+principal_type VARCHAR(16) NOT NULL   -- user | role
+principal VARCHAR(256) NOT NULL
+instance_id VARCHAR(128) NOT NULL
+permissions VARCHAR(1024) NOT NULL    -- CSV，如 instances:read,sql:execute
+updated_at TIMESTAMP NOT NULL
+UNIQUE(principal_type, principal, instance_id)
+```
+
+实例域可绑定权限：`instances:read|write|start_stop|delete` · `sql:execute` · `sessions:kill` · `masking:write` · `schema:read` · `metrics:read`。  
+管理权限：`acl:manage`（仅 ADMIN 角色映射，不进 ACL CSV）。
+
+### 24.4 API（v1）
+
+| 方法 | 路径 | 权限 | 体 |
+|---|---|---|---|
+| GET | `/instances/{id}/acl` | `acl:manage` | `{ items, total }` |
+| PUT | `/instances/{id}/acl` | `acl:manage` | 全量替换；body `{ items:[{principalType,principal,permissions[]}] }` → `{ items, total }` |
+| POST | `/instances/{id}/acl/bindings` | `acl:manage` | 单条 upsert → binding 对象 |
+| DELETE | `/instances/{id}/acl/bindings/{bindingId}` | `acl:manage` | `{ ok, message }` |
+| GET | `/acl/bindings` | `acl:manage` | 全量 `{ items, total }`（运维可选） |
+
+实例域方法改为 `@PreAuthorize("@consoleAuthz.canAccessInstance(#id, '…')")`（内部含全局 `has` + ACL）。
+
+### 24.5 UX
+
+- 实例抽屉新增「ACL」页签（仅 `acl:manage` 可见）：列出绑定、添加 user/role + 权限多选、删除。
+- 无权限用户列表/总览/工作台选择器看不到未授权实例。
+
+### 24.6 诚实边界
+
+| 已做 | 仍非 |
+|---|---|
+| 用户/角色 ↔ 实例权限收窄 | 完整 IAM / 委托审批 / SCIM |
+| ADMIN 绕过 + open 关闭 ACL | 数据面协议鉴权（仍是代理凭据） |
+| 服务端列表过滤 | 按租户隔离控制面库 |
+
+### 24.7 自检清单（作者）
+
+- [x] 无 ACL 行时行为与 §22 一致（全实例）
+- [x] 有用户绑定时仅可见绑定实例；权限取交
+- [x] 角色绑定对该角色用户生效
+- [x] ADMIN / open 不受限
+- [x] 管理 API 非 ADMIN → 403
+- [x] `/auth/me` 含 restricted 摘要
+- [x] `mvn test` + `npm run build`；STATUS / API 文档同步
+
+**结论：§24 已实现（实例级 ACL；非完整 IAM）。**
+
