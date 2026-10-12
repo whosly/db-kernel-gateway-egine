@@ -10,6 +10,7 @@ import com.whosly.gateway.runtime.GatewayListenerRuntime;
 import com.whosly.gateway.runtime.GatewayListenerRuntime.ManagedListener;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
@@ -39,6 +40,7 @@ public class InstanceBackendHealthService {
     private final GatewayConfig gatewayConfig;
     private final int timeoutMs;
 
+    @Autowired
     public InstanceBackendHealthService(GatewayListenerRuntime listenerRuntime,
                                         Optional<ConsoleInstanceStore> consoleStore,
                                         GatewayConfig gatewayConfig) {
