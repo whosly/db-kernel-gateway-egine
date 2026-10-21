@@ -10,9 +10,9 @@
 
 | 项 | 现状 | 证据 |
 |---|---|---|
-| 非集成 `@Test`/`@ParameterizedTest` 注解数 | **592** | `mvn test` Results；排除 `*IntegrationTest` |
+| 非集成 `@Test`/`@ParameterizedTest` 注解数 | **607** | `mvn test` Results；排除 `*IntegrationTest` |
 | 集成测试 | 14 条注解；默认 surefire **排除** `*IntegrationTest`；无 local props 时 `-Pintegration-test` **assumeTrue 跳过**；本机有库时可 14/14 绿 | `pom.xml` excludes；跳过策略见 `docs/OPS.md` / `integration-test.properties` |
-| 本环境 `mvn test`（`JAVA_HOME`=JDK 17） | **BUILD SUCCESS：Tests run 592, Failures 0, Errors 0, Skipped 0** | surefire；含告警阈值 + 列加密 E2E + SQL IDE + form/token/open 鉴权 |
+| 本环境 `mvn test`（`JAVA_HOME`=JDK 17） | **BUILD SUCCESS：Tests run 607, Failures 0, Errors 0, Skipped 0** | surefire；含告警阈值 + 列加密 E2E + SQL IDE + form/token/open 鉴权 + RBAC/实例 ACL/工作台会话联动（2026-10-21 @ `47a151d` 复核） |
 | `pom.xml` 编译目标 | `maven.compiler.source/target=17` | **保持 17**；不升到 21 |
 
 **结论**：编译目标保持 17；VT 仅在 JDK 21+ 运行期启用。管控台已完成 Phase B/B+/C partial/E lite，并完成本轮**实例编辑/克隆/导入/筛选/批量**与 **SQL 工作台经代理 listenPort**；完整 SQL IDE（MaxGUI-lite）与本地 form/token 鉴权 + HTTPS 模板已落地；OIDC 为配置路径；**审计 spool 内容浏览**已落地；**SQL 多语句 + 尽力而为取消**已落地；**列加密 E2E**（密钥轮换 + verify）已落地（非 KMS）；**管控台告警阈值**（H2 + 进程内评估）已落地；**细粒度 RBAC**（VIEWER/OPERATOR/ADMIN + 权限串，§22）已落地；**SQL 工作台会话联动**（工作台执行中 ↔ 代理会话，§23）已落地；**实例级 ACL**（§24，用户/角色↔实例权限收窄）已落地；外部 Prometheus·Grafana / PagerDuty 仍不做。见 P0 / P1 / P2。
@@ -173,7 +173,14 @@ Spring 实际读取的键（`@Value`）与默认 `application.yml`、模板一�
 - **JDBC 服务**：`DatabaseConnectionService` 用 `DriverManager` 建连，**不参与**上述转发；已 `@Deprecated`（P2-2），勿当作网关数据平面。
 - **审计 JDBC**：`gateway.audit.destination=jdbc` 只把审计记录搬到**独立**库（`JdbcAuditDestination`），与被代理库分离。
 
-## 7. 维护
+## 7. 已知契约偏差（代码 vs `CONSOLE_API_V1.md`）
+
+| 端点 | 文档约定 | 实际（`47a151d` 冒烟） | 影响 |
+|---|---|---|---|
+| `GET /console/api/v1/audit/operations` | `{ items, total }`（§2.2 禁用 `count`） | `{ items, count }`（`ConsoleApiController` 审计列表） | 前端只读 `items`，无功能影响；待代码对齐为 `total` |
+| `GET /console/api/v1/metrics/history`、`/instances/{id}/schema/columns` | 非 list envelope（聚合/时序对象） | 含兄弟字段 `count` | 属聚合对象，可接受；对齐时一并评估 |
+
+## 8. 维护
 
 - 合并改变能力边界的 PR 时，同步更新本文件对应行的「状态 / 证据」。
 - README「能力总览」只保留摘要，细节与缺口以本文件为准，避免两处互相漂移。
