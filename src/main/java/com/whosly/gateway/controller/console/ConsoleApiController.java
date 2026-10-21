@@ -845,7 +845,7 @@ public class ConsoleApiController {
             m.put("actor", r.actor());
             return m;
         }).toList());
-        body.put("count", rows.size());
+        body.put("total", rows.size());
         if (action != null && !action.isBlank()) {
             body.put("actionFilter", action.trim());
         }
