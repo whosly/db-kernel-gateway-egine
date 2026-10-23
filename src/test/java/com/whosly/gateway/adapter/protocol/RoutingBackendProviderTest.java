@@ -169,4 +169,23 @@ class RoutingBackendProviderTest {
     private static BackendProvider recording(int port, String ignoredName) {
         return new DirectBackendProvider("127.0.0.1", port, 500);
     }
+
+    @Test
+    void selectProviderAndSelectsFallbackWithoutOpeningSocket() throws Exception {
+        try (ServerSocket appA = new ServerSocket(0);
+             ServerSocket fallback = new ServerSocket(0)) {
+            BackendProvider routeA = new DirectBackendProvider("127.0.0.1", appA.getLocalPort(), 500);
+            BackendProvider routeFallback = new DirectBackendProvider("127.0.0.1", fallback.getLocalPort(), 500);
+            RoutingRule rule = new RoutingRule("app_a", null,
+                    List.of(new WeightedEndpoint(new BackendEndpoint("127.0.0.1", appA.getLocalPort()))));
+            RoutingBackendProvider provider = new RoutingBackendProvider(
+                    List.of(RoutingBackendProvider.bind(rule, routeA)), routeFallback);
+
+            assertThat(provider.selectProvider(RoutingContext.ofDatabase("app_a"))).isSameAs(routeA);
+            assertThat(provider.selectsFallback(RoutingContext.ofDatabase("app_a"))).isFalse();
+            assertThat(provider.selectProvider(RoutingContext.empty())).isSameAs(routeFallback);
+            assertThat(provider.selectsFallback(RoutingContext.empty())).isTrue();
+            assertThat(provider.selectsFallback(RoutingContext.ofDatabase("other"))).isTrue();
+        }
+    }
 }

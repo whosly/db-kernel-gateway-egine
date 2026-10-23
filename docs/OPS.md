@@ -136,6 +136,15 @@ mvn spring-boot:run -Dspring-boot.run.profiles=dev
 
 相关文件：`docker-compose.keycloak.yml`、`deploy/keycloak/realm-gateway.json`、`deploy/keycloak/README.md`、`application-oidc-keycloak-template.yml`。
 
+自动化：`ConsoleOidcKeycloakLabArtifactsTest`（默认 `mvn test`）校验 realm/compose/模板；有 Docker 时：
+
+```bash
+docker compose -f docker-compose.keycloak.yml up -d
+mvn -Pintegration-test test -Dtest=ConsoleOidcKeycloakBrowserE2EIntegrationTest
+```
+
+该 E2E 覆盖 OIDC discovery、lab password grant（`console-admin`）与 authorize 登录页；完整人工点选管控台「使用 SSO 登录」仍按上面浏览器步骤。无 Docker 的环境会 `assumeTrue` skip（不失败）。
+
 **STATUS**：实验室 Compose + 文档就绪；真联调在有 Docker 的机器上。本环境若无 Docker，仅验证配置 / beans / 单测。
 
 ### OIDC / SSO（实验室）

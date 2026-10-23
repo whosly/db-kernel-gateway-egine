@@ -46,14 +46,32 @@ public final class RoutingBackendProvider implements BackendProvider, AutoClosea
     @Override
     public Socket acquire(RoutingContext context) throws IOException {
         Objects.requireNonNull(context, "context must not be null");
+        BackendProvider selected = selectProvider(context);
+        if (selected != fallback) {
+            log.debug("Routing {} via rule provider {}", context, selected);
+        } else {
+            log.debug("Routing {} via fallback (no rule matched)", context);
+        }
+        return selected.acquire(context);
+    }
+
+    /**
+     * Resolves which provider would serve {@code context} without opening a socket.
+     * Empty / unmatched context yields {@link #fallback()}.
+     */
+    public BackendProvider selectProvider(RoutingContext context) {
+        Objects.requireNonNull(context, "context must not be null");
         for (BoundRule bound : rules) {
             if (bound.rule().matches(context)) {
-                log.debug("Routing {} via rule {}", context, bound.rule());
-                return bound.provider().acquire(context);
+                return bound.provider();
             }
         }
-        log.debug("Routing {} via fallback (no rule matched)", context);
-        return fallback.acquire(context);
+        return fallback;
+    }
+
+    /** True when {@link #selectProvider(RoutingContext)} is the fallback provider. */
+    public boolean selectsFallback(RoutingContext context) {
+        return selectProvider(context) == fallback;
     }
 
     @Override

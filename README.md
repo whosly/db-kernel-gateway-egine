@@ -27,7 +27,7 @@
 
 | 项 | 本分支（`future/database-wire-protocol-foundation`） |
 |---|---|
-| 默认单元测试 | **665** 条全绿（JDK 17；`pom` 排除 `*IntegrationTest`；以 STATUS §1 为准） |
+| 默认单元测试 | **675** 条全绿（JDK 17；`pom` 排除 `*IntegrationTest`；以 STATUS §1 为准） |
 | 真库集成 `-Pintegration-test` | **14 / 14** 全绿（2026-09-24，本地 Docker MySQL `:13308` + PostgreSQL `:5432`） |
 | JDK / 编译 | `pom` 目标 **17**；虚拟线程经 `VirtualThreadExecutors` **反射**在 JDK 21+ 启用，JDK 17 回退平台线程池（STATUS P0-1） |
 | 核心数据路径 | 透明代理、查询/结果、预处理、错误透传、脱敏 happy path、PG `COPY` — **已在集成中 live-proven** |
@@ -62,7 +62,7 @@
 | 结果集脱敏（类型边界） | **部分** | MySQL：`bit`/`decimal`/date/time/datetime/timestamp；PG：int/bool/float/`numeric`/date/time/timestamp/timestamptz/`uuid`；SQL Server：ROW/NBCROW text/guid/numeric/temporal/text·binary-PLP/TEXTPTR/MONEY*（XML/UDT 仅 NULL）；geometry/interval/money/timetz/XML·UDT 非空/TVP/未知仍拒绝；见 STATUS §4.2 |
 | 审计 spool / JDBC 搬运 | **已接线·默认关** | fail-closed；P0-3 专用单测已补；真库 JDBC 验收仍属集成 |
 | 连接上限 / CIDR / idle | **已实现** | `max-connections`、`allowed-client-cidrs`、`idle-timeout-seconds` |
-| 后端 failover / 路由 | **部分** | `backend-endpoints` 顺序 failover；可选 `gateway.routing.*` 按库名/用户/权重（默认关；协议无关） |
+| 后端 failover / 路由 | **部分** | `backend-endpoints` 顺序 failover；可选 `gateway.routing.*` 按库名/用户/权重（默认关）；PG 首包 peek；MySQL deferred AuthSwitch 换绑（禁止伪造 greeting）；SQL Server Login7 仅 hint |
 | PG Cancel | **部分** | `CancelRequest` 与 `BackendKeyData` **仅关联索引**；**不代发** cancel；MySQL `COM_PROCESS_KILL` 透传 |
 | 风控策略 | **部分** | `DenyListDatabaseRiskPolicy` 可配置拒绝清单；空配置默认 `allowAll()` |
 | TLS / 压缩 | **部分** | 默认 opaque / 可选拒绝；**可选 TLS 终止**（`gateway.tls.*`，协议无关）；压缩后仍 opaque |

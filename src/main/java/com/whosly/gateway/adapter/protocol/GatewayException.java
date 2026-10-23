@@ -21,6 +21,11 @@ public class GatewayException extends RuntimeException {
         this.mapping = mapping;
     }
 
+    public GatewayException(GatewayErrorMapping mapping, Throwable cause) {
+        super(mapping.getDescription(), cause);
+        this.mapping = mapping;
+    }
+
     public GatewayErrorMapping getMapping() {
         return mapping;
     }

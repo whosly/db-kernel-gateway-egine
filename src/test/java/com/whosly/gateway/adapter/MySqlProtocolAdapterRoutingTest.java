@@ -20,9 +20,10 @@ import java.util.concurrent.TimeUnit;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
- * Documents MySQL server-first limitation: acquire always sees an empty
- * {@link RoutingContext} because identity arrives only in Handshake Response
- * after the backend greeting (forging a greeting is forbidden).
+ * Bootstrap acquire stays empty (server-first). When {@code RoutingBackendProvider}
+ * has rules, {@link com.whosly.gateway.adapter.mysql.MySqlDeferredIdentityRouter}
+ * may rebind after Handshake Response — covered in
+ * {@code MySqlDeferredIdentityRouterTest}. Without rules, only {@code acquire(empty)}.
  */
 class MySqlProtocolAdapterRoutingTest {
 
