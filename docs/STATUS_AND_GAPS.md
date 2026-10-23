@@ -11,7 +11,7 @@
 | 项 | 现状 | 证据 |
 |---|---|---|
 | 非集成 `@Test`/`@ParameterizedTest` 注解数 | **665** | `mvn test` Results；排除 `*IntegrationTest` |
-| 集成测试 | 14 条注解；默认 surefire **排除** `*IntegrationTest`；无 local props 时 `-Pintegration-test` **assumeTrue 跳过**；本机有库时可 14/14 绿 | `pom.xml` excludes；跳过策略见 `docs/OPS.md` / `integration-test.properties` |
+| 集成测试 | **15** 条注解（含 `SqlServerGatewayIntegrationTest`×1）；默认 surefire **排除** `*IntegrationTest`；无 local props 时 `-Pintegration-test` **assumeTrue 跳过**；本机有库时可 15/15 绿 | `pom.xml` excludes；跳过策略见 `docs/OPS.md` / `integration-test.properties` |
 | 本环境 `mvn test`（`JAVA_HOME`=JDK 17） | **BUILD SUCCESS：Tests run 665, Failures 0, Errors 0, Skipped 0** | surefire；含 SQL Server P2（ROW/NBCROW 脱敏含 numeric/temporal/text-PLP/**TEXTPTR/MONEY*/VARBINARY(+MAX)**；XML/UDT 仅 NULL + reset/RPC·Bulk）+ Attention/Login7 hint + MySQL/PG decimal/时间/uuid 脱敏 + 告警规则 + 列加密 E2E + SQL IDE + form/token/open 鉴权 + RBAC/实例 ACL/工作台会话联动 |
 | `pom.xml` 编译目标 | `maven.compiler.source/target=17` | **保持 17**；不升到 21 |
 
@@ -176,7 +176,7 @@ Spring 实际读取的键（`@Value`）与默认 `application.yml`、模板一�
 
 ## 7. 已知契约偏差（代码 vs `CONSOLE_API_V1.md`）
 
-| 端点 | 文档约定 | 实际（截至 `ddde045`） | 影响 |
+| 端点 | 文档约定 | 实际（截至 `fb01c9a`） | 影响 |
 |---|---|---|---|
 | `GET /console/api/v1/audit/operations` | `{ items, total }`（§2.2 禁用 `count`） | **已对齐**（`ee1b49b`）：`{ items, total }`（`ConsoleAuditApiController` → `ConsoleApiController#listAudit`） | 无 |
 | `GET /console/api/v1/metrics/history`、`/instances/{id}/schema/columns` | 非 list envelope（聚合/时序对象） | 含兄弟字段 `count` | 属聚合对象，可接受；对齐时一并评估 |
