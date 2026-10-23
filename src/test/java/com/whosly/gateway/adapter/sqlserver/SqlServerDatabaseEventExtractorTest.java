@@ -59,10 +59,36 @@ class SqlServerDatabaseEventExtractorTest {
     }
 
     @Test
-    void ignoresTargetToClientDirection() {
+    void observesErrorTokenFromTargetTabularResult() {
+        SqlServerSession session = new SqlServerSession("sqlserver-test-3");
+        SqlServerDatabaseEventExtractor extractor =
+                new SqlServerDatabaseEventExtractor("SQLServer", session.getConnectionId(), session);
+
+        byte[] error = TdsErrorToken.encode(208, 1, 16, "Invalid object name 'nope'", "mssql");
+        byte[] done = TdsDoneToken.encodeErrorFinal();
+        byte[] payload = new byte[error.length + done.length];
+        System.arraycopy(error, 0, payload, 0, error.length);
+        System.arraycopy(done, 0, payload, error.length, done.length);
+        byte[] packet = CODEC.packet(TdsPacketType.TABULAR_RESULT.getCode(), payload, 1);
+
+        List<DatabaseTrafficEvent> events =
+                extractor.inspect(TrafficDirection.TARGET_TO_CLIENT, packet, 0, packet.length);
+
+        assertThat(events).hasSize(1);
+        assertThat(events.get(0).getOperation()).isEqualTo("ERROR");
+        assertThat(events.get(0).getStatement()).contains("208").contains("Invalid object name");
+        assertThat(events.get(0).getAttribute("number")).contains("208");
+        assertThat(events.get(0).getAttribute("class")).contains("16");
+        assertThat(events.get(0).getAttribute("server")).contains("mssql");
+        assertThat(session.getLastErrorNumber()).contains(208);
+        assertThat(session.getLastErrorMessage()).contains("Invalid object name 'nope'");
+    }
+
+    @Test
+    void ignoresNonTabularTargetPackets() {
         SqlServerDatabaseEventExtractor extractor =
                 new SqlServerDatabaseEventExtractor("SQLServer", "s", new SqlServerSession("s"));
-        byte[] packet = CODEC.packet(TdsPacketType.TABULAR_RESULT.getCode(), new byte[]{1, 2}, 1);
+        byte[] packet = CODEC.packet(TdsPacketType.PRELOGIN.getCode(), new byte[]{1, 2}, 1);
         assertThat(extractor.inspect(TrafficDirection.TARGET_TO_CLIENT, packet, 0, packet.length))
                 .isEmpty();
     }

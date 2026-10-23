@@ -3,10 +3,15 @@ package com.whosly.gateway.adapter;
 import com.whosly.gateway.adapter.protocol.BackendProvider;
 import com.whosly.gateway.adapter.protocol.DatabaseTrafficInspector;
 import com.whosly.gateway.adapter.protocol.DuplexRelay;
+import com.whosly.gateway.adapter.protocol.GatewayErrorMapping;
+import com.whosly.gateway.adapter.protocol.GatewayException;
 import com.whosly.gateway.adapter.protocol.MessagePipeline;
 import com.whosly.gateway.adapter.protocol.ProbedHandshake;
+import com.whosly.gateway.adapter.protocol.ProtocolErrorResponder;
 import com.whosly.gateway.adapter.sqlserver.SqlServerDatabaseEventExtractor;
+import com.whosly.gateway.adapter.sqlserver.SqlServerGatewayErrorMapper;
 import com.whosly.gateway.adapter.sqlserver.SqlServerSession;
+import com.whosly.gateway.adapter.sqlserver.TdsFrameCodec;
 import com.whosly.gateway.parser.DruidSqlParser;
 import com.whosly.gateway.parser.SqlParser;
 import com.whosly.gateway.parser.StatementClassifier;
@@ -20,11 +25,12 @@ import java.util.UUID;
 /**
  * SQL Server (TDS) protocol proxy adapter.
  *
- * <p><b>Maturity (honest):</b> P0 transparent {@link DuplexRelay} plus P1-lite
- * cleartext observation of Login7 identity and SQL_BATCH text when the stream is
- * not encrypted. This is <em>not</em> MySQL/PostgreSQL parity — no result-set
- * masking, no Attention/cancel, no deep token decode, no protocol session reset,
- * no Login7-driven routing. See {@code docs/SQLSERVER_TDS_PLAN.md}.</p>
+ * <p><b>Maturity (honest):</b> P0 transparent {@link DuplexRelay} plus P1
+ * cleartext observation of Login7 identity, SQL_BATCH text, and backend ERROR
+ * tokens when the stream is not encrypted; gateway-side rejects forge a minimal
+ * TDS ERROR+DONE tabular reply. This is <em>not</em> MySQL/PostgreSQL parity —
+ * no result-set masking, no Attention/cancel, no deep token rewrite, no protocol
+ * session reset, no Login7-driven routing. See {@code docs/SQLSERVER_TDS_PLAN.md}.</p>
  *
  * <p><b>Handshake:</b> TDS is client-first (PreLogin → Login7).
  * {@link BackendProvider#acquire} still uses an empty
@@ -38,6 +44,10 @@ public class SqlServerProtocolAdapter extends AbstractProtocolAdapter {
     private static final String PROTOCOL_NAME = "SQLServer";
     /** Default gateway listen port (clients connect here; target stays 1433). */
     private static final int DEFAULT_PORT = 31433;
+    private static final TdsFrameCodec FRAME_CODEC = new TdsFrameCodec();
+    private static final SqlServerGatewayErrorMapper GATEWAY_ERROR_MAPPER = new SqlServerGatewayErrorMapper();
+    private static final ProtocolErrorResponder GATEWAY_ERROR_RESPONDER =
+            new ProtocolErrorResponder(FRAME_CODEC, GATEWAY_ERROR_MAPPER);
 
     public SqlServerProtocolAdapter() {
         super(PROTOCOL_NAME, DEFAULT_PORT);
@@ -72,6 +82,7 @@ public class SqlServerProtocolAdapter extends AbstractProtocolAdapter {
         } catch (IOException e) {
             log.warn("SQL Server proxy session {} could not reach target {}:{}: {}",
                     sessionId, targetHost, targetPort, e.getMessage());
+            sendGatewayError(clientSocket, e);
             session.close();
             unregisterSession(session);
             closeQuietly(clientSocket);
@@ -92,10 +103,9 @@ public class SqlServerProtocolAdapter extends AbstractProtocolAdapter {
                     extractor::isOpaqueTunnel,
                     isRequireCleartextInspection(),
                     getRuntimeMetrics());
-            // No TDS result-set masking yet (deferred). Observation + risk only.
+            // No TDS result-set masking yet (deferred). Observation + risk + gateway ERROR.
             MessagePipeline pipeline = MessagePipeline.of(trafficInspector);
-            // No TDS-native error responder yet — policy deny closes the socket.
-            new DuplexRelay(sessionId, pipeline, null, rewriteLimits)
+            new DuplexRelay(sessionId, pipeline, GATEWAY_ERROR_RESPONDER, rewriteLimits)
                     .relay(clientSocket, targetSocket, probed.replayToBackend());
         } catch (IOException e) {
             log.warn("SQL Server proxy session {} closed: {}", sessionId, e.getMessage());
@@ -111,8 +121,16 @@ public class SqlServerProtocolAdapter extends AbstractProtocolAdapter {
     @Override
     protected void rejectClientConnection(Socket clientSocket) {
         log.warn("Rejecting SQL Server client connection from {}", clientSocket.getRemoteSocketAddress());
-        // No forged TDS ERROR token yet — close quietly (fail-closed for limit).
+        sendGatewayError(clientSocket, new GatewayException(GatewayErrorMapping.RESOURCE_EXHAUSTED));
         closeQuietly(clientSocket);
+    }
+
+    private static void sendGatewayError(Socket clientSocket, Throwable cause) {
+        try {
+            GATEWAY_ERROR_RESPONDER.respond(clientSocket.getOutputStream(), cause);
+        } catch (IOException e) {
+            log.debug("SQL Server proxy session failed to send gateway error: {}", e.getMessage());
+        }
     }
 
     private static void closeQuietly(Socket socket) {

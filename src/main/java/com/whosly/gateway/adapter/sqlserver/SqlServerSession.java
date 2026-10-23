@@ -7,14 +7,16 @@ import java.util.Optional;
 /**
  * SQL Server (TDS) per-client session state.
  *
- * <p>P0 keeps identity fields optional — filled when Login7 observation lands (P1).
- * Transparent relay does not require them.</p>
+ * <p>Identity fields are filled from Login7 observation (P1-lite). Last ERROR
+ * token fields are filled when a cleartext tabular ERROR is observed (P1).</p>
  */
 public class SqlServerSession extends ProtocolSession {
 
     private String loginUsername;
     private String initialDatabase;
     private int lastPacketType = -1;
+    private Integer lastErrorNumber;
+    private String lastErrorMessage;
 
     public SqlServerSession(String connectionId) {
         super("sqlserver", connectionId);
@@ -42,5 +44,21 @@ public class SqlServerSession extends ProtocolSession {
 
     public void setLastPacketType(int lastPacketType) {
         this.lastPacketType = lastPacketType;
+    }
+
+    public Optional<Integer> getLastErrorNumber() {
+        return Optional.ofNullable(lastErrorNumber);
+    }
+
+    public void setLastErrorNumber(int lastErrorNumber) {
+        this.lastErrorNumber = lastErrorNumber;
+    }
+
+    public Optional<String> getLastErrorMessage() {
+        return Optional.ofNullable(lastErrorMessage);
+    }
+
+    public void setLastErrorMessage(String lastErrorMessage) {
+        this.lastErrorMessage = lastErrorMessage;
     }
 }

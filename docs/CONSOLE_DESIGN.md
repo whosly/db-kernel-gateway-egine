@@ -2,7 +2,7 @@
 
 > 分支：`future/database-wire-protocol-foundation`  
 > 模型：**协议无关 · 实例中心 · 多实例多类型**。  
-> 适配器成熟度：MySQL / PostgreSQL **网关代理**可启停；SQL Server **透明代理**（P0 + P1-lite 观测，可创建）；Oracle stub。  
+> 适配器成熟度：MySQL / PostgreSQL **网关代理**可启停；SQL Server **透明代理**（P0 + P1 观测/拒绝，可创建）；Oracle stub。  
 > **现行 API**：`/console/api/v1`（契约见 [`CONSOLE_API_V1.md`](CONSOLE_API_V1.md)）。鉴权 / RBAC / 实例 ACL / SQL IDE / 主题见 [`CONSOLE_ARCHITECTURE.md`](CONSOLE_ARCHITECTURE.md) §16–§26。
 
 > **前后端完整架构（分层 / 契约 / 演进）**：见 [`CONSOLE_ARCHITECTURE.md`](CONSOLE_ARCHITECTURE.md)。  
@@ -169,7 +169,7 @@ console/GatewayInstanceRegistry.java  # 管控台视图 / 启停委托
 
 ## 9. 非目标（仍适用）
 
-- SQL Server 深度能力（脱敏 / Attention cancel / 深 token / Login7 路由）——保持 P0 + P1-lite
+- SQL Server 深度能力（脱敏 / Attention cancel / 深 token / Login7 路由）——保持 P0 + P1（ERROR 观测/拒绝已落地；脱敏等仍 P2）
 - Oracle wire
 - 外部 Prometheus / PagerDuty
 - 按 DB 品牌的独立页面或 API

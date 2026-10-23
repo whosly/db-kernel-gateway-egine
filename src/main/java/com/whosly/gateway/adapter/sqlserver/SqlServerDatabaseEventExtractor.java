@@ -14,7 +14,7 @@ import java.util.List;
 import java.util.Optional;
 
 /**
- * P1-lite TDS observation: Login7 identity labels + SQL_BATCH statements.
+ * TDS observation: Login7 identity, SQL_BATCH text, and backend ERROR tokens.
  *
  * <p>Bytes are never rewritten — the extractor only reads cleartext TDS frames
  * that {@link TdsMessageFraming} can bound. Encrypted tunnels after PreLogin
@@ -29,6 +29,7 @@ public class SqlServerDatabaseEventExtractor {
     private final String sessionId;
     private final SqlServerSession session;
     private final ByteArrayOutputStream pendingClient = new ByteArrayOutputStream();
+    private final ByteArrayOutputStream pendingTarget = new ByteArrayOutputStream();
     private boolean loginObserved;
     private boolean opaqueTunnel;
 
@@ -53,12 +54,19 @@ public class SqlServerDatabaseEventExtractor {
         if (opaqueTunnel || bytes == null || length <= 0) {
             return List.of();
         }
-        if (direction != TrafficDirection.CLIENT_TO_TARGET) {
-            // P1-lite: no backend token decode yet (ERROR token deferred).
-            return List.of();
+        if (direction == TrafficDirection.TARGET_TO_CLIENT) {
+            return inspectBuffered(pendingTarget, bytes, offset, length, true);
         }
-        pendingClient.write(bytes, offset, length);
-        byte[] buffered = pendingClient.toByteArray();
+        if (direction == TrafficDirection.CLIENT_TO_TARGET) {
+            return inspectBuffered(pendingClient, bytes, offset, length, false);
+        }
+        return List.of();
+    }
+
+    private List<DatabaseTrafficEvent> inspectBuffered(
+            ByteArrayOutputStream pending, byte[] bytes, int offset, int length, boolean fromTarget) {
+        pending.write(bytes, offset, length);
+        byte[] buffered = pending.toByteArray();
         int[] ends = TdsMessageFraming.completeMessageEnds(buffered, 0, buffered.length);
         if (ends.length == 0) {
             return List.of();
@@ -66,13 +74,17 @@ public class SqlServerDatabaseEventExtractor {
         List<DatabaseTrafficEvent> events = new ArrayList<>();
         int consumed = 0;
         for (int end : ends) {
-            events.addAll(observeClientMessage(buffered, consumed, end - consumed));
+            if (fromTarget) {
+                events.addAll(observeTargetMessage(buffered, consumed, end - consumed));
+            } else {
+                events.addAll(observeClientMessage(buffered, consumed, end - consumed));
+            }
             consumed = end;
         }
         if (consumed > 0) {
-            pendingClient.reset();
+            pending.reset();
             if (consumed < buffered.length) {
-                pendingClient.write(buffered, consumed, buffered.length - consumed);
+                pending.write(buffered, consumed, buffered.length - consumed);
             }
         }
         return events;
@@ -102,6 +114,66 @@ public class SqlServerDatabaseEventExtractor {
             case SQL_BATCH -> observeSqlBatch(payload);
             default -> List.of();
         };
+    }
+
+    private List<DatabaseTrafficEvent> observeTargetMessage(byte[] bytes, int offset, int length) {
+        if (length < TdsFrameCodec.HEADER_LENGTH) {
+            return List.of();
+        }
+        int typeCode = TdsFrameCodec.type(bytes, offset, offset + length);
+        if (session != null) {
+            session.setLastPacketType(typeCode);
+        }
+        TdsPacketType type = TdsPacketType.fromCode(typeCode);
+        if (type != TdsPacketType.TABULAR_RESULT) {
+            return List.of();
+        }
+        byte[] payload = concatenatePayloads(bytes, offset, length);
+        return observeErrorTokens(payload);
+    }
+
+    private List<DatabaseTrafficEvent> observeErrorTokens(byte[] payload) {
+        if (payload == null || payload.length == 0) {
+            return List.of();
+        }
+        List<DatabaseTrafficEvent> events = new ArrayList<>();
+        int cursor = 0;
+        while (cursor < payload.length) {
+            if ((payload[cursor] & 0xFF) != TdsErrorToken.TOKEN_TYPE) {
+                cursor++;
+                continue;
+            }
+            Optional<TdsErrorToken> parsed = TdsErrorToken.tryParse(payload, cursor);
+            if (parsed.isEmpty()) {
+                cursor++;
+                continue;
+            }
+            TdsErrorToken error = parsed.get();
+            if (session != null) {
+                session.setLastErrorNumber(error.number());
+                session.setLastErrorMessage(error.message());
+                session.putAttribute("last.error.number", String.valueOf(error.number()));
+                session.putAttribute("last.error.class", String.valueOf(error.severityClass()));
+                if (error.severityClass() >= 17) {
+                    session.tryTransitionTo(ProtocolConnectionState.CLOSING);
+                } else if (session.getState() == ProtocolConnectionState.EXECUTING
+                        || session.getState() == ProtocolConnectionState.STREAMING) {
+                    session.tryTransitionTo(ProtocolConnectionState.READY);
+                }
+            }
+            String label = error.number() + ":" + error.message();
+            log.debug("SQL Server session {} ERROR token observed: {}", sessionId, label);
+            events.add(DatabaseTrafficEvent.builder(protocolName, sessionId, "ERROR", label)
+                    .attribute("number", String.valueOf(error.number()))
+                    .attribute("state", String.valueOf(error.state()))
+                    .attribute("class", String.valueOf(error.severityClass()))
+                    .attribute("server", error.serverName())
+                    .attribute("proc", error.procName())
+                    .attribute("line", String.valueOf(error.lineNumber()))
+                    .build());
+            cursor += error.wireLength();
+        }
+        return events;
     }
 
     private List<DatabaseTrafficEvent> observeLogin7(byte[] payload) {
