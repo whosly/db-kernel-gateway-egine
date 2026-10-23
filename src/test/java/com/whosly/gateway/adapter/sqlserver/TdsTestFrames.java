@@ -213,7 +213,186 @@ final class TdsTestFrames {
         return out.toByteArray();
     }
 
-        static byte[] doneFinal() {
+
+    static byte[] moneyColumnMeta(String name, boolean small, boolean nullable) {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        out.write(TdsTokenType.COLMETADATA.getCode());
+        writeU16(out, 1);
+        writeU32(out, 0);
+        writeU16(out, nullable ? 1 : 0);
+        if (small) {
+            out.write(TdsTypeCode.MONEY4TYPE.getCode());
+        } else {
+            out.write(TdsTypeCode.MONEYTYPE.getCode());
+        }
+        writeBVarchar(out, name);
+        return out.toByteArray();
+    }
+
+    static byte[] moneynColumnMeta(String name, int maxLen, boolean nullable) {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        out.write(TdsTokenType.COLMETADATA.getCode());
+        writeU16(out, 1);
+        writeU32(out, 0);
+        writeU16(out, nullable ? 1 : 0);
+        out.write(TdsTypeCode.MONEYN.getCode());
+        out.write(maxLen & 0xFF);
+        writeBVarchar(out, name);
+        return out.toByteArray();
+    }
+
+    static byte[] moneyRow(String text, int width) {
+        TdsColumnDefinition col = new TdsColumnDefinition(
+                "m", width == 4 ? TdsTypeCode.MONEY4TYPE : TdsTypeCode.MONEYTYPE,
+                width, 0, 0, 0, width, false, null);
+        byte[] payload = TdsBinaryValues.encode(col,
+                com.whosly.gateway.masking.MaskedValue.ofText(text, StandardCharsets.UTF_8));
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        out.write(TdsTokenType.ROW.getCode());
+        writeRaw(out, payload);
+        return out.toByteArray();
+    }
+
+    static byte[] moneynRow(String text, int width) {
+        TdsColumnDefinition col = new TdsColumnDefinition(
+                "m", TdsTypeCode.MONEYN, width, 0, 0, 1, width, false, null);
+        byte[] payload = TdsBinaryValues.encode(col,
+                com.whosly.gateway.masking.MaskedValue.ofText(text, StandardCharsets.UTF_8));
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        out.write(TdsTokenType.ROW.getCode());
+        out.write(payload.length & 0xFF);
+        writeRaw(out, payload);
+        return out.toByteArray();
+    }
+
+    static byte[] textColumnMeta(String name, boolean ntext, boolean nullable) {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        out.write(TdsTokenType.COLMETADATA.getCode());
+        writeU16(out, 1);
+        writeU32(out, 0);
+        writeU16(out, nullable ? 1 : 0);
+        out.write(ntext ? TdsTypeCode.NTEXT.getCode() : TdsTypeCode.TEXT.getCode());
+        writeU32(out, 0x7FFFFFFF); // max length
+        writeRaw(out, new byte[]{0x09, 0x04, 0x00, 0x00, 0x00}); // collation
+        // PartTableName: 1 part "t"
+        out.write(1);
+        writeUsVarchar(out, "t");
+        writeBVarchar(out, name);
+        return out.toByteArray();
+    }
+
+    static byte[] imageColumnMeta(String name, boolean nullable) {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        out.write(TdsTokenType.COLMETADATA.getCode());
+        writeU16(out, 1);
+        writeU32(out, 0);
+        writeU16(out, nullable ? 1 : 0);
+        out.write(TdsTypeCode.IMAGE.getCode());
+        writeU32(out, 0x7FFFFFFF);
+        out.write(1);
+        writeUsVarchar(out, "t");
+        writeBVarchar(out, name);
+        return out.toByteArray();
+    }
+
+    static byte[] textPtrRow(String value, boolean unicode) {
+        byte[] data = unicode
+                ? value.getBytes(StandardCharsets.UTF_16LE)
+                : value.getBytes(StandardCharsets.UTF_8);
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        out.write(TdsTokenType.ROW.getCode());
+        out.write(16); // textptr len
+        for (int i = 0; i < 16; i++) {
+            out.write(0xAB);
+        }
+        for (int i = 0; i < 8; i++) {
+            out.write(0);
+        }
+        writeU32(out, data.length);
+        writeRaw(out, data);
+        return out.toByteArray();
+    }
+
+    static byte[] textPtrNullRow() {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        out.write(TdsTokenType.ROW.getCode());
+        writeU32(out, 0xFFFFFFFF);
+        return out.toByteArray();
+    }
+
+    static byte[] varbinaryMaxColumnMeta(String name, boolean nullable) {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        out.write(TdsTokenType.COLMETADATA.getCode());
+        writeU16(out, 1);
+        writeU32(out, 0);
+        writeU16(out, nullable ? 1 : 0);
+        out.write(TdsTypeCode.BIGVARBIN.getCode());
+        writeU16(out, TdsColumnDefinition.MAXLENGTH_PLP);
+        writeBVarchar(out, name);
+        return out.toByteArray();
+    }
+
+    static byte[] varbinaryPlpRow(byte[] data) {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        out.write(TdsTokenType.ROW.getCode());
+        long len = data.length;
+        for (int i = 0; i < 8; i++) {
+            out.write((int) ((len >> (8 * i)) & 0xFF));
+        }
+        writeU32(out, data.length);
+        writeRaw(out, data);
+        writeU32(out, 0);
+        return out.toByteArray();
+    }
+
+    static byte[] xmlColumnMeta(String name, boolean nullable) {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        out.write(TdsTokenType.COLMETADATA.getCode());
+        writeU16(out, 1);
+        writeU32(out, 0);
+        writeU16(out, nullable ? 1 : 0);
+        out.write(TdsTypeCode.XML.getCode());
+        out.write(0); // SCHEMA_PRESENT = 0
+        writeBVarchar(out, name);
+        return out.toByteArray();
+    }
+
+    static byte[] udtColumnMeta(String name, boolean nullable) {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        out.write(TdsTokenType.COLMETADATA.getCode());
+        writeU16(out, 1);
+        writeU32(out, 0);
+        writeU16(out, nullable ? 1 : 0);
+        out.write(TdsTypeCode.UDT.getCode());
+        writeU16(out, 8000); // MAX_BYTE_SIZE
+        writeBVarchar(out, "db");
+        writeBVarchar(out, "dbo");
+        writeBVarchar(out, "MyUdt");
+        writeUsVarchar(out, "MyUdt, Assembly");
+        writeBVarchar(out, name);
+        return out.toByteArray();
+    }
+
+    static byte[] plpNullRow() {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        out.write(TdsTokenType.ROW.getCode());
+        for (int i = 0; i < 8; i++) {
+            out.write(0xFF);
+        }
+        return out.toByteArray();
+    }
+
+    static byte[] plpOpaqueRow(byte[] data) {
+        return varbinaryPlpRow(data);
+    }
+
+    private static void writeUsVarchar(ByteArrayOutputStream out, String value) {
+        byte[] utf16 = value.getBytes(StandardCharsets.UTF_16LE);
+        writeU16(out, utf16.length / 2);
+        writeRaw(out, utf16);
+    }
+
+    static byte[] doneFinal() {
         return TdsDoneToken.encode(TdsDoneToken.STATUS_FINAL | TdsDoneToken.STATUS_COUNT, 0xC1, 1L);
     }
 

@@ -8,8 +8,9 @@ import java.util.Optional;
 /**
  * One COLMETADATA column with enough wire detail for ROW parse/rewrite.
  *
- * <p>{@link #plp} is true when maxlength is {@code 0xFFFF} (MAX / PLP). Text PLP
- * can be rewritten; TEXTPTR / XML / UDT / MONEY stay fail-closed.</p>
+ * <p>{@link #plp} is true when maxlength is {@code 0xFFFF} (MAX / PLP) or the type
+ * is XML/UDT. Text/binary PLP and TEXTPTR can be rewritten; XML/UDT non-null and
+ * TVP/unknown stay fail-closed.</p>
  */
 public final class TdsColumnDefinition {
 
@@ -110,20 +111,29 @@ public final class TdsColumnDefinition {
      */
     public boolean supportsNonNullRewrite() {
         if (type.layout() == TdsTypeCode.WireLayout.UNSUPPORTED
-                || type.layout() == TdsTypeCode.WireLayout.TEXTPTR) {
+                || type.layout() == TdsTypeCode.WireLayout.PLP_META) {
+            // XML/UDT non-null is MS-BINXML / CLR — no safe rewriter.
             return false;
         }
+        if (type.layout() == TdsTypeCode.WireLayout.TEXTPTR) {
+            return type == TdsTypeCode.TEXT
+                    || type == TdsTypeCode.NTEXT
+                    || type == TdsTypeCode.IMAGE;
+        }
         if (plp) {
-            // nvarchar(max) / varchar(max) / nchar / char MAX only — not varbinary(max)/xml.
             return type == TdsTypeCode.NVARCHAR
                     || type == TdsTypeCode.NCHAR
                     || type == TdsTypeCode.BIGVARCHR
-                    || type == TdsTypeCode.BIGCHAR;
+                    || type == TdsTypeCode.BIGCHAR
+                    || type == TdsTypeCode.BIGVARBIN
+                    || type == TdsTypeCode.BIGBINARY;
         }
         return type == TdsTypeCode.NVARCHAR
                 || type == TdsTypeCode.NCHAR
                 || type == TdsTypeCode.BIGVARCHR
                 || type == TdsTypeCode.BIGCHAR
+                || type == TdsTypeCode.BIGVARBIN
+                || type == TdsTypeCode.BIGBINARY
                 || type == TdsTypeCode.GUIDTYPE
                 || TdsBinaryValues.isEncodable(type);
     }
@@ -134,7 +144,7 @@ public final class TdsColumnDefinition {
                 || type.layout() == TdsTypeCode.WireLayout.UNSUPPORTED) {
             return false;
         }
-        if (plp) {
+        if (plp || type.layout() == TdsTypeCode.WireLayout.PLP_META) {
             return true; // PLP_NULL
         }
         return type.layout() == TdsTypeCode.WireLayout.BYTE_LEN

@@ -65,8 +65,8 @@ class TdsBinaryValuesTest {
     }
 
     @Test
-    void rejectsMoneyType() {
-        assertThat(TdsBinaryValues.isEncodable(TdsTypeCode.MONEYTYPE)).isFalse();
+    void moneyTypeIsEncodable() {
+        assertThat(TdsBinaryValues.isEncodable(TdsTypeCode.MONEYTYPE)).isTrue();
         assertThat(TdsBinaryValues.isEncodable(TdsTypeCode.DECIMALN)).isTrue();
     }
 }

@@ -26,8 +26,8 @@ import java.util.regex.Pattern;
  *
  * <p>Rules emit UTF-8 text constants ({@code 0}, {@code 1970-01-01}, …). This class
  * turns those strings into the little-endian layouts MS-TDS defines, and the reverse
- * for {@code toRuleValue}. Layouts we cannot reproduce exactly (MONEY, TEXTPTR, XML,
- * UDT, unknown) refuse rather than guess (fail-closed).</p>
+ * for {@code toRuleValue}. MONEY* is scale-4 integer; XML/UDT non-null (BINXML/CLR) and
+ * unknown layouts refuse rather than guess (fail-closed).</p>
  */
 public final class TdsBinaryValues {
 
@@ -75,6 +75,9 @@ public final class TdsBinaryValues {
             case DATETIMETYPE -> encodeDateTime(text, false, column.name());
             case DATETIM4TYPE -> encodeDateTime(text, true, column.name());
             case DATETIMN -> encodeDateTime(text, column.maxLength() == 4, column.name());
+            case MONEYTYPE -> encodeMoney(text, 8, column.name());
+            case MONEY4TYPE -> encodeMoney(text, 4, column.name());
+            case MONEYN -> encodeMoney(text, column.maxLength() == 4 ? 4 : 8, column.name());
             default -> throw new MaskingException("TDS type " + type.typeName()
                     + " cannot carry a non-null masked value: column " + column.name());
         };
@@ -105,6 +108,7 @@ public final class TdsBinaryValues {
             case DATETIME2N -> decodeDateTime2(wire, column.scale());
             case DATETIMEOFFSETN -> decodeDateTimeOffset(wire, column.scale());
             case DATETIMETYPE, DATETIM4TYPE, DATETIMN -> decodeLegacyDateTime(wire);
+            case MONEYTYPE, MONEY4TYPE, MONEYN -> decodeMoney(wire);
             default -> throw new MaskingException("cannot decode TDS type " + type.typeName()
                     + " for column " + column.name());
         };
@@ -116,6 +120,7 @@ public final class TdsBinaryValues {
                  FLT4TYPE, FLT8TYPE, FLOATN,
                  BITTYPE, BITN,
                  DECIMALN, NUMERICN,
+                 MONEYTYPE, MONEY4TYPE, MONEYN,
                  DATEN, TIMEN, DATETIME2N, DATETIMEOFFSETN,
                  DATETIMETYPE, DATETIM4TYPE, DATETIMN -> true;
             default -> false;
@@ -238,6 +243,38 @@ public final class TdsBinaryValues {
             unscaled = unscaled.negate();
         }
         return new BigDecimal(unscaled, scale).toPlainString();
+    }
+
+
+    private static byte[] encodeMoney(String text, int width, String columnName) {
+        BigDecimal decimal;
+        try {
+            decimal = new BigDecimal(text);
+        } catch (NumberFormatException e) {
+            throw new MaskingException("Masked value is not money for column " + columnName);
+        }
+        BigDecimal scaled = decimal.movePointRight(4).setScale(0, RoundingMode.HALF_UP);
+        BigInteger unscaled = scaled.toBigIntegerExact();
+        if (width == 4) {
+            if (unscaled.compareTo(BigInteger.valueOf(Integer.MIN_VALUE)) < 0
+                    || unscaled.compareTo(BigInteger.valueOf(Integer.MAX_VALUE)) > 0) {
+                throw new MaskingException("smallmoney out of range for column " + columnName);
+            }
+            return writeSignedLe(unscaled.intValue(), 4);
+        }
+        if (width == 8) {
+            if (unscaled.compareTo(BigInteger.valueOf(Long.MIN_VALUE)) < 0
+                    || unscaled.compareTo(BigInteger.valueOf(Long.MAX_VALUE)) > 0) {
+                throw new MaskingException("money out of range for column " + columnName);
+            }
+            return writeSignedLe(unscaled.longValue(), 8);
+        }
+        throw new MaskingException("Unsupported money width " + width + " for column " + columnName);
+    }
+
+    private static String decodeMoney(byte[] wire) {
+        long ticks = readSignedLe(wire, wire.length);
+        return BigDecimal.valueOf(ticks, 4).toPlainString();
     }
 
     private static byte[] encodeDate(String text, String columnName) {

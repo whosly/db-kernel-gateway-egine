@@ -43,8 +43,8 @@ public enum TdsTypeCode {
     BIGCHAR(0xAF, ColumnMetadata.Category.TEXT, WireLayout.USHORT_LEN, "char"),
     NVARCHAR(0xE7, ColumnMetadata.Category.TEXT, WireLayout.USHORT_LEN, "nvarchar"),
     NCHAR(0xEF, ColumnMetadata.Category.TEXT, WireLayout.USHORT_LEN, "nchar"),
-    UDT(0xF0, ColumnMetadata.Category.OTHER, WireLayout.UNSUPPORTED, "udt"),
-    XML(0xF1, ColumnMetadata.Category.OTHER, WireLayout.UNSUPPORTED, "xml"),
+    UDT(0xF0, ColumnMetadata.Category.OTHER, WireLayout.PLP_META, "udt"),
+    XML(0xF1, ColumnMetadata.Category.OTHER, WireLayout.PLP_META, "xml"),
     TVP(0xF3, ColumnMetadata.Category.OTHER, WireLayout.UNSUPPORTED, "table");
 
     /** How a ROW value is length-prefixed / nulled on the wire. */
@@ -53,6 +53,8 @@ public enum TdsTypeCode {
         BYTE_LEN,
         USHORT_LEN,
         TEXTPTR,
+        /** Always PLP on the wire; TYPE_INFO carries XML_INFO / UDT_INFO, not USHORTMAXLEN. */
+        PLP_META,
         UNSUPPORTED
     }
 

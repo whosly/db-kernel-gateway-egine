@@ -28,8 +28,9 @@ import java.util.UUID;
  *
  * <p><b>Maturity (honest):</b> transparent {@link DuplexRelay} plus cleartext
  * observation (Login7, SQL_BATCH, RPC name, Bulk, ERROR, Attention/DONE_ATTN),
- * gateway-side ERROR+DONE rejects, optional result-set ROW masking (text/uuid,
- * fail-closed on NBCROW/PLP/unknown), and {@code sp_reset_connection} pool reset.
+ * gateway-side ERROR+DONE rejects, optional result-set ROW/NBCROW masking
+ * (text/guid/numeric/temporal/money/TEXTPTR/varbinary PLP; XML/UDT NULL-only;
+ * TVP/unknown fail-closed), and {@code sp_reset_connection} pool reset.
  * Still <em>not</em> MySQL/PostgreSQL parity — no Login7-driven {@code acquire}
  * routing, no deep RPC parameter rewrite. See {@code docs/SQLSERVER_TDS_PLAN.md}.</p>
  *

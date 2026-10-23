@@ -27,11 +27,11 @@ import java.util.Optional;
 /**
  * Applies masking rules to TDS {@code ROW} tokens inside {@code TABULAR_RESULT}.
  *
- * <p>Fail-closed (rule 8.2): incomplete COLMETADATA, TEXTPTR/MONEY/XML/unknown
- * non-null rewrites, and rows that cannot be re-encoded are denied rather than
- * approximated. ROW and NBCROW text/guid/numeric/temporal (including text PLP)
- * are rewritten when rules match. With no matching rules the message is forwarded
- * byte-identical.</p>
+ * <p>Fail-closed (rule 8.2): incomplete COLMETADATA, XML/UDT non-null (BINXML/CLR),
+ * TVP/unknown layouts, and rows that cannot be re-encoded are denied rather than
+ * approximated. ROW and NBCROW text/guid/numeric/temporal/money/TEXTPTR/varbinary
+ * (including PLP) are rewritten when rules match; XML/UDT accept NULL-only.
+ * With no matching rules the message is forwarded byte-identical.</p>
  */
 public final class SqlServerResultSetMaskingInterceptor implements MessageInterceptor {
 
@@ -193,12 +193,16 @@ public final class SqlServerResultSetMaskingInterceptor implements MessageInterc
             String text = new String(wire.bytes(), StandardCharsets.UTF_16LE);
             return MaskedValue.ofText(text, StandardCharsets.UTF_8);
         }
-        if (type == TdsTypeCode.BIGVARCHR || type == TdsTypeCode.BIGCHAR) {
+        if (type == TdsTypeCode.BIGVARCHR || type == TdsTypeCode.BIGCHAR || type == TdsTypeCode.TEXT) {
             // Treat as UTF-8 for ASCII-safe masks (same as encode path).
             return MaskedValue.ofText(new String(wire.bytes(), StandardCharsets.UTF_8), StandardCharsets.UTF_8);
         }
         if (type == TdsTypeCode.GUIDTYPE) {
             return MaskedValue.ofText(decodeGuid(wire.bytes()), StandardCharsets.UTF_8);
+        }
+        if (type == TdsTypeCode.BIGVARBIN || type == TdsTypeCode.BIGBINARY || type == TdsTypeCode.IMAGE) {
+            // Binary rules replace wholesale; expose wire bytes as opaque UTF-8 text for logging.
+            return MaskedValue.ofText(new String(wire.bytes(), StandardCharsets.UTF_8), StandardCharsets.UTF_8);
         }
         if (TdsBinaryValues.isEncodable(type)) {
             return MaskedValue.ofText(TdsBinaryValues.decodeToText(column, wire.bytes()), StandardCharsets.UTF_8);

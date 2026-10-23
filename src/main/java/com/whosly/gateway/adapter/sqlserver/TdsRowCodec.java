@@ -14,9 +14,9 @@ import java.util.UUID;
 /**
  * Parse / re-encode TDS {@code ROW} ({@code 0xD1}) values for known layouts.
  *
- * <p>Supports ROW and NBCROW for known layouts, including non-null PLP text and
- * numeric/temporal values via {@link TdsBinaryValues}. TEXTPTR, MONEY, XML/UDT and
- * unknown layouts return empty so the interceptor can deny rather than guess.</p>
+ * <p>Supports ROW and NBCROW for known layouts, including TEXTPTR (text/ntext/image),
+ * MONEY*, VARBINARY PLP, numeric/temporal via {@link TdsBinaryValues}, and PLP NULL
+ * for XML/UDT. Unknown / TVP layouts return empty so the interceptor can deny.</p>
  */
 public final class TdsRowCodec {
 
@@ -156,7 +156,8 @@ public final class TdsRowCodec {
             case FIXED -> readFixed(payload, offset, column);
             case BYTE_LEN -> readByteLen(payload, offset, column);
             case USHORT_LEN -> readUshortLen(payload, offset, column);
-            case TEXTPTR, UNSUPPORTED -> Optional.empty();
+            case TEXTPTR -> readTextPtr(payload, offset);
+            case PLP_META, UNSUPPORTED -> Optional.empty();
         };
     }
 
@@ -204,6 +205,43 @@ public final class TdsRowCodec {
         return Optional.of(new ValueParse(MaskedValue.of(bytes), dataStart + len));
     }
 
+
+    /**
+     * TEXT/NTEXT/IMAGE: NULL is LONGLEN {@code 0xFFFFFFFF} with no textptr/timestamp;
+     * non-null is {@code B_VARBYTE textptr} + 8-byte timestamp + LONGLEN + data.
+     */
+    private static Optional<ValueParse> readTextPtr(byte[] payload, int offset) {
+        if (offset + 4 > payload.length) {
+            return Optional.empty();
+        }
+        // NULL marker (no textptr / timestamp).
+        if (TdsColMetadata.u32le(payload, offset) == 0xFFFFFFFF) {
+            return Optional.of(new ValueParse(MaskedValue.ofNull(), offset + 4));
+        }
+        int tpLen = payload[offset] & 0xFF;
+        int cursor = offset + 1;
+        if (cursor + tpLen + 8 + 4 > payload.length) {
+            return Optional.empty();
+        }
+        cursor += tpLen; // skip text pointer
+        cursor += 8;     // skip timestamp
+        int dataLen = TdsColMetadata.u32le(payload, cursor);
+        cursor += 4;
+        if (dataLen == -1) {
+            // LONGLEN null after textptr (unexpected but tolerated).
+            return Optional.of(new ValueParse(MaskedValue.ofNull(), cursor));
+        }
+        if (dataLen < 0) {
+            return Optional.empty();
+        }
+        if (cursor + dataLen > payload.length) {
+            return Optional.empty();
+        }
+        byte[] bytes = new byte[dataLen];
+        System.arraycopy(payload, cursor, bytes, 0, dataLen);
+        return Optional.of(new ValueParse(MaskedValue.of(bytes), cursor + dataLen));
+    }
+
     private static Optional<ValueParse> readPlp(byte[] payload, int offset) {
         if (offset + 8 > payload.length) {
             return Optional.empty();
@@ -242,6 +280,7 @@ public final class TdsRowCodec {
             case FIXED -> writeFixed(out, column, value);
             case BYTE_LEN -> writeByteLen(out, column, value);
             case USHORT_LEN -> writeUshortLen(out, column, value);
+            case TEXTPTR -> writeTextPtr(out, column, value);
             default -> throw new IllegalArgumentException("unsupported layout for encode: " + column.type());
         }
     }
@@ -284,6 +323,27 @@ public final class TdsRowCodec {
         out.write(bytes.length & 0xFF);
         out.write((bytes.length >> 8) & 0xFF);
         out.write(bytes, 0, bytes.length);
+    }
+
+
+    private static void writeTextPtr(ByteArrayOutputStream out, TdsColumnDefinition column, MaskedValue value) {
+        if (value.isNull()) {
+            writeU32le(out, 0xFFFFFFFF);
+            return;
+        }
+        byte[] bytes = encodeNonNullBytes(column, value);
+        // Synthesize a 16-byte zero textptr + zero timestamp (result clients use Data only).
+        out.write(16);
+        for (int i = 0; i < 16; i++) {
+            out.write(0);
+        }
+        for (int i = 0; i < 8; i++) {
+            out.write(0);
+        }
+        writeU32le(out, bytes.length);
+        if (bytes.length > 0) {
+            out.write(bytes, 0, bytes.length);
+        }
     }
 
     private static void writePlp(ByteArrayOutputStream out, TdsColumnDefinition column, MaskedValue value) {
@@ -329,13 +389,17 @@ public final class TdsRowCodec {
             String text = value.asText(StandardCharsets.UTF_8);
             return text.getBytes(StandardCharsets.UTF_16LE);
         }
-        if (type == TdsTypeCode.BIGVARCHR || type == TdsTypeCode.BIGCHAR) {
+        if (type == TdsTypeCode.BIGVARCHR || type == TdsTypeCode.BIGCHAR || type == TdsTypeCode.TEXT) {
             // Collation-aware code pages are not terminated here; treat as UTF-8 bytes
             // of the masked text (ASCII-safe masks / encrypt hex stay valid).
             return value.asText(StandardCharsets.UTF_8).getBytes(StandardCharsets.UTF_8);
         }
         if (type == TdsTypeCode.GUIDTYPE) {
             return encodeGuid(value);
+        }
+        if (type == TdsTypeCode.BIGVARBIN || type == TdsTypeCode.BIGBINARY || type == TdsTypeCode.IMAGE) {
+            // Fixed/null rules supply UTF-8 bytes of the constant (or prior wire bytes).
+            return value.bytes();
         }
         if (TdsBinaryValues.isEncodable(type)) {
             return TdsBinaryValues.encode(column, value);

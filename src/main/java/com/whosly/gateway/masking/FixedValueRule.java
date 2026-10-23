@@ -23,7 +23,8 @@ public final class FixedValueRule extends AbstractMaskingRule {
             ColumnMetadata.Category.TEXT,
             ColumnMetadata.Category.NUMERIC,
             ColumnMetadata.Category.TEMPORAL,
-            ColumnMetadata.Category.UUID);
+            ColumnMetadata.Category.UUID,
+            ColumnMetadata.Category.BINARY);
 
     private final String fixedValue;
     private final Charset charset;

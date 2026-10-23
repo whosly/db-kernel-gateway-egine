@@ -4,15 +4,15 @@
 > **更新原则**：只写有代码/测试/配置证据的结论；「规划中」不得写成「已实现」。  
 > **导航**：见 [README.md](README.md)。
 >
-> **近况**：Vue console Phase A/A+/B/B+ + **C partial / E lite** — 审计状态 · 进程内 metrics history · 风控规则热挂 · 连接池徽章 · 可选 read-token；**UI**：改版 + 浅色默认主题切换 + **UX 微抛光**；**脱敏**：MySQL/PG decimal/时间/uuid；**SQL Server P2**：ROW/**NBCROW** 脱敏（text/guid/**numeric/temporal**/text-PLP）+ RPC/Bulk 观测 + `sp_reset_connection`；P1 ERROR/Attention/Login7 hint 仍在；TEXTPTR/MONEY/XML 与 Docker 冒烟仍缺口。**boundary**：`runtime`↛`console`（`runtime.spi`）+ console API controllers 按域拆分。
+> **近况**：Vue console Phase A/A+/B/B+ + **C partial / E lite** — 审计状态 · 进程内 metrics history · 风控规则热挂 · 连接池徽章 · 可选 read-token；**UI**：改版 + 浅色默认主题切换 + **UX 微抛光**；**脱敏**：MySQL/PG decimal/时间/uuid；**SQL Server P2**：ROW/**NBCROW** 脱敏扩至 **TEXTPTR/MONEY*/VARBINARY(+MAX)**；XML/UDT **仅 NULL**；TVP/未知仍 fail-closed；RPC/Bulk 观测 + `sp_reset_connection`；P1 ERROR/Attention/Login7 hint 仍在；本环境 Docker 冒烟仍缺口。**boundary**：`runtime`↛`console`（`runtime.spi`）+ console API controllers 按域拆分。
 
 ## 1. 构建与测试基线
 
 | 项 | 现状 | 证据 |
 |---|---|---|
-| 非集成 `@Test`/`@ParameterizedTest` 注解数 | **658** | `mvn test` Results；排除 `*IntegrationTest` |
+| 非集成 `@Test`/`@ParameterizedTest` 注解数 | **665** | `mvn test` Results；排除 `*IntegrationTest` |
 | 集成测试 | 14 条注解；默认 surefire **排除** `*IntegrationTest`；无 local props 时 `-Pintegration-test` **assumeTrue 跳过**；本机有库时可 14/14 绿 | `pom.xml` excludes；跳过策略见 `docs/OPS.md` / `integration-test.properties` |
-| 本环境 `mvn test`（`JAVA_HOME`=JDK 17） | **BUILD SUCCESS：Tests run 658, Failures 0, Errors 0, Skipped 0** | surefire；含 SQL Server P2（ROW/NBCROW 脱敏含 numeric/temporal/text-PLP + reset/RPC·Bulk）+ Attention/Login7 hint + MySQL/PG decimal/时间/uuid 脱敏 + 告警规则 + 列加密 E2E + SQL IDE + form/token/open 鉴权 + RBAC/实例 ACL/工作台会话联动 |
+| 本环境 `mvn test`（`JAVA_HOME`=JDK 17） | **BUILD SUCCESS：Tests run 665, Failures 0, Errors 0, Skipped 0** | surefire；含 SQL Server P2（ROW/NBCROW 脱敏含 numeric/temporal/text-PLP/**TEXTPTR/MONEY*/VARBINARY(+MAX)**；XML/UDT 仅 NULL + reset/RPC·Bulk）+ Attention/Login7 hint + MySQL/PG decimal/时间/uuid 脱敏 + 告警规则 + 列加密 E2E + SQL IDE + form/token/open 鉴权 + RBAC/实例 ACL/工作台会话联动 |
 | `pom.xml` 编译目标 | `maven.compiler.source/target=17` | **保持 17**；不升到 21 |
 
 **结论**：编译目标保持 17；VT 仅在 JDK 21+ 运行期启用。管控台已完成 Phase B/B+/C partial/E lite，并完成本轮**实例编辑/克隆/导入/筛选/批量**与 **SQL 工作台经代理 listenPort**；完整 SQL IDE（MaxGUI-lite）与本地 form/token 鉴权 + HTTPS 模板已落地；OIDC 为配置路径；**审计 spool 内容浏览**已落地；**SQL 多语句 + 尽力而为取消**已落地；**列加密 E2E**（密钥轮换 + verify）已落地（非 KMS）；**管控台告警阈值**（H2 + 进程内评估）已落地；**细粒度 RBAC**（VIEWER/OPERATOR/ADMIN + 权限串，§22）已落地；**SQL 工作台会话联动**（工作台执行中 ↔ 代理会话，§23）已落地；**实例级 ACL**（§24，用户/角色↔实例权限收窄）已落地；外部 Prometheus·Grafana / PagerDuty 仍不做。见 P0 / P1 / P2。
@@ -22,9 +22,9 @@
 | 主题 | 状态 | 摘要 |
 |---|---|---|
 | MySQL / PG 透明转发 | **done** | 阻塞 `ServerSocket` + 双工 `DuplexRelay` 逐字节转发 |
-| SQL Server（TDS）透明转发 | **partial（P0 + P1 + P2）** | `SqlServerProtocolAdapter` + framing + Login7/SQL_BATCH/**ERROR**/Attention/DONE_ATTN/**RPC**/Bulk 观测 + 网关 ERROR+DONE；**ROW/NBCROW 脱敏**（text/guid/int/float/bit/decimal/date/time/datetime2/datetimeoffset/legacy datetime + text PLP）；TEXTPTR/MONEY/XML 仍 fail-closed；**`SqlServerBackendSessionReset`**；Login7 `routing.hint`（**不**驱动 acquire）；Compose + integration harness（无 Docker skip）；计划 [`SQLSERVER_TDS_PLAN.md`](SQLSERVER_TDS_PLAN.md) |
+| SQL Server（TDS）透明转发 | **partial（P0 + P1 + P2）** | `SqlServerProtocolAdapter` + framing + Login7/SQL_BATCH/**ERROR**/Attention/DONE_ATTN/**RPC**/Bulk 观测 + 网关 ERROR+DONE；**ROW/NBCROW 脱敏**（text/guid/numeric/temporal + text/binary PLP + **TEXTPTR** + **MONEY***；XML/UDT **仅 NULL**；TVP/未知 fail-closed）；**`SqlServerBackendSessionReset`**；Login7 `routing.hint`（**不**驱动 acquire）；Compose + integration harness（无 Docker skip）；计划 [`SQLSERVER_TDS_PLAN.md`](SQLSERVER_TDS_PLAN.md) |
 | 明文观测 / 状态机 | **partial** | 命令/消息抽取与会话状态齐全；TLS/压缩后 opaque |
-| 结果集脱敏 / 列加密 | **partial（improved）** | MySQL/PG 接线；**SQL Server ROW/NBCROW** 脱敏（text/guid/numeric/temporal + text PLP；TEXTPTR/MONEY/XML 仍 fail-closed）；**encrypt E2E**：`enc:v1:<keyId>:` 密文、管控台密钥 CRUD/轮换/verify、缺钥失败闭合；**仍非**完整 KMS/HSM；MySQL/PG decimal/时间/uuid 已可非空改写，geometry/interval 等仍 fail-closed（§4.2） |
+| 结果集脱敏 / 列加密 | **partial（improved）** | MySQL/PG 接线；**SQL Server ROW/NBCROW** 脱敏（text/guid/numeric/temporal + text/binary PLP + TEXTPTR + MONEY*；XML/UDT 仅 NULL；TVP/未知 fail-closed）；**encrypt E2E**：`enc:v1:<keyId>:` 密文、管控台密钥 CRUD/轮换/verify、缺钥失败闭合；**仍非**完整 KMS/HSM；MySQL/PG decimal/时间/uuid 已可非空改写，geometry/interval 等仍 fail-closed（§4.2） |
 | 审计 spool / JDBC ship | **partial（improved）** | 实现齐全；专用单测（P0-3）含 **H2 JDBC sink 行断言**；shipper 状态；H2 自动建表；**管控台可只读浏览** spool/环/JDBC（`GET /console/api/v1/audit/traffic`）；默认关闭 |
 | 风控策略 | **partial** | `DenyListDatabaseRiskPolicy` + `gateway.risk.*` 装配；空配置仍 `allowAll()` |
 | 连接治理 | **partial** | `max-connections`、CIDR、idle timeout 有；配置键见 §3 |
@@ -99,7 +99,7 @@ Spring 实际读取的键（`@Value`）与默认 `application.yml`、模板一�
 | P2-4 | Metrics 出口 | **partial（improved）** | 每 listener 独立 metrics；overview 求和 + `legacyMetrics`；**E lite**：`MetricsHistorySampler` + `GET …/metrics/history` + Overview SVG 火花图（内存环） | 外部 Prometheus/Grafana 非必需 | 可选后续接 Micrometer；告警阈值见 `docs/OPS.md` |
 | P2-5 | 审计测试与运维手册 | **partial（improved）** | P0-3 + **JDBC H2 lab 验收**（`JdbcAuditDestination` ensureSchema/幂等；`application-audit-jdbc-h2-template.yml`；OPS 一路径；管控台 status 含 `jdbcRowCount`/`lastShip`；traffic `source=jdbc`） | 外部分离 MySQL/PG 审计库需运维自建；非业务库 |
 | P2-6 | 集成测试在 CI 可复现 | **partial（improved）** | 跳过策略写入 `integration-test.properties` + OPS；`-Pintegration-test` 无 props → `assumeTrue` skip；`-Pintegration-testcontainers` **stub only** | 真 Testcontainers 接线另开；默认 `mvn test` 仍不需 Docker |
-| P2-7 | 多库扩展点 / Oracle·SQL Server | **partial（SQL Server P0+P1+P2）** | 第三库定为 **SQL Server TDS**（非 Oracle）。透明 `DuplexRelay` + Login7/SQL_BATCH/ERROR/Attention/DONE_ATTN/**RPC**/Bulk 观测 + 网关 ERROR+DONE + Login7 `routing.hint`（probe 仍 empty）+ **ROW/NBCROW 脱敏**（`SqlServerResultSetMaskingInterceptor` + `TdsBinaryValues`/`TdsRowCodec`；text/guid/numeric/temporal + text PLP；TEXTPTR/MONEY/XML fail-closed）+ **`SqlServerBackendSessionReset`** + Compose `sqlserver` profile（11433）+ `SqlServerGatewayIntegrationTest`（assumeTrue skip）。模板 31433→1433；管控台经 listenPort + `mssql-jdbc`。Oracle 仍 stub。**仍无** Login7 **驱动**选路 / 本环境真库冒烟证明（无 docker/podman） | Login7 选路需 PreLogin 伪造（非透明）；Oracle 另开；有 Docker 时冒烟 |
+| P2-7 | 多库扩展点 / Oracle·SQL Server | **partial（SQL Server P0+P1+P2）** | 第三库定为 **SQL Server TDS**（非 Oracle）。透明 `DuplexRelay` + Login7/SQL_BATCH/ERROR/Attention/DONE_ATTN/**RPC**/Bulk 观测 + 网关 ERROR+DONE + Login7 `routing.hint`（probe 仍 empty）+ **ROW/NBCROW 脱敏**（`SqlServerResultSetMaskingInterceptor` + `TdsBinaryValues`/`TdsRowCodec`；text/guid/numeric/temporal + text/binary PLP + **TEXTPTR** + **MONEY***；XML/UDT **仅 NULL**；TVP/未知 fail-closed）+ **`SqlServerBackendSessionReset`** + Compose `sqlserver` profile（11433）+ `SqlServerGatewayIntegrationTest`（assumeTrue skip）。模板 31433→1433；管控台经 listenPort + `mssql-jdbc`。Oracle 仍 stub。**仍无** Login7 **驱动**选路 / 本环境真库冒烟证明（无 docker/podman） | Login7 选路需 PreLogin 伪造（非透明）；Oracle 另开；有 Docker 时冒烟 |
 
 
 ### 4.1 TLS / 明文强制（产品策略，P1-1）
@@ -144,7 +144,7 @@ Spring 实际读取的键（`@Value`）与默认 `application.yml`、模板一�
 |---|---|---|
 | MySQL | 整数/浮点、长度前缀字符串族、**bit**、**decimal**（ASCII lenenc）、**date/time/datetime/timestamp** | `geometry`、未知 type |
 | PostgreSQL | text 族/bytea/json(b)、**int2/4/8**、**bool**、**float4/8**、**numeric**、**date/time/timestamp/timestamptz**、**uuid** | `interval`、`money`、`timetz`、未知 OID |
-| SQL Server（TDS） | **nvarchar/nchar/varchar/char**（含 text **PLP/MAX**）、**uniqueidentifier**；**INT*/INTN/FLOAT*/FLOATN/BIT*/DECIMALN/NUMERICN**；**DATEN/TIMEN/DATETIME2N/DATETIMEOFFSETN/DATETIM*/DATETIMN**；NBCROW 位图改写；NULL 规则对 BYTE_LEN/USHORT_LEN/PLP_NULL | **TEXTPTR**（text/ntext/image）非空；**MONEY***；**XML/UDT/TVP**/VARBINARY(MAX)；未知 type |
+| SQL Server（TDS） | **nvarchar/nchar/varchar/char**（含 text **PLP/MAX**）、**uniqueidentifier**；**INT*/INTN/FLOAT*/FLOATN/BIT*/DECIMALN/NUMERICN**；**DATEN/TIMEN/DATETIME2N/DATETIMEOFFSETN/DATETIM*/DATETIMN**；**MONEY*/MONEY4/MONEYN**；**TEXT/NTEXT/IMAGE（TEXTPTR）**；**VARBINARY/BINARY（含 MAX/PLP）**；NBCROW 位图改写；NULL 规则对 BYTE_LEN/USHORT_LEN/TEXTPTR/PLP_NULL（含 **XML/UDT**） | **XML/UDT 非空**（MS-BINXML / CLR，无安全编码器）；**TVP**；未知 type |
 
 无规则时三条路径均保持透明。
 

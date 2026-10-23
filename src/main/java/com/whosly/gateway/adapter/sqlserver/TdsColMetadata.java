@@ -98,6 +98,7 @@ public final class TdsColMetadata {
             case BYTE_LEN -> parseByteLenTypeInfo(payload, cursor, type);
             case USHORT_LEN -> parseUshortLenTypeInfo(payload, cursor, type);
             case TEXTPTR -> parseTextPtrTypeInfo(payload, cursor, type);
+            case PLP_META -> parsePlpMetaTypeInfo(payload, cursor, type);
             case UNSUPPORTED -> Optional.empty();
         };
     }
@@ -167,6 +168,67 @@ public final class TdsColMetadata {
             cursor += 5;
         }
         return Optional.of(new TypeInfo(type, maxLen, 0, 0, 0, false, collation, cursor));
+    }
+
+    private static Optional<TypeInfo> parsePlpMetaTypeInfo(byte[] payload, int cursor, TdsTypeCode type) {
+        if (type == TdsTypeCode.XML) {
+            if (cursor >= payload.length) {
+                return Optional.empty();
+            }
+            int schemaPresent = payload[cursor] & 0xFF;
+            cursor++;
+            if (schemaPresent == 0x01) {
+                Optional<NameParse> db = readBVarchar(payload, cursor);
+                if (db.isEmpty()) {
+                    return Optional.empty();
+                }
+                cursor = db.get().nextOffset();
+                Optional<NameParse> schema = readBVarchar(payload, cursor);
+                if (schema.isEmpty()) {
+                    return Optional.empty();
+                }
+                cursor = schema.get().nextOffset();
+                Optional<NameParse> collection = readUsVarchar(payload, cursor);
+                if (collection.isEmpty()) {
+                    return Optional.empty();
+                }
+                cursor = collection.get().nextOffset();
+            } else if (schemaPresent != 0x00) {
+                return Optional.empty();
+            }
+            // XML ROW values are always PLP (MS-BINXML). Non-null rewrite stays fail-closed.
+            return Optional.of(new TypeInfo(type, TdsColumnDefinition.MAXLENGTH_PLP, 0, 0, 0, true, null, cursor));
+        }
+        if (type == TdsTypeCode.UDT) {
+            if (cursor + 2 > payload.length) {
+                return Optional.empty();
+            }
+            int maxByteSize = u16le(payload, cursor);
+            cursor += 2;
+            Optional<NameParse> db = readBVarchar(payload, cursor);
+            if (db.isEmpty()) {
+                return Optional.empty();
+            }
+            cursor = db.get().nextOffset();
+            Optional<NameParse> schema = readBVarchar(payload, cursor);
+            if (schema.isEmpty()) {
+                return Optional.empty();
+            }
+            cursor = schema.get().nextOffset();
+            Optional<NameParse> typeName = readBVarchar(payload, cursor);
+            if (typeName.isEmpty()) {
+                return Optional.empty();
+            }
+            cursor = typeName.get().nextOffset();
+            Optional<NameParse> assembly = readUsVarchar(payload, cursor);
+            if (assembly.isEmpty()) {
+                return Optional.empty();
+            }
+            cursor = assembly.get().nextOffset();
+            // UDT ROW values use PLP; non-null rewrite stays fail-closed (MS-SSCLRT).
+            return Optional.of(new TypeInfo(type, maxByteSize, 0, 0, 0, true, null, cursor));
+        }
+        return Optional.empty();
     }
 
     private static Optional<Integer> skipPartTableName(byte[] payload, int offset) {
