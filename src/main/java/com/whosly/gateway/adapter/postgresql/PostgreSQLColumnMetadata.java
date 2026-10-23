@@ -90,7 +90,8 @@ public final class PostgreSQLColumnMetadata {
                     case "boolean" -> ColumnMetadata.Category.BOOLEAN;
                     case "date-time" -> ColumnMetadata.Category.TEMPORAL;
                     case "binary" -> ColumnMetadata.Category.BINARY;
-                    // uuid, arrays, network, internal and anything unknown: a text rule
+                    case "uuid" -> ColumnMetadata.Category.UUID;
+                    // arrays, network, internal and anything unknown: a text rule
                     // cannot produce a value the client's type model accepts.
                     default -> ColumnMetadata.Category.OTHER;
                 })

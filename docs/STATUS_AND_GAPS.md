@@ -10,9 +10,9 @@
 
 | 项 | 现状 | 证据 |
 |---|---|---|
-| 非集成 `@Test`/`@ParameterizedTest` 注解数 | **608** | `mvn test` Results；排除 `*IntegrationTest` |
+| 非集成 `@Test`/`@ParameterizedTest` 注解数 | **613** | `mvn test` Results；排除 `*IntegrationTest` |
 | 集成测试 | 14 条注解；默认 surefire **排除** `*IntegrationTest`；无 local props 时 `-Pintegration-test` **assumeTrue 跳过**；本机有库时可 14/14 绿 | `pom.xml` excludes；跳过策略见 `docs/OPS.md` / `integration-test.properties` |
-| 本环境 `mvn test`（`JAVA_HOME`=JDK 17） | **BUILD SUCCESS：Tests run 608, Failures 0, Errors 0, Skipped 0** | surefire；含告警阈值 + 列加密 E2E + SQL IDE + form/token/open 鉴权 + RBAC/实例 ACL/工作台会话联动（2026-10-21 @ `47a151d` 复核） |
+| 本环境 `mvn test`（`JAVA_HOME`=JDK 17） | **BUILD SUCCESS：Tests run 613, Failures 0, Errors 0, Skipped 0** | surefire；含 decimal/时间/uuid 脱敏编码（2026-10-23）+ 告警阈值 + 列加密 E2E + SQL IDE + form/token/open 鉴权 + RBAC/实例 ACL/工作台会话联动 |
 | `pom.xml` 编译目标 | `maven.compiler.source/target=17` | **保持 17**；不升到 21 |
 
 **结论**：编译目标保持 17；VT 仅在 JDK 21+ 运行期启用。管控台已完成 Phase B/B+/C partial/E lite，并完成本轮**实例编辑/克隆/导入/筛选/批量**与 **SQL 工作台经代理 listenPort**；完整 SQL IDE（MaxGUI-lite）与本地 form/token 鉴权 + HTTPS 模板已落地；OIDC 为配置路径；**审计 spool 内容浏览**已落地；**SQL 多语句 + 尽力而为取消**已落地；**列加密 E2E**（密钥轮换 + verify）已落地（非 KMS）；**管控台告警阈值**（H2 + 进程内评估）已落地；**细粒度 RBAC**（VIEWER/OPERATOR/ADMIN + 权限串，§22）已落地；**SQL 工作台会话联动**（工作台执行中 ↔ 代理会话，§23）已落地；**实例级 ACL**（§24，用户/角色↔实例权限收窄）已落地；外部 Prometheus·Grafana / PagerDuty 仍不做。见 P0 / P1 / P2。
@@ -24,7 +24,7 @@
 | MySQL / PG 透明转发 | **done** | 阻塞 `ServerSocket` + 双工 `DuplexRelay` 逐字节转发 |
 | SQL Server（TDS）透明转发 | **partial（P0 + P1-lite 观测）** | `SqlServerProtocolAdapter` + framing + **明文** Login7/SQL_BATCH 观测；**无**脱敏/cancel/深 token/协议 reset；计划 [`SQLSERVER_TDS_PLAN.md`](SQLSERVER_TDS_PLAN.md) |
 | 明文观测 / 状态机 | **partial** | 命令/消息抽取与会话状态齐全；TLS/压缩后 opaque |
-| 结果集脱敏 / 列加密 | **partial（improved）** | MySQL/PG 接线；**encrypt E2E**：`enc:v1:<keyId>:` 密文、管控台密钥 CRUD/轮换/verify、缺钥失败闭合；**仍非**完整 KMS/HSM；类型边界见 README |
+| 结果集脱敏 / 列加密 | **partial（improved）** | MySQL/PG 接线；**encrypt E2E**：`enc:v1:<keyId>:` 密文、管控台密钥 CRUD/轮换/verify、缺钥失败闭合；**仍非**完整 KMS/HSM；类型：decimal/时间/uuid 已可非空改写，geometry/interval 等仍 fail-closed（§4.2） |
 | 审计 spool / JDBC ship | **partial（improved）** | 实现齐全；专用单测（P0-3）含 **H2 JDBC sink 行断言**；shipper 状态；H2 自动建表；**管控台可只读浏览** spool/环/JDBC（`GET /console/api/v1/audit/traffic`）；默认关闭 |
 | 风控策略 | **partial** | `DenyListDatabaseRiskPolicy` + `gateway.risk.*` 装配；空配置仍 `allowAll()` |
 | 连接治理 | **partial** | `max-connections`、CIDR、idle timeout 有；配置键见 §3 |
@@ -86,7 +86,7 @@ Spring 实际读取的键（`@Value`）与默认 `application.yml`、模板一�
 | P1-2 | MySQL `COM_STMT_EXECUTE` 参数观测 | **partial（improved）** | PREPARE 登记 `statement_id→param_count`；EXECUTE 发出事件（statement id + 可解析时的 param types）；**不**把绑定值写入 statement 文本；单测覆盖 | 可选：审计侧对 string 类型参数做脱敏摘要；仍无改写 EXECUTE |
 | P1-3 | PG Cancel 只关联不代发 | **done（设计如此）** | `PostgreSQLCancelKeyRegistry` 仅索引；adapter / 单测明确「associate-only」；CancelRequest 仍由客户端短连接透明转发 | 若需网关代发 cancel，需 session→backend socket 映射，另开设计 |
 | P1-4 | 多后端仅 failover | **partial（improved）** | failover + 冷却；**`RoutingBackendProvider`** + **`RoutingHandshakeProbe` / `ProbedHandshake`**：PG 在 `acquire` 前 peek StartupMessage 填充 `RoutingContext`（user/database）并透明 replay；MySQL **server-first** 仍 `acquire(empty)`（禁止伪造 greeting）；`MySqlHandshakeResponseRouting` 解析身份供观测/日后扩展；Oracle/SQL Server 复用同一 SPI | 半开熔断可再增强；MySQL 身份路由需终结认证或延后选路（见 §4.3） |
-| P1-5 | 结果集脱敏类型边界 | **partial（improved）** | MySQL：`bit` 按长度前缀可读可改写；PG：`int2/4/8`、`bool`、`float4/8` 二进制改写；decimal/时间/uuid/geometry 等仍 fail-closed；边界表见 §4.2 | decimal/时间编码若要做需独立设计 |
+| P1-5 | 结果集脱敏类型边界 | **partial（improved）** | MySQL：`bit` + **`decimal`（ASCII lenenc）** + **date/time/datetime/timestamp** 二进制可改写；PG：int/bool/float + **`numeric`** + **date/time/timestamp/timestamptz** + **`uuid`** 可改写；`geometry`/interval/money/timetz/未知仍 fail-closed；边界表见 §4.2 | geometry / interval / money / timetz 仍刻意拒绝 |
 | P1-6 | 连接池化 | **partial（improved）** | `PooledBackendProvider` + `gateway.pool.enabled`（默认 false）；`gateway.pool.reset-mode=none\|protocol`（默认 none）；`protocol` 时经 registry SPI：MySQL `MySqlBackendSessionReset`（`COM_RESET_CONNECTION`）、PG `PostgreSQLBackendSessionReset`（`DISCARD ALL`）；失败/拒绝关闭 socket；单测覆盖成功/失败 | 按身份/库名分池未做；reset 仍仅在已确认可复用 socket 上执行 |
 
 ### P2（并发模型 / 产品化 / 测试覆盖）
@@ -142,8 +142,8 @@ Spring 实际读取的键（`@Value`）与默认 `application.yml`、模板一�
 
 | 协议 | 可非空改写（二进制） | 可读但非空改写拒绝 / 未知则整行不脱敏 |
 |---|---|---|
-| MySQL | 整数/浮点、长度前缀字符串族、**bit**（长度前缀） | `decimal`（packed）、date/time/datetime/timestamp、`geometry`、未知 type |
-| PostgreSQL | text 族/bytea/json(b)、**int2/4/8**、**bool**、**float4/8** | `numeric`、时间类型、uuid、未知 OID |
+| MySQL | 整数/浮点、长度前缀字符串族、**bit**、**decimal**（ASCII lenenc）、**date/time/datetime/timestamp** | `geometry`、未知 type |
+| PostgreSQL | text 族/bytea/json(b)、**int2/4/8**、**bool**、**float4/8**、**numeric**、**date/time/timestamp/timestamptz**、**uuid** | `interval`、`money`、`timetz`、未知 OID |
 
 无规则时两条路径均保持透明。
 

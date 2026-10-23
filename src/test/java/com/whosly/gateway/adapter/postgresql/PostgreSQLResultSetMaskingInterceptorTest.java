@@ -179,7 +179,7 @@ class PostgreSQLResultSetMaskingInterceptorTest {
     }
 
     @Test
-    void refusesANonNullMaskOnABinaryTypeWithoutAKnownEncoding() {
+    void rewritesABinaryNumericColumnWithAKnownEncoding() {
         PostgreSQLDatabaseEventExtractor extractor = extractor();
         PostgreSQLResultSetMaskingInterceptor interceptor = interceptor(extractor, numericRule());
         observe(extractor, rowDescription(
@@ -191,8 +191,25 @@ class PostgreSQLResultSetMaskingInterceptorTest {
         TrafficDecision decision = interceptor.intercept(
                 RawBackedMessage.of(TrafficDirection.TARGET_TO_CLIENT, row, 0, row.length));
 
-        // The rule can produce a text mask, but numeric's binary layout is not
-        // reproduced here, so the row is refused rather than sent as garbage.
+        assertThat(decision.action()).isEqualTo(TrafficAction.FORWARD);
+        // numeric 0 → ndigits=0, weight=0, sign=0, dscale=0.
+        assertThat(valuesOf(decision).get(0)).containsExactly(0, 0, 0, 0, 0, 0, 0, 0);
+    }
+
+    @Test
+    void refusesANonNullMaskOnABinaryTypeWithoutAKnownEncoding() {
+        PostgreSQLDatabaseEventExtractor extractor = extractor();
+        PostgreSQLResultSetMaskingInterceptor interceptor = interceptor(extractor, temporalFixedRule());
+        observe(extractor, rowDescription(
+                new PostgreSQLColumnMetadata.Field("span", 0, PostgreSQLTypeOid.INTERVAL.getOid(), 1)));
+
+        byte[] row = dataRow(bytes("1 day"));
+        observe(extractor, row);
+
+        TrafficDecision decision = interceptor.intercept(
+                RawBackedMessage.of(TrafficDirection.TARGET_TO_CLIENT, row, 0, row.length));
+
+        // interval still has no binary encoder: refuse rather than send garbage.
         assertThat(decision.action()).isEqualTo(TrafficAction.DENY);
     }
 
@@ -282,7 +299,7 @@ class PostgreSQLResultSetMaskingInterceptorTest {
                 decision.message().outputLength() - TYPED_HEADER_LENGTH).orElseThrow();
     }
 
-    /** A rule that produces a NUMERIC value, for which no binary encoding exists here. */
+    /** A rule that produces a NUMERIC zero for binary numeric rewrite tests. */
     private static MaskingRule numericRule() {
         return new MaskingRule() {
             @Override
@@ -293,6 +310,31 @@ class PostgreSQLResultSetMaskingInterceptorTest {
             @Override
             public Set<ColumnMetadata.Category> supportedCategories() {
                 return Set.of(ColumnMetadata.Category.NUMERIC);
+            }
+
+            @Override
+            public boolean matches(ColumnMetadata column) {
+                return true;
+            }
+
+            @Override
+            public MaskedValue mask(ColumnMetadata column, MaskedValue original) {
+                return MaskedValue.of(bytes("0"));
+            }
+        };
+    }
+
+    /** A rule that produces a TEMPORAL fixed value; interval binary encoding is still refused. */
+    private static MaskingRule temporalFixedRule() {
+        return new MaskingRule() {
+            @Override
+            public String name() {
+                return "temporal-fixed";
+            }
+
+            @Override
+            public Set<ColumnMetadata.Category> supportedCategories() {
+                return Set.of(ColumnMetadata.Category.TEMPORAL);
             }
 
             @Override
