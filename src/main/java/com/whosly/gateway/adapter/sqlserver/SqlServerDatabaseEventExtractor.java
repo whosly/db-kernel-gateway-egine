@@ -3,6 +3,7 @@ package com.whosly.gateway.adapter.sqlserver;
 import com.whosly.gateway.adapter.protocol.DatabaseTrafficEvent;
 import com.whosly.gateway.adapter.protocol.MessageBounder;
 import com.whosly.gateway.adapter.protocol.ProtocolConnectionState;
+import com.whosly.gateway.adapter.protocol.RoutingContext;
 import com.whosly.gateway.adapter.protocol.TrafficDirection;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -14,12 +15,15 @@ import java.util.List;
 import java.util.Optional;
 
 /**
- * TDS observation: Login7 identity, SQL_BATCH text, and backend ERROR tokens.
+ * TDS observation: Login7 identity, SQL_BATCH text, Attention/DONE_ATTN cancel,
+ * and backend ERROR tokens.
  *
  * <p>Bytes are never rewritten — the extractor only reads cleartext TDS frames
  * that {@link TdsMessageFraming} can bound. Encrypted tunnels after PreLogin
  * simply yield no events (fail-open observation). Password bytes in Login7 are
- * never decoded into events.</p>
+ * never decoded into events. Attention is observe-only on the same duplex
+ * connection (transparent forward already cancels; we do not synthesize
+ * Attention or close the backend).</p>
  */
 public class SqlServerDatabaseEventExtractor {
 
@@ -112,6 +116,7 @@ public class SqlServerDatabaseEventExtractor {
             }
             case TDS7_LOGIN -> observeLogin7(payload);
             case SQL_BATCH -> observeSqlBatch(payload);
+            case ATTENTION -> observeAttention();
             default -> List.of();
         };
     }
@@ -129,51 +134,100 @@ public class SqlServerDatabaseEventExtractor {
             return List.of();
         }
         byte[] payload = concatenatePayloads(bytes, offset, length);
-        return observeErrorTokens(payload);
+        return observeTabularTokens(payload);
     }
 
-    private List<DatabaseTrafficEvent> observeErrorTokens(byte[] payload) {
+    private List<DatabaseTrafficEvent> observeTabularTokens(byte[] payload) {
         if (payload == null || payload.length == 0) {
             return List.of();
         }
         List<DatabaseTrafficEvent> events = new ArrayList<>();
         int cursor = 0;
         while (cursor < payload.length) {
-            if ((payload[cursor] & 0xFF) != TdsErrorToken.TOKEN_TYPE) {
-                cursor++;
-                continue;
-            }
-            Optional<TdsErrorToken> parsed = TdsErrorToken.tryParse(payload, cursor);
-            if (parsed.isEmpty()) {
-                cursor++;
-                continue;
-            }
-            TdsErrorToken error = parsed.get();
-            if (session != null) {
-                session.setLastErrorNumber(error.number());
-                session.setLastErrorMessage(error.message());
-                session.putAttribute("last.error.number", String.valueOf(error.number()));
-                session.putAttribute("last.error.class", String.valueOf(error.severityClass()));
-                if (error.severityClass() >= 17) {
-                    session.tryTransitionTo(ProtocolConnectionState.CLOSING);
-                } else if (session.getState() == ProtocolConnectionState.EXECUTING
-                        || session.getState() == ProtocolConnectionState.STREAMING) {
-                    session.tryTransitionTo(ProtocolConnectionState.READY);
+            int token = payload[cursor] & 0xFF;
+            if (token == TdsErrorToken.TOKEN_TYPE) {
+                Optional<TdsErrorToken> parsed = TdsErrorToken.tryParse(payload, cursor);
+                if (parsed.isEmpty()) {
+                    cursor++;
+                    continue;
                 }
+                events.add(toErrorEvent(parsed.get()));
+                cursor += parsed.get().wireLength();
+                continue;
             }
-            String label = error.number() + ":" + error.message();
-            log.debug("SQL Server session {} ERROR token observed: {}", sessionId, label);
-            events.add(DatabaseTrafficEvent.builder(protocolName, sessionId, "ERROR", label)
-                    .attribute("number", String.valueOf(error.number()))
-                    .attribute("state", String.valueOf(error.state()))
-                    .attribute("class", String.valueOf(error.severityClass()))
-                    .attribute("server", error.serverName())
-                    .attribute("proc", error.procName())
-                    .attribute("line", String.valueOf(error.lineNumber()))
-                    .build());
-            cursor += error.wireLength();
+            if (token == TdsDoneToken.TOKEN_TYPE) {
+                Optional<TdsDoneToken> parsed = TdsDoneToken.tryParse(payload, cursor);
+                if (parsed.isEmpty()) {
+                    cursor++;
+                    continue;
+                }
+                TdsDoneToken done = parsed.get();
+                if (done.isAttentionAck()) {
+                    events.add(toAttentionAckEvent(done));
+                }
+                cursor += done.wireLength();
+                continue;
+            }
+            cursor++;
         }
         return events;
+    }
+
+    private DatabaseTrafficEvent toErrorEvent(TdsErrorToken error) {
+        if (session != null) {
+            session.setLastErrorNumber(error.number());
+            session.setLastErrorMessage(error.message());
+            session.putAttribute("last.error.number", String.valueOf(error.number()));
+            session.putAttribute("last.error.class", String.valueOf(error.severityClass()));
+            if (error.severityClass() >= 17) {
+                session.tryTransitionTo(ProtocolConnectionState.CLOSING);
+            } else if (session.getState() == ProtocolConnectionState.EXECUTING
+                    || session.getState() == ProtocolConnectionState.STREAMING) {
+                session.tryTransitionTo(ProtocolConnectionState.READY);
+            }
+        }
+        String label = error.number() + ":" + error.message();
+        log.debug("SQL Server session {} ERROR token observed: {}", sessionId, label);
+        return DatabaseTrafficEvent.builder(protocolName, sessionId, "ERROR", label)
+                .attribute("number", String.valueOf(error.number()))
+                .attribute("state", String.valueOf(error.state()))
+                .attribute("class", String.valueOf(error.severityClass()))
+                .attribute("server", error.serverName())
+                .attribute("proc", error.procName())
+                .attribute("line", String.valueOf(error.lineNumber()))
+                .build();
+    }
+
+    private DatabaseTrafficEvent toAttentionAckEvent(TdsDoneToken done) {
+        if (session != null) {
+            session.markAttentionAcknowledged();
+            if (session.getState() == ProtocolConnectionState.EXECUTING
+                    || session.getState() == ProtocolConnectionState.STREAMING
+                    || session.getState() == ProtocolConnectionState.READY) {
+                session.tryTransitionTo(ProtocolConnectionState.READY);
+            }
+        }
+        log.debug("SQL Server session {} DONE_ATTN acknowledged (status=0x{})",
+                sessionId, Integer.toHexString(done.status()));
+        return DatabaseTrafficEvent.builder(protocolName, sessionId, "ATTENTION_ACK", "DONE_ATTN")
+                .attribute("status", String.valueOf(done.status()))
+                .attribute("curCmd", String.valueOf(done.curCmd()))
+                .build();
+    }
+
+    private List<DatabaseTrafficEvent> observeAttention() {
+        if (session != null) {
+            session.markAttentionRequested();
+            // Cancel requested while a batch may be executing; stay EXECUTING until DONE_ATTN.
+            if (session.getState() != ProtocolConnectionState.EXECUTING
+                    && session.getState() != ProtocolConnectionState.STREAMING) {
+                session.tryTransitionTo(ProtocolConnectionState.EXECUTING);
+            }
+        }
+        log.debug("SQL Server session {} Attention observed (cancel request)", sessionId);
+        return List.of(DatabaseTrafficEvent.builder(protocolName, sessionId, "ATTENTION", "cancel")
+                .attribute("sameConnection", "true")
+                .build());
     }
 
     private List<DatabaseTrafficEvent> observeLogin7(byte[] payload) {
@@ -186,6 +240,7 @@ public class SqlServerDatabaseEventExtractor {
         }
         loginObserved = true;
         Login7Observation login = parsed.get();
+        RoutingContext routingHint = SqlServerLogin7Routing.fromObservation(login);
         if (session != null) {
             session.tryTransitionTo(ProtocolConnectionState.AUTHENTICATING);
             login.username().ifPresent(user -> {
@@ -198,14 +253,20 @@ public class SqlServerDatabaseEventExtractor {
             });
             login.appName().ifPresent(app -> session.putAttribute("client.app", app));
             login.hostName().ifPresent(host -> session.putAttribute("client.host", host));
+            // Record what acquire would have seen — probe still empty on transparent path.
+            if (!routingHint.isEmpty()) {
+                session.putAttribute("routing.hint", routingHint.toString());
+            }
         }
         String label = login.username().orElse("(unknown)")
                 + "@"
                 + login.database().orElse("(default)");
-        log.debug("SQL Server session {} Login7 observed as {}", sessionId, label);
+        log.debug("SQL Server session {} Login7 observed as {} (routingHint={})",
+                sessionId, label, routingHint);
         return List.of(DatabaseTrafficEvent.builder(protocolName, sessionId, "LOGIN7", label)
                 .attribute("username", login.username().orElse(""))
                 .attribute("database", login.database().orElse(""))
+                .attribute("routingHint", routingHint.toString())
                 .build());
     }
 

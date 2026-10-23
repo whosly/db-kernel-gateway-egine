@@ -2,7 +2,7 @@
 
 > **决策**：第三协议为 **SQL Server / TDS**（非 Oracle）。  
 > **分支**：`future/database-wire-protocol-foundation`  
-> **状态**：P0 透明双工中继已落地；P1 Login7/SQL_BATCH/**ERROR** 明文观测 + 网关侧最小 ERROR+DONE 拒绝响应已挂入管线。**仍非** MySQL/PG 对等（无脱敏/Attention cancel/深 token 改写/协议 reset/Login7 路由）。见 [STATUS_AND_GAPS.md](STATUS_AND_GAPS.md) P2-7。
+> **状态**：P0 透明双工中继已落地；P1 Login7/SQL_BATCH/**ERROR**/Attention/**DONE_ATTN** 明文观测 + 网关侧最小 ERROR+DONE 拒绝响应已挂入管线。**仍非** MySQL/PG 对等（无脱敏/深 token 改写/协议 reset；Login7 **不**驱动 `acquire` 选路）。见 [STATUS_AND_GAPS.md](STATUS_AND_GAPS.md) P2-7。
 
 ## 1. 目标
 
@@ -46,22 +46,24 @@ ASCII：
 - [x] `application-sqlserver-template.yml`（proxy-port **31433** → target **1433**，密码占位 `change-me`）
 - [x] 单测：registry、framing、adapter start/stop、透明中继
 
-**说明**：TDS 虽为 client-first（PreLogin），但 PreLogin 不含 user/database；P0 `acquire` 使用空 `RoutingContext`（与 MySQL 首连类似）。Login7 / SQL_BATCH / ERROR **观测**已在双工路径落地（P1）；仍不驱动路由。
+**说明**：TDS 虽为 client-first（PreLogin），但 PreLogin 不含 user/database；`acquire` 使用空 `RoutingContext`（与 MySQL 首连类似）。Login7 / SQL_BATCH / ERROR / Attention **观测**已在双工路径落地（P1）；Login7 **不**驱动选路（须先与某后端完成 PreLogin；伪造 PreLogin 属握手终结，见 P2）。
 
 ### P1 — 基础观测与冒烟
 
-- [x] 可解析时观测 Login7 用户 / 初始库（写入 `SqlServerSession` / `client.*` 属性 / `LOGIN7` 事件；**明文**路径；不驱动路由）
-- [x] 可解析时观测 SQL_BATCH 文本为 `SQL_BATCH` 流量事件（无 RPC/Attention）
+- [x] 可解析时观测 Login7 用户 / 初始库（写入 `SqlServerSession` / `client.*` 属性 / `LOGIN7` 事件；记录 `routing.hint`；**明文**路径；**不**驱动 `acquire`）
+- [x] 可解析时观测 SQL_BATCH 文本为 `SQL_BATCH` 流量事件（无 RPC 名解析）
 - [x] 可解析时观测后端 ERROR token（`0xAA`）为 `ERROR` 流量事件；会话记录 `last.error.*`
+- [x] 可解析时观测 Attention（`0x06`）与 DONE_ATTN（`ATTENTION` / `ATTENTION_ACK`）；同连接 observe-only，字节仍透明转发（不代发、不关后端）
 - [x] 网关侧拒绝 / 风控拒绝 / acquire 失败：伪造最小 TDS `TABULAR_RESULT`（ERROR + DONE）；后端错误仍透明转发
-- [ ] 本机 Docker 集成冒烟（可选；无 Docker 时 skip）
+- [x] `SqlServerLogin7Routing`：Login7 → `RoutingContext` 映射（单测覆盖）；透明路径 `probeClientForRouting` **仍 empty**（见下）
+- [ ] 本机 Docker 集成冒烟（可选；**本构建环境无 Docker，文档化 skip**，见 §5）
 
 ### P2 — 深化（延期）
 
-- [ ] 更深 TDS 消息类型（RPC、Attention/cancel、Bulk 等）
+- [ ] 更深 TDS 消息类型（RPC 名解析、Bulk 等）
 - [ ] 结果集脱敏 / 改写
 - [ ] 协议级 `BackendSessionReset`（若有稳定 wire 语义）
-- [ ] Login7 peek → `RoutingContext`（在不破坏透明认证的前提下）
+- [ ] Login7 **驱动** `acquire(RoutingContext)`：需伪造 PreLogin 响应（部分握手终结），**透明代理不可行**；仅 cleartext 终结路径可另开设计
 
 ## 4. 非目标
 
@@ -70,6 +72,9 @@ ASCII：
 - 将生产 SA 密码提交进 git
 
 ## 5. 本地 Docker（冒烟）
+
+> **CI / 本构建环境**：默认 **不**要求 Docker。无 `docker` 命令时跳过本节冒烟，以单元测试为验收；有 Docker 的机器可按下列步骤自测。
+
 
 | 项 | 建议 |
 |---|---|
@@ -129,7 +134,8 @@ JDBC 示例 URL：`jdbc:sqlserver://localhost:31433;databaseName=master;encrypt=
 | `SqlServerProtocolAdapter` | 监听 / 会话 / DuplexRelay |
 | `adapter/sqlserver/TdsFrameCodec` | 8 字节头编解码 |
 | `adapter/sqlserver/TdsMessageFraming` | EOM 逻辑消息边界 |
-| `adapter/sqlserver/SqlServerSession` | 会话状态（Login7 身份 + last ERROR） |
-| `adapter/sqlserver/SqlServerDatabaseEventExtractor` / `Login7Observation` | P1 明文观测（Login7 + SQL_BATCH + ERROR）；挂入 adapter 管线 |
-| `adapter/sqlserver/TdsErrorToken` / `TdsDoneToken` / `SqlServerGatewayErrorMapper` | ERROR 解析/伪造 + DONE；`ProtocolErrorResponder` 接线 |
+| `adapter/sqlserver/SqlServerSession` | 会话状态（Login7 身份 + last ERROR + Attention 请求/确认） |
+| `adapter/sqlserver/SqlServerDatabaseEventExtractor` / `Login7Observation` | P1 明文观测（Login7 + SQL_BATCH + ERROR + Attention/DONE_ATTN）；挂入 adapter 管线 |
+| `adapter/sqlserver/SqlServerLogin7Routing` | Login7 → `RoutingContext` 映射（**不**用于透明 `acquire`） |
+| `adapter/sqlserver/TdsErrorToken` / `TdsDoneToken` / `SqlServerGatewayErrorMapper` | ERROR 解析/伪造 + DONE/DONE_ATTN 解析；`ProtocolErrorResponder` 接线 |
 | `application-sqlserver-template.yml` | 配置模板 |

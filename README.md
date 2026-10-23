@@ -1,6 +1,6 @@
 # 数据库内核网关引擎
 
-基于 **Java 17** 的透明数据库协议网关：客户端连网关端口，网关把 **MySQL / PostgreSQL** wire 流量转发到真实目标库，并在**明文阶段**提供 SQL 观测、可选审计留痕与结果集脱敏等扩展点。第三协议 **SQL Server（TDS）** 为 **P0 透明中继 + P1 明文观测/拒绝**（Login7/SQL_BATCH/ERROR + 网关 ERROR+DONE；见 [`docs/SQLSERVER_TDS_PLAN.md`](docs/SQLSERVER_TDS_PLAN.md)），**不是**与 MySQL/PostgreSQL 对等的完整观测/脱敏/cancel 实现。
+基于 **Java 17** 的透明数据库协议网关：客户端连网关端口，网关把 **MySQL / PostgreSQL** wire 流量转发到真实目标库，并在**明文阶段**提供 SQL 观测、可选审计留痕与结果集脱敏等扩展点。第三协议 **SQL Server（TDS）** 为 **P0 透明中继 + P1 明文观测/拒绝**（Login7/SQL_BATCH/ERROR/Attention/DONE_ATTN + 网关 ERROR+DONE；见 [`docs/SQLSERVER_TDS_PLAN.md`](docs/SQLSERVER_TDS_PLAN.md)），**不是**与 MySQL/PostgreSQL 对等的完整观测/脱敏实现（Login7 不驱动选路）。
 
 > 网关不伪造握手能力、不校验也不保存客户端明文密码；认证与结果由目标库完成。  
 > 能力边界以本 README「功能清单」与 [`docs/STATUS_AND_GAPS.md`](docs/STATUS_AND_GAPS.md) 为准——规划中的能力不会写成「已实现」。
@@ -27,7 +27,7 @@
 
 | 项 | 本分支（`future/database-wire-protocol-foundation`） |
 |---|---|
-| 默认单元测试 | **621** 条全绿（JDK 17；`pom` 排除 `*IntegrationTest`；以 STATUS §1 为准） |
+| 默认单元测试 | **629** 条全绿（JDK 17；`pom` 排除 `*IntegrationTest`；以 STATUS §1 为准） |
 | 真库集成 `-Pintegration-test` | **14 / 14** 全绿（2026-09-24，本地 Docker MySQL `:13308` + PostgreSQL `:5432`） |
 | JDK / 编译 | `pom` 目标 **17**；虚拟线程经 `VirtualThreadExecutors` **反射**在 JDK 21+ 启用，JDK 17 回退平台线程池（STATUS P0-1） |
 | 核心数据路径 | 透明代理、查询/结果、预处理、错误透传、脱敏 happy path、PG `COPY` — **已在集成中 live-proven** |
@@ -70,7 +70,7 @@
 | 连接池化 | **已接线·默认关** | `gateway.pool.enabled`；`reset-mode=none\|protocol`；protocol=MySQL `COM_RESET_CONNECTION` / PG `DISCARD ALL` |
 | Actuator / HTTP 指标出口 | **已接线·内存计数** | `/gateway/metrics` + `/actuator/gateway`；无远程 Micrometer |
 | 非交互启动 | **已实现** | `Application` 自动 start；`gateway.cli.interactive` 默认 false |
-| SQL Server（TDS）透明中继 | **部分（P0 + P1）** | `SqlServerProtocolAdapter` 注册 `sqlserver`/`mssql`；双工字节转发 + TDS framing；**明文** Login7/SQL_BATCH/ERROR 观测 + 网关 ERROR+DONE（非路由）。**无** 脱敏 / Attention cancel / 深 token 改写 / 协议 reset / Docker 冒烟证明。计划：[`docs/SQLSERVER_TDS_PLAN.md`](docs/SQLSERVER_TDS_PLAN.md) |
+| SQL Server（TDS）透明中继 | **部分（P0 + P1）** | `SqlServerProtocolAdapter` 注册 `sqlserver`/`mssql`；双工字节转发 + TDS framing；**明文** Login7/SQL_BATCH/ERROR/Attention/DONE_ATTN 观测 + 网关 ERROR+DONE；Login7 `routing.hint`（非选路）。**无** 脱敏 / 深 token 改写 / 协议 reset / Login7 驱动选路 / Docker 冒烟证明。计划：[`docs/SQLSERVER_TDS_PLAN.md`](docs/SQLSERVER_TDS_PLAN.md) |
 | Oracle | **未实现** | stub：`gateway.proxy-db-type=oracle` 启动失败并提示 |
 
 > 主流代理在数据平面上也不靠「跨线程共享可变协议状态」保证正确——本仓库同样让每条连接的协议状态在任一时刻只属于一个执行体。
@@ -235,7 +235,7 @@ psql client -> gateway:35433 -> target postgresql (:5432 等)
 
 ## 快速开始 · SQL Server（P0 + P1 观测/拒绝）
 
-> **诚实边界**：可启动的透明 TDS 双工中继 + **明文** Login7/SQL_BATCH 观测；**不是** MySQL/PG 对等产品（无结果集脱敏、无 Attention/cancel、无深 token、无协议 reset、Login7 不参与路由）。阶段见 [`docs/SQLSERVER_TDS_PLAN.md`](docs/SQLSERVER_TDS_PLAN.md)。
+> **诚实边界**：可启动的透明 TDS 双工中继 + **明文** Login7/SQL_BATCH/ERROR/Attention 观测；**不是** MySQL/PG 对等产品（无结果集脱敏、无深 token、无协议 reset、Login7 不驱动 `acquire`）。阶段见 [`docs/SQLSERVER_TDS_PLAN.md`](docs/SQLSERVER_TDS_PLAN.md)。
 >
 > **管控台 SQL 工作台**：classpath 含 `mssql-jdbc` 时，RUNNING 实例可经 **proxy listenPort** 执行 SQL（与 MySQL/PG 同路径）。
 

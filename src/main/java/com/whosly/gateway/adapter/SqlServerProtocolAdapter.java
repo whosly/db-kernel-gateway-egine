@@ -26,17 +26,26 @@ import java.util.UUID;
  * SQL Server (TDS) protocol proxy adapter.
  *
  * <p><b>Maturity (honest):</b> P0 transparent {@link DuplexRelay} plus P1
- * cleartext observation of Login7 identity, SQL_BATCH text, and backend ERROR
- * tokens when the stream is not encrypted; gateway-side rejects forge a minimal
- * TDS ERROR+DONE tabular reply. This is <em>not</em> MySQL/PostgreSQL parity —
- * no result-set masking, no Attention/cancel, no deep token rewrite, no protocol
- * session reset, no Login7-driven routing. See {@code docs/SQLSERVER_TDS_PLAN.md}.</p>
+ * cleartext observation of Login7 identity, SQL_BATCH text, backend ERROR
+ * tokens, and Attention / DONE_ATTN cancel on the same duplex connection;
+ * gateway-side rejects forge a minimal TDS ERROR+DONE tabular reply. This is
+ * <em>not</em> MySQL/PostgreSQL parity — no result-set masking, no deep token
+ * rewrite, no protocol session reset, no Login7-driven {@code acquire}
+ * routing. See {@code docs/SQLSERVER_TDS_PLAN.md}.</p>
  *
- * <p><b>Handshake:</b> TDS is client-first (PreLogin → Login7).
- * {@link BackendProvider#acquire} still uses an empty
- * {@link com.whosly.gateway.adapter.protocol.RoutingContext}; Login7 is observed
- * on the duplex path after acquire (session labels / traffic events only; bytes
- * forwarded unchanged).</p>
+ * <p><b>Handshake / routing:</b> TDS is client-first (PreLogin → Login7).
+ * PreLogin carries no user/database, so {@link BackendProvider#acquire} uses an
+ * empty {@link com.whosly.gateway.adapter.protocol.RoutingContext}. Login7 is
+ * observed on the duplex path after acquire (session labels / traffic events /
+ * {@code routing.hint} attribute only; bytes forwarded unchanged). True
+ * Login7-before-acquire routing would require forging a PreLogin response and
+ * is deferred.</p>
+ *
+ * <p><b>Cancel:</b> Attention (packet type {@code 0x06}) rides the same
+ * connection as the query. The relay forwards it transparently; the extractor
+ * emits {@code ATTENTION} / {@code ATTENTION_ACK} (DONE_ATTN) for audit —
+ * observe-only, no synthesized Attention and no gateway-initiated backend
+ * close (same philosophy as PostgreSQL CancelRequest associate-only).</p>
  */
 public class SqlServerProtocolAdapter extends AbstractProtocolAdapter {
 

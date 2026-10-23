@@ -92,4 +92,52 @@ class SqlServerDatabaseEventExtractorTest {
         assertThat(extractor.inspect(TrafficDirection.TARGET_TO_CLIENT, packet, 0, packet.length))
                 .isEmpty();
     }
+
+    @Test
+    void observesAttentionAndDoneAttnAckOnSameSession() {
+        SqlServerSession session = new SqlServerSession("sqlserver-attn-1");
+        SqlServerDatabaseEventExtractor extractor =
+                new SqlServerDatabaseEventExtractor("SQLServer", session.getConnectionId(), session);
+
+        byte[] attention = CODEC.packet(TdsPacketType.ATTENTION.getCode(), new byte[0], 1);
+        List<DatabaseTrafficEvent> attnEvents =
+                extractor.inspect(TrafficDirection.CLIENT_TO_TARGET, attention, 0, attention.length);
+
+        assertThat(attnEvents).hasSize(1);
+        assertThat(attnEvents.get(0).getOperation()).isEqualTo("ATTENTION");
+        assertThat(attnEvents.get(0).getAttribute("sameConnection")).contains("true");
+        assertThat(session.isAttentionRequested()).isTrue();
+        assertThat(session.isAttentionAcknowledged()).isFalse();
+
+        byte[] doneAttn = TdsDoneToken.encodeAttentionAck();
+        byte[] tabular = CODEC.packet(TdsPacketType.TABULAR_RESULT.getCode(), doneAttn, 1);
+        List<DatabaseTrafficEvent> ackEvents =
+                extractor.inspect(TrafficDirection.TARGET_TO_CLIENT, tabular, 0, tabular.length);
+
+        assertThat(ackEvents).hasSize(1);
+        assertThat(ackEvents.get(0).getOperation()).isEqualTo("ATTENTION_ACK");
+        assertThat(ackEvents.get(0).getStatement()).isEqualTo("DONE_ATTN");
+        assertThat(session.isAttentionRequested()).isFalse();
+        assertThat(session.isAttentionAcknowledged()).isTrue();
+        assertThat(session.getAttribute("last.attention.ack")).contains("true");
+    }
+
+    @Test
+    void login7EventCarriesRoutingHintWithoutDrivingAcquire() {
+        SqlServerSession session = new SqlServerSession("sqlserver-hint-1");
+        SqlServerDatabaseEventExtractor extractor =
+                new SqlServerDatabaseEventExtractor("SQLServer", session.getConnectionId(), session);
+
+        byte[] loginPayload = Login7ObservationTest.buildLogin7Payload("routeuser", "routedb", "app", "host");
+        byte[] packet = CODEC.packet(TdsPacketType.TDS7_LOGIN.getCode(), loginPayload, 1);
+        List<DatabaseTrafficEvent> events =
+                extractor.inspect(TrafficDirection.CLIENT_TO_TARGET, packet, 0, packet.length);
+
+        assertThat(events).hasSize(1);
+        assertThat(events.get(0).getAttribute("routingHint")).isPresent();
+        assertThat(events.get(0).getAttribute("routingHint").get()).contains("routeuser").contains("routedb");
+        assertThat(session.getAttribute("routing.hint")).isPresent();
+        // Would-be acquire context only — transparent probe stays empty (PreLogin first).
+        assertThat(SqlServerLogin7Routing.fromLogin7Payload(loginPayload).username()).contains("routeuser");
+    }
 }
