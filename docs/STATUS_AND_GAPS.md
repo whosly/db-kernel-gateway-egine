@@ -4,7 +4,7 @@
 > **更新原则**：只写有代码/测试/配置证据的结论；「规划中」不得写成「已实现」。  
 > **导航**：见 [README.md](README.md)。
 >
-> **近况**：Vue console Phase A/A+/B/B+ + **C partial / E lite** — 审计状态 · 进程内 metrics history · 风控规则热挂 · 连接池徽章 · 可选 read-token；**UI**：改版 + 浅色默认主题切换 + **UX 微抛光**（类型化 Toast、应用内确认、窄屏侧栏、筛选计数、Esc/SQL 选区）。**boundary**：`runtime`↛`console`（`runtime.spi`）+ console API controllers 按域拆分。
+> **近况**：Vue console Phase A/A+/B/B+ + **C partial / E lite** — 审计状态 · 进程内 metrics history · 风控规则热挂 · 连接池徽章 · 可选 read-token；**UI**：改版 + 浅色默认主题切换 + **UX 微抛光**（类型化 Toast、应用内确认、窄屏侧栏、筛选计数、Esc/SQL 选区）；**脱敏**：decimal/时间/uuid 非空改写（`ddde045`）。**boundary**：`runtime`↛`console`（`runtime.spi`）+ console API controllers 按域拆分。
 
 ## 1. 构建与测试基线
 
@@ -175,9 +175,9 @@ Spring 实际读取的键（`@Value`）与默认 `application.yml`、模板一�
 
 ## 7. 已知契约偏差（代码 vs `CONSOLE_API_V1.md`）
 
-| 端点 | 文档约定 | 实际（`47a151d` 冒烟） | 影响 |
+| 端点 | 文档约定 | 实际（截至 `ddde045`） | 影响 |
 |---|---|---|---|
-| `GET /console/api/v1/audit/operations` | `{ items, total }`（§2.2 禁用 `count`） | **已对齐**：`{ items, total }`（`ConsoleApiController#listAudit`，有测试覆盖） | 无；前端类型本就按 `total` 声明 |
+| `GET /console/api/v1/audit/operations` | `{ items, total }`（§2.2 禁用 `count`） | **已对齐**（`ee1b49b`）：`{ items, total }`（`ConsoleAuditApiController` → `ConsoleApiController#listAudit`） | 无 |
 | `GET /console/api/v1/metrics/history`、`/instances/{id}/schema/columns` | 非 list envelope（聚合/时序对象） | 含兄弟字段 `count` | 属聚合对象，可接受；对齐时一并评估 |
 
 ## 8. 维护

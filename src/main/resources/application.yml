@@ -157,7 +157,7 @@ gateway:
         maturity: partial
         defaultProxyPort: 31433
         defaultTargetPort: 1433
-        notes: "TDS P0 透明中继；深度能力 ON HOLD — 目录可见"
+        notes: "TDS P0 透明中继 + P1-lite 明文观测；可创建透明代理；无脱敏/Attention cancel/深 token"
       - id: oracle
         displayName: Oracle
         enabled: false

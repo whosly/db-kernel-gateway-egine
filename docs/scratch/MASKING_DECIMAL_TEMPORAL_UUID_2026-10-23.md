@@ -1,5 +1,7 @@
 # P1-5 补齐：decimal / 时间 / uuid 结果集脱敏（设计自检）
 
+> **落地状态（2026-10-23）**：**已实现并推送** `ddde045`。下文「现状」描述的是改前基线，保留作设计记录；现行能力以 [`STATUS_AND_GAPS.md`](../STATUS_AND_GAPS.md) §4.2 / P1-5 与 README「结果集脱敏边界」为准。
+
 日期：2026-10-23（Asia/Shanghai）  
 范围：MySQL + PostgreSQL 结果集脱敏路径；geometry / interval / money / timetz 仍 fail-closed。
 
@@ -66,4 +68,4 @@
 
 ## 自检结论
 
-分层清晰、fail-closed 保留、MySQL decimal 修正有协议依据、类别扩展避免 `***` 写入 uuid。**通过 → 编码。**
+分层清晰、fail-closed 保留、MySQL decimal 修正有协议依据、类别扩展避免 `***` 写入 uuid。**通过 → 已编码并合入**（测试基线 613）。

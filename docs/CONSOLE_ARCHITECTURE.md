@@ -1,8 +1,10 @@
 # 数据库管控台 · 前后端架构设计
 
 > 分支：`future/database-wire-protocol-foundation`  
-> 状态：**设计已定稿（作者自检通过）→ 据此实现**  
-> 关联：领域与 API 摘要见 [`CONSOLE_DESIGN.md`](CONSOLE_DESIGN.md)；缺口与证据见 [`STATUS_AND_GAPS.md`](STATUS_AND_GAPS.md)
+> 状态：**§11–§26 已落地**（含主题切换 / UX 抛光 / RBAC / 实例 ACL）；脱敏类型边界见 STATUS §4.2（含 decimal/时间/uuid）  
+> 关联：领域摘要 [`CONSOLE_DESIGN.md`](CONSOLE_DESIGN.md)；**现行 REST** [`CONSOLE_API_V1.md`](CONSOLE_API_V1.md)；缺口证据 [`STATUS_AND_GAPS.md`](STATUS_AND_GAPS.md)  
+>
+> **路径约定**：基准前缀 **`/console/api/v1`**。下文早期章节若写 `/console/api/...`，均视为相对该前缀。破坏性更名：`bulk`→`bulk-actions`，`/audit`→`/audit/operations`，`/audit/spool|records`→`/audit/traffic`（见 API v1 文档）。
 
 ---
 
@@ -17,9 +19,9 @@
 | C5 | API 为迁移边界 | 换前端框架不改后端契约；后端演进不破坏已发布字段语义 |
 | C6 | 密钥永不回传 | 仅 `passwordConfigured` / 掩码；日志同样禁止明文 |
 | C7 | Java 17 | 后端编译目标保持 17 |
-| C8 | 鉴权本阶段不做完整 SSO | 可选 `gateway.console.api-token`（§12.7）；生产仍建议网络隔离 / 反代；完整 SSO 规划 |
+| C8 | 鉴权可配置、密钥永不回传 | `open`/`token`/`form`/`oidc`（§17）；RBAC §22；实例 ACL §24；生产仍建议网络隔离 / 反代 |
 
-**本阶段非目标**：完整 Auth/SSO（仅可选 api-token）、SQL Server 深度能力、独立 Node 生产部署、按品牌插件市场 UI。
+**仍非目标**：SQL Server 深度能力（脱敏/Attention/深 token）、Oracle wire、外部 Prometheus/PagerDuty、独立 Node 生产部署、按品牌插件市场 UI。Auth 四模式 + RBAC/ACL **已落地**（非完整 IAM/SCIM）。
 
 ---
 
@@ -429,6 +431,7 @@ hash_hex_length null, enabled, created_at, updated_at
 ```
 
 - `strategy`: `null|fixed|partial|hash|encrypt`
+- 策略 ↔ 列类别（引擎 `supportedCategories`）：`null` 全类别；`fixed` → TEXT/NUMERIC/TEMPORAL/UUID；`partial`/`hash` → TEXT/UUID；`encrypt` **仅 TEXT**。协议可改写类型见 STATUS §4.2（含 decimal/时间/uuid；geometry/interval 等仍 fail-closed）
 - API 不回传与密钥相关字段；`fixed_value` 可回传（非密钥）或可选掩码
 - 实例删除时级联删规则
 
@@ -730,7 +733,7 @@ GET /console/api/audit/status
   }
 ```
 
-- 流量审计仍由 `gateway.audit.*` + `AuditSpool` / `AuditShipper` 驱动；§14 本轮只**暴露状态**。内容浏览见 **§18**（`GET /console/api/audit/spool`）。
+- 流量审计仍由 `gateway.audit.*` + `AuditSpool` / `AuditShipper` 驱动；§14 本轮只**暴露状态**。内容浏览见 **§18**（`GET /console/api/v1/audit/traffic`）。
 - Ops 页补充启用说明 + 指向 `docs/OPS.md`。
 - `GET /console/api/audit?action=&limit=` 仍仅列**管控操作审计**（H2 `gateway_console_audit`）。
 
@@ -807,7 +810,7 @@ GET /console/api/audit/status
 | 克隆 `POST …/clone` | ✅ 本轮 | 复制为新管控台实例；可带脱敏规则；密码密文在 H2 内复制、API 不回显 |
 | 导入 `POST …/import` | ✅ 本轮 | 对齐 export shape；默认不接受/忽略密码字段 |
 | 列表筛选 | ✅ 本轮 | `GET /instances?status=&dbType=&q=` 服务端过滤 |
-| 批量启停 | ✅ 本轮 | `POST /instances/bulk` per-id 结果 |
+| 批量启停 | ✅ 本轮 | `POST /instances/bulk-actions` per-id 结果 |
 | SQL 工作台 | ✅ 本轮 / 已改经代理 | `POST …/sql/execute`；挂网关实例；**经代理 listenPort**（脱敏/观测/数据面风控生效）；h2 lab 仍直连 |
 | Prometheus 出口 | ❌ 本轮不做 | 见 §14.3 / STATUS P2-4 |
 
@@ -851,8 +854,8 @@ GET /console/api/audit/status
 
 | 项 | 约定 |
 |---|---|
-| 筛选 | `GET /console/api/instances?status=&dbType=&q=`；`q` 匹配 id/name/listenHost/targetHost（含）；`byStatus`/`count` 基于过滤后集合 |
-| 批量 | `POST /console/api/instances/bulk` body `{ action: "start"\|"stop", ids: string[] }` → `{ results: [{id, ok, message}], okCount, failCount }`；config 实例允许 stop；start 须已 bound |
+| 筛选 | `GET /console/api/v1/instances?status=&dbType=&q=`；`q` 匹配 id/name/listenHost/targetHost（含）；`byStatus`/`total` 基于过滤后集合 |
+| 批量 | `POST /console/api/v1/instances/bulk-actions` body `{ action: "start"\|"stop", ids: string[] }` → `{ results: [{id, ok, message}], okCount, failCount }`；config 实例允许 stop；start 须已 bound |
 
 ### 15.6 SQL 工作台（协议无关）
 
@@ -882,7 +885,7 @@ GET /console/api/audit/status
 | POST | `/instances/{id}/clone` | 克隆为新 console 实例 |
 | POST | `/instances/import` | 批量导入 |
 | GET | `/instances?status=&dbType=&q=` | 筛选 |
-| POST | `/instances/bulk` | 批量 start/stop |
+| POST | `/instances/bulk-actions` | 批量 start/stop |
 | POST | `/instances/{id}/sql/execute` | SQL 工作台（多语句） |
 | POST | `/instances/{id}/sql/cancel` | 取消进行中执行（executionId） |
 | POST | `/sql/executions/{executionId}/cancel` | 同上（按 executionId） |
@@ -894,7 +897,8 @@ GET /console/api/audit/status
 | A–E lite / 风控 | 见 §11–§14 | ✅ |
 | **管控台完备（本轮）** | 编辑 · 克隆 · 导入 · 筛选 · 批量 | ✅ |
 | **SQL 工作台（经代理）** | JDBC → listenPort；脱敏可验证；h2 例外直连 | ✅ |
-| Prometheus / SSO / IDE | 外部指标 · 完整鉴权 · 完整 SQL IDE | 规划（本轮明确不做） |
+| 完整 SQL IDE / 鉴权 SSO / RBAC / ACL / 主题 | 见 §16–§26 | ✅ 已落地 |
+| 外部 Prometheus / PagerDuty | Micrometer scrape · 外部告警栈 | **仍不做**（进程内告警见 §21） |
 
 ### 15.9 自检清单（作者）
 
@@ -1044,12 +1048,12 @@ Session cookie：`SameSite=Lax`（模板已设）；OIDC 回跳后 CSRF cookie �
 | 类型 | 存储 | API | UI |
 |---|---|---|---|
 | **管控操作审计** | H2 `gateway_console_audit` | 既有 `GET /console/api/audit?action=&limit=` | Ops「管控操作审计」Tab |
-| **流量 / spool 审计** | `RecentTrafficRing` + `gateway.audit` spool 分段；可选 JDBC sink | **本轮** `GET /console/api/audit/spool`（别名 `/audit/records`） | Ops「流量 / spool 审计」Tab |
+| **流量 / spool 审计** | `RecentTrafficRing` + `gateway.audit` spool 分段；可选 JDBC sink | **已落地** `GET /console/api/v1/audit/traffic`（旧名 `/audit/spool`/`records` 已废弃） | Ops「流量 / spool 审计」Tab |
 
 ### 18.2 流量浏览 API
 
 ```text
-GET /console/api/audit/spool?limit=50&before=&source=auto|ring|spool|jdbc&protocol=&operation=
+GET /console/api/v1/audit/traffic?limit=50&before=&source=auto|ring|spool|jdbc&protocol=&operation=
 → {
     auditEnabled, destination, maskStatements, spoolDir, jdbcConfigured,
     source,          // 实际采用的来源
@@ -1086,7 +1090,7 @@ GET /console/api/audit/spool?limit=50&before=&source=auto|ring|spool|jdbc&protoc
 
 ### 18.5 自检清单（作者）
 
-- [x] 协议无关路径 `/console/api/audit/spool`（+ `/records` 别名）；无品牌前缀
+- [x] 协议无关路径 `/console/api/v1/audit/traffic`；无品牌前缀
 - [x] 与 `GET /audit`（管控操作）分离；UI 双 Tab 标明
 - [x] ring + spool 默认 lab 可用；jdbc 可选且失败诚实
 - [x] 无密钥 / 无 JDBC 密码进 JSON；语句截断 + mask
@@ -1241,7 +1245,7 @@ GET /console/api/audit/spool?limit=50&before=&source=auto|ring|spool|jdbc&protoc
 ## 22. 管控台细粒度 RBAC（权限目录 · 角色 · 方法鉴权）
 
 > 作者自检通过后实现。在既有 `open` / `token` / `form` / `oidc` 之上升级为**生产可用的全局角色 + 权限串**模型。  
-> **不做**完整 IAM / 多租户 / 实例级 ACL（下轮可选）；**不做**外部 IdP 角色同步产品化（仅扩展既有 OIDC claim 映射）；**不做** Prometheus。
+> **实例级 ACL 已落地（§24）**。**不做**完整 IAM / 多租户 / SCIM；**不做**外部 IdP 角色同步产品化（仅扩展既有 OIDC claim 映射）；**不做** Prometheus。
 
 ### 22.1 目标
 
@@ -1424,7 +1428,7 @@ UNIQUE(principal_type, principal, instance_id)
 
 ### 25.1 目标
 
-深色云控制台观感：侧栏层级、顶栏状态芯片、卡片/表格/抽屉/SQL 分栏更清晰；统一 spacing / radius / focus；空态与软加载；中文文案与「网关代理 / 透明代理」语义保留。
+云控制台观感（**浅色默认**，可切深色 / 跟随系统）：侧栏层级、顶栏状态芯片、卡片/表格/抽屉/SQL 分栏更清晰；统一 spacing / radius / focus；空态与软加载；中文文案与「网关代理 / 透明代理」语义保留。
 
 ### 25.2 实现要点
 
@@ -1437,13 +1441,13 @@ UNIQUE(principal_type, principal, instance_id)
 
 ### 25.3 非目标
 
-不引入大型 UI 组件库；不改 `/console/api/v1`。主题切换见后续提交（浅色默认 + light/dark/system）。
+不引入大型 UI 组件库；不改 `/console/api/v1`。主题切换 **已落地**（浅色默认 + light/dark/system；`ThemeSwitcher` + `useTheme`）。
 
 ### 25.4 自检
 
 - [x] `npm run build`（vue-tsc）绿
 - [x] 代理模式徽章与 RBAC 显隐逻辑未改契约
-- [x] focus-visible / 对比度按深色面板检查
+- [x] focus-visible / 浅色与深色对比度检查
 
 ## 26. 管控台 UX 微抛光（自检）
 

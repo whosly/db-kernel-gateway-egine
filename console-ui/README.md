@@ -8,12 +8,12 @@ Vue 3 + TypeScript + Vite。构建产物嵌入网关 jar 的 `/console/`。
 
 | 项 | 决策 |
 |---|---|
-| 主题 | 深色默认（`--bg` / `--bg-card` 等 CSS 变量）；克制蓝青强调色，避免霓虹 |
-| Shell | 侧栏图标导航 + sticky 顶栏（健康芯片 / 鉴权模式 / 用户角色） |
+| 主题 | **浅色默认**；顶栏可切浅色 / 深色 / 跟随系统（`data-theme` + CSS 变量）；克制蓝青强调色 |
+| Shell | 侧栏图标导航 + sticky 顶栏（健康芯片 / 主题切换 / 鉴权模式 / 用户角色）；窄屏抽屉 + 汉堡菜单 |
 | 令牌 | `src/styles/tokens.css` 统一色板、圆角、阴影、字号、间距、动效 |
 | 组件 | 全局按钮/表单/徽章/空态/骨架/Toast；卡片 hover + focus-visible |
 | 页面 | 总览 KPI、实例工具栏与空态、抽屉滑入、SQL IDE 分栏、登录卡片、目录表 |
-| 可访问性 | 焦点环、`role`/`aria-live` Toast、对比度按深色面板设计 |
+| 可访问性 | 焦点环、`role`/`aria-live` Toast、浅色/深色对比度、Esc 关抽屉/对话框 |
 | 依赖 | 无新增 UI 库（保持 vue + vue-router） |
 
 **自检**：`npm run build`（含 `vue-tsc`）通过；RBAC 按钮显隐与「网关代理 / 透明代理」徽章语义不变。

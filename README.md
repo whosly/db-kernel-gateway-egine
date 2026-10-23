@@ -27,7 +27,7 @@
 
 | 项 | 本分支（`future/database-wire-protocol-foundation`） |
 |---|---|
-| 默认单元测试 | **436** 条全绿（JDK 17；`pom` 排除 `*IntegrationTest`；以 STATUS §1 为准） |
+| 默认单元测试 | **613** 条全绿（JDK 17；`pom` 排除 `*IntegrationTest`；以 STATUS §1 为准） |
 | 真库集成 `-Pintegration-test` | **14 / 14** 全绿（2026-09-24，本地 Docker MySQL `:13308` + PostgreSQL `:5432`） |
 | JDK / 编译 | `pom` 目标 **17**；虚拟线程经 `VirtualThreadExecutors` **反射**在 JDK 21+ 启用，JDK 17 回退平台线程池（STATUS P0-1） |
 | 核心数据路径 | 透明代理、查询/结果、预处理、错误透传、脱敏 happy path、PG `COPY` — **已在集成中 live-proven** |
@@ -81,6 +81,7 @@
 - MySQL：文本行 + 预处理二进制行（长度前缀类型、常见整数/浮点、`bit`、**decimal** ASCII、**date/time/datetime/timestamp**）；`geometry`/未知类型的非空改写拒绝。
 - PostgreSQL：文本格式 + 可复现二进制（`text`/`bytea`/`json(b)`、`int2/4/8`、`bool`、`float4/8`、**numeric**、**date/time/timestamp/timestamptz**、**uuid**）；`interval`/`money`/`timetz`/未知 OID 的非空改写拒绝；置 NULL 对任意类型可用。
 - `NullingRule` **只匹配可空列**：MySQL 字面量列常为 `NOT NULL`，置 NULL 规则不会生效——需固定值/哈希/加密等。
+- 规则策略 ↔ 列类别：`null` 全类别；`fixed` → TEXT/NUMERIC/TEMPORAL/UUID；`partial`/`hash` → TEXT/UUID（UUID 保持 `8-4-4-4-12`）；`encrypt` **仅 TEXT**。
 
 细节以代码为准；排期缺口见 STATUS（P1-5）。
 
@@ -378,7 +379,7 @@ mvn -Pintegration-test test
 |---|---|
 | UI | [http://localhost:8080/console](http://localhost:8080/console)（`server.port` 可改） |
 | 类型目录 API | `GET /console/api/v1/databases` |
-| 实例 API | `GET/POST /console/api/v1/instances`（`?status=&dbType=&q=`）；`PUT /instances/{id}`；`/status|metrics|start|stop`；`POST …/clone`；`POST …/import`；`POST …/bulk` |
+| 实例 API | `GET/POST /console/api/v1/instances`（`?status=&dbType=&q=`）；`PUT /instances/{id}`；`/status|metrics|start|stop`；`POST …/clone`；`POST …/import`；`POST …/bulk-actions` |
 | 会话 | `GET …/instances/{id}/sessions`；`DELETE …/sessions/{connectionId}`（关客户端腿） |
 | 健康探测 | `POST|GET …/instances/{id}/health-check`（TCP + 可选 JDBC，~3s） |
 | 导出 / 导入 | `GET …/instances/export`、`GET …/config/export`（无密码）；`POST …/instances/import` |
@@ -388,15 +389,18 @@ mvn -Pintegration-test test
 | 最近语句 | `GET …/instances/{id}/recent-statements`（内存环，重启丢失） |
 | 脱敏规则 API | `GET/POST/PUT/DELETE /console/api/v1/instances/{id}/masking-rules`（协议无关） |
 | 列提示 | `GET /console/api/v1/instances/{id}/schema/columns?table=`（JDBC metadata；失败 502） |
-| 安全 | `GET/PUT/DELETE /console/api/v1/security/masking-key`；`GET /console/api/v1/audit`（`action`/`limit`） |
+| 安全 | `GET/PUT/DELETE /console/api/v1/security/masking-key`；管控操作审计 `GET /console/api/v1/audit/operations`（`action`/`limit` → `{ items, total }`） |
 | 审计状态 | `GET /console/api/v1/audit/status`（非密钥：enabled/destination/spoolDir/…） |
-| 流量审计内容 | `GET /console/api/v1/audit/spool`（别名 `/audit/records`；ring/spool/可选 jdbc；分页 `before`） |
+| 流量审计内容 | `GET /console/api/v1/audit/traffic`（ring/spool/可选 jdbc；分页 `before`） |
+| 告警阈值 | `GET/POST… /console/api/v1/alerts/thresholds`；当前触发 `GET …/alerts/active`（进程内，非 Prometheus） |
+| 实例 ACL | `GET/PUT …/instances/{id}/acl`；绑定 CRUD；`acl:manage`（ADMIN）；见 CONSOLE_ARCHITECTURE §24 |
+| UI 主题 | 浅色默认；顶栏可切浅色 / 深色 / 跟随系统 |
 | 指标时序 | `GET /console/api/v1/metrics/history?instanceId=&limit=`（进程内环；总览火花图） |
 | 风控 | `GET/PUT /console/api/v1/risk-policy`（H2 覆盖 + 热挂；空=allow-all） |
 | 连接池 | 实例 `metrics`/`status` 含 `pool.{enabled,idleCount,maxIdle}` |
 | 控制面加密 | `gateway.console.secret-key-base64`（32 字节 AES Base64）→ 密码/密钥 `enc:v1:`；缺省实验室明文；生产 `require-secret-encryption=true` 缺钥拒写（503） |
 | 可选 API Token | `gateway.console.api-token`（读写）；`gateway.console.read-token`（仅 GET）；`Authorization: Bearer` 或 `X-Console-Token` |
-| 设计 | [`docs/CONSOLE_ARCHITECTURE.md`](docs/CONSOLE_ARCHITECTURE.md) §11–§15 · [`CONSOLE_DESIGN.md`](docs/CONSOLE_DESIGN.md) |
+| 设计 | [`docs/CONSOLE_ARCHITECTURE.md`](docs/CONSOLE_ARCHITECTURE.md) §11–§26 · [`CONSOLE_API_V1.md`](docs/CONSOLE_API_V1.md) · [`CONSOLE_DESIGN.md`](docs/CONSOLE_DESIGN.md) |
 
 一等实体是 **网关实例**（监听端口 + `dbType` 标签），不是按 MySQL/PG 分拆的控制台。管控台以 `proxyMode`/`proxyModeLabel` 标注能力：**网关代理**（MySQL/PG 协议网关）vs **透明代理**（SQL Server 字节中继）；启停仍走既有 ProtocolAdapter。  
 类型目录（`gateway.catalog`）与实例注册表（`gateway.instances`）分离。  

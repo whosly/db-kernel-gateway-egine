@@ -10,7 +10,8 @@
 | [STATUS_AND_GAPS.md](STATUS_AND_GAPS.md) | **本分支功能现状与缺口（P0/P1/P2）** | 证据来自代码/测试；随实现更新 |
 | [OPS.md](OPS.md) | **运维开启清单 / 告警清单 / 集成跳过策略** | 面向部署；与 STATUS P2 对齐 |
 | [SQLSERVER_TDS_PLAN.md](SQLSERVER_TDS_PLAN.md) | **SQL Server（TDS）接入计划 P0/P1/P2** | 第三协议决策与脚手架边界 |
-| [CONSOLE_ARCHITECTURE.md](CONSOLE_ARCHITECTURE.md) | **管控台前后端架构（分层 / 契约 v1 / Vue+TS+Vite / Phase A–B）** | §11 A+ · §12 Phase B；自检通过 |
+| [CONSOLE_ARCHITECTURE.md](CONSOLE_ARCHITECTURE.md) | **管控台前后端架构（分层 / Vue+TS+Vite / Phase A–§26）** | 设计演进记录；现行能力以 STATUS 为准 |
+| [CONSOLE_API_V1.md](CONSOLE_API_V1.md) | **管控台 REST 契约 v1**（`/console/api/v1`） | 路径 / envelope / Problem；破坏性更名表 |
 | [CONSOLE_DESIGN.md](CONSOLE_DESIGN.md) | **数据库管控台设计（实例中心 · 协议无关）** | 类型目录 ≠ 实例注册表；多实例模型 |
 | [PROTOCOL_REFERENCE_TABLES.md](PROTOCOL_REFERENCE_TABLES.md) | 协议参考表镜像（能力位、命令码、错误码等） | **镜像**；真源是 `adapter.*` 枚举 |
 | [rules/database-protocol-rules.md](rules/database-protocol-rules.md) | 数据库 wire protocol 规则 | 描述协议应当如何，不是现状清单 |
@@ -22,6 +23,7 @@
 1. 使用者：`README.md` → 对应数据库模板 → 运维见 `OPS.md` → 需要时再看审计章节。
 2. 协议开发：`AGENTS.md` → `rules/database-protocol-rules.md` → `PROTOCOL_REFERENCE_TABLES.md` → 代码。
 3. 排期 / 评审：`STATUS_AND_GAPS.md`（先看 P0）。
+3b. 管控台 API 联调：`CONSOLE_API_V1.md` → `CONSOLE_ARCHITECTURE.md`（§11+）。
 4. 新库接入：`ProtocolAdapterRegistry` javadoc + README「扩展新数据库」。
 5. SQL Server：[`SQLSERVER_TDS_PLAN.md`](SQLSERVER_TDS_PLAN.md) → 代码 `adapter/sqlserver`。
 
