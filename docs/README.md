@@ -9,7 +9,7 @@
 | [../AGENTS.md](../AGENTS.md) | 仓库硬约束（分层、透明性、安全、工作约定） | 开发前必读 |
 | [STATUS_AND_GAPS.md](STATUS_AND_GAPS.md) | **本分支功能现状与缺口（P0/P1/P2）** | 证据来自代码/测试；随实现更新 |
 | [OPS.md](OPS.md) | **运维开启清单 / 告警清单 / 集成跳过策略** | 面向部署；与 STATUS P2 对齐 |
-| [SQLSERVER_TDS_PLAN.md](SQLSERVER_TDS_PLAN.md) | **SQL Server（TDS）接入计划 P0/P1/P2** | 第三协议决策与脚手架边界 |
+| [SQLSERVER_TDS_PLAN.md](SQLSERVER_TDS_PLAN.md) | **SQL Server（TDS）接入计划 P0/P1/P2** | 透明中继 + 观测/脱敏/reset + Login7 deferred 选路 |
 | [CONSOLE_ARCHITECTURE.md](CONSOLE_ARCHITECTURE.md) | **管控台前后端架构（分层 / Vue+TS+Vite / Phase A–§26）** | 设计演进记录；现行能力以 STATUS 为准 |
 | [CONSOLE_API_V1.md](CONSOLE_API_V1.md) | **管控台 REST 契约 v1**（`/console/api/v1`） | 路径 / envelope / Problem；破坏性更名表 |
 | [CONSOLE_DESIGN.md](CONSOLE_DESIGN.md) | **数据库管控台设计（实例中心 · 协议无关）** | 类型目录 ≠ 实例注册表；多实例模型 |

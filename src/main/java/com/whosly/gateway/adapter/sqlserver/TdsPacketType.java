@@ -4,8 +4,8 @@ package com.whosly.gateway.adapter.sqlserver;
  * TDS packet type byte (header offset 0). Owned by this enum — docs mirror only.
  *
  * <p>Observed on the cleartext path: PreLogin, Login7, SQL_BATCH, Attention,
- * tabular ERROR / DONE_ATTN. Deeper types (RPC name parse, Bulk, token rewrite)
- * remain deferred.</p>
+ * RPC, Bulk, tabular ERROR / DONE_ATTN. Used by deferred Login7 routing and
+ * observation/masking pipelines.</p>
  */
 public enum TdsPacketType {
 

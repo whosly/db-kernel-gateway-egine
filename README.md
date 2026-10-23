@@ -1,6 +1,6 @@
 # 数据库内核网关引擎
 
-基于 **Java 17** 的透明数据库协议网关：客户端连网关端口，网关把 **MySQL / PostgreSQL** wire 流量转发到真实目标库，并在**明文阶段**提供 SQL 观测、可选审计留痕与结果集脱敏等扩展点。第三协议 **SQL Server（TDS）** 为 **P0 透明中继 + P1 观测/拒绝 + P2**（ROW/NBCROW 脱敏含 text/guid/numeric/temporal/text·binary-PLP/TEXTPTR/MONEY*，XML/UDT 仅 NULL；RPC/Bulk 观测、`sp_reset_connection`；见 [`docs/SQLSERVER_TDS_PLAN.md`](docs/SQLSERVER_TDS_PLAN.md)），**不是**与 MySQL/PostgreSQL 对等（Login7 不驱动选路；XML/UDT 非空与 TVP/未知仍 fail-closed）。
+基于 **Java 17** 的透明数据库协议网关：客户端连网关端口，网关把 **MySQL / PostgreSQL** wire 流量转发到真实目标库，并在**明文阶段**提供 SQL 观测、可选审计留痕与结果集脱敏等扩展点。第三协议 **SQL Server（TDS）** 为 **P0 透明中继 + P1 观测/拒绝 + P2**（ROW/NBCROW 脱敏含 text/guid/numeric/temporal/text·binary-PLP/TEXTPTR/MONEY*，XML/UDT 仅 NULL；RPC/Bulk 观测、`sp_reset_connection`、**Login7 deferred 身份选路**；见 [`docs/SQLSERVER_TDS_PLAN.md`](docs/SQLSERVER_TDS_PLAN.md)），**不是**与 MySQL/PostgreSQL 全对等（XML/UDT 非空与 TVP/未知仍 fail-closed；ENCRYPTION 路径不看 Login7）。
 
 > 网关不伪造握手能力、不校验也不保存客户端明文密码；认证与结果由目标库完成。  
 > 能力边界以本 README「功能清单」与 [`docs/STATUS_AND_GAPS.md`](docs/STATUS_AND_GAPS.md) 为准——规划中的能力不会写成「已实现」。
@@ -27,7 +27,7 @@
 
 | 项 | 本分支（`future/database-wire-protocol-foundation`） |
 |---|---|
-| 默认单元测试 | **675** 条全绿（JDK 17；`pom` 排除 `*IntegrationTest`；以 STATUS §1 为准） |
+| 默认单元测试 | **684** 条全绿（JDK 17；`pom` 排除 `*IntegrationTest`；以 STATUS §1 为准） |
 | 真库集成 `-Pintegration-test` | **14 / 14** 全绿（2026-09-24，本地 Docker MySQL `:13308` + PostgreSQL `:5432`） |
 | JDK / 编译 | `pom` 目标 **17**；虚拟线程经 `VirtualThreadExecutors` **反射**在 JDK 21+ 启用，JDK 17 回退平台线程池（STATUS P0-1） |
 | 核心数据路径 | 透明代理、查询/结果、预处理、错误透传、脱敏 happy path、PG `COPY` — **已在集成中 live-proven** |
@@ -62,7 +62,7 @@
 | 结果集脱敏（类型边界） | **部分** | MySQL：`bit`/`decimal`/date/time/datetime/timestamp；PG：int/bool/float/`numeric`/date/time/timestamp/timestamptz/`uuid`；SQL Server：ROW/NBCROW text/guid/numeric/temporal/text·binary-PLP/TEXTPTR/MONEY*（XML/UDT 仅 NULL）；geometry/interval/money/timetz/XML·UDT 非空/TVP/未知仍拒绝；见 STATUS §4.2 |
 | 审计 spool / JDBC 搬运 | **已接线·默认关** | fail-closed；P0-3 专用单测已补；真库 JDBC 验收仍属集成 |
 | 连接上限 / CIDR / idle | **已实现** | `max-connections`、`allowed-client-cidrs`、`idle-timeout-seconds` |
-| 后端 failover / 路由 | **部分** | `backend-endpoints` 顺序 failover；可选 `gateway.routing.*` 按库名/用户/权重（默认关）；PG 首包 peek；MySQL deferred AuthSwitch 换绑（禁止伪造 greeting）；SQL Server Login7 仅 hint |
+| 后端 failover / 路由 | **部分** | `backend-endpoints` 顺序 failover；可选 `gateway.routing.*` 按库名/用户/权重（默认关）；PG 首包 peek；MySQL deferred AuthSwitch 换绑；SQL Server Login7 deferred 静默 PreLogin 换绑（ENCRYPTION 停 bootstrap） |
 | PG Cancel | **部分** | `CancelRequest` 与 `BackendKeyData` **仅关联索引**；**不代发** cancel；MySQL `COM_PROCESS_KILL` 透传 |
 | 风控策略 | **部分** | `DenyListDatabaseRiskPolicy` 可配置拒绝清单；空配置默认 `allowAll()` |
 | TLS / 压缩 | **部分** | 默认 opaque / 可选拒绝；**可选 TLS 终止**（`gateway.tls.*`，协议无关）；压缩后仍 opaque |
@@ -70,7 +70,7 @@
 | 连接池化 | **已接线·默认关** | `gateway.pool.enabled`；`reset-mode=none|protocol`；protocol=MySQL `COM_RESET_CONNECTION` / PG `DISCARD ALL` / SQL Server `sp_reset_connection` |
 | Actuator / HTTP 指标出口 | **已接线·内存计数** | `/gateway/metrics` + `/actuator/gateway`；无远程 Micrometer |
 | 非交互启动 | **已实现** | `Application` 自动 start；`gateway.cli.interactive` 默认 false |
-| SQL Server（TDS）透明中继 | **部分（P0+P1+P2）** | 双工 + Login7/SQL_BATCH/ERROR/Attention/RPC/Bulk 观测 + 网关 ERROR+DONE；**ROW/NBCROW 脱敏**（text/guid/numeric/temporal + text/binary PLP + TEXTPTR + MONEY*；XML/UDT 仅 NULL；TVP/未知 fail-closed）；**`sp_reset_connection`**；Login7 hint（非选路）。Compose `sqlserver` profile + integration harness（无 Docker skip）。计划：[`docs/SQLSERVER_TDS_PLAN.md`](docs/SQLSERVER_TDS_PLAN.md) |
+| SQL Server（TDS）透明中继 | **部分（P0+P1+P2）** | 双工 + Login7/SQL_BATCH/ERROR/Attention/RPC/Bulk 观测 + 网关 ERROR+DONE；**ROW/NBCROW 脱敏**（text/guid/numeric/temporal + text/binary PLP + TEXTPTR + MONEY*；XML/UDT 仅 NULL；TVP/未知 fail-closed）；**`sp_reset_connection`**；**Login7 deferred 选路**。Compose `sqlserver` profile + integration harness（无 Docker skip）。计划：[`docs/SQLSERVER_TDS_PLAN.md`](docs/SQLSERVER_TDS_PLAN.md) |
 | Oracle | **未实现** | stub：`gateway.proxy-db-type=oracle` 启动失败并提示 |
 
 > 主流代理在数据平面上也不靠「跨线程共享可变协议状态」保证正确——本仓库同样让每条连接的协议状态在任一时刻只属于一个执行体。
@@ -120,7 +120,7 @@ gateway:
         endpoints: hostR:3306
 ```
 
-组合顺序：**Routing → Pool → Failover/Fixed**。`routing.enabled=false`（默认）时行为与仅 failover 相同。Oracle / SQL Server 适配器填充同一 `RoutingContext` 即可复用。
+组合顺序：**Routing → Pool → Failover/Fixed**。`routing.enabled=false`（默认）时行为与仅 failover 相同。PostgreSQL 首包 peek；MySQL / SQL Server 在有规则时走 deferred 身份选路（填充同一 `RoutingContext`）。
 
 
 ## 端口速查
@@ -236,7 +236,7 @@ psql client -> gateway:35433 -> target postgresql (:5432 等)
 
 ## 快速开始 · SQL Server（P0 + P1 + P2）
 
-> **诚实边界**：透明 TDS 双工 + 明文观测 + ROW/NBCROW 脱敏（text/guid/numeric/temporal/text·binary-PLP/TEXTPTR/MONEY*；XML/UDT 仅 NULL）+ `sp_reset_connection`；**不是** MySQL/PG 对等（Login7 不驱动 `acquire`；XML/UDT 非空与 TVP/未知仍 fail-closed）。阶段见 [`docs/SQLSERVER_TDS_PLAN.md`](docs/SQLSERVER_TDS_PLAN.md)。
+> **诚实边界**：透明 TDS 双工 + 明文观测 + ROW/NBCROW 脱敏（text/guid/numeric/temporal/text·binary-PLP/TEXTPTR/MONEY*；XML/UDT 仅 NULL）+ `sp_reset_connection` + Login7 deferred 选路；**不是** MySQL/PG 全对等（XML/UDT 非空与 TVP/未知仍 fail-closed；ENCRYPTION 不 peek Login7）。阶段见 [`docs/SQLSERVER_TDS_PLAN.md`](docs/SQLSERVER_TDS_PLAN.md)。
 >
 > **管控台 SQL 工作台**：classpath 含 `mssql-jdbc` 时，RUNNING 实例可经 **proxy listenPort** 执行 SQL（与 MySQL/PG 同路径）。
 

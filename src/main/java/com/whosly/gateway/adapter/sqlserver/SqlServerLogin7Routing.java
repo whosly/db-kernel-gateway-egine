@@ -5,17 +5,12 @@ import com.whosly.gateway.adapter.protocol.RoutingContext;
 /**
  * Maps Login7 identity into a {@link RoutingContext}.
  *
- * <p><b>Why the transparent adapter does not call this before
- * {@code acquire}:</b> TDS is client-first, but the first message is PreLogin
- * (no user/database). Login7 arrives only after a PreLogin round-trip with
- * <em>some</em> backend. Peeking Login7 before acquire would require forging a
- * PreLogin response (partial handshake termination) and is therefore out of
- * scope for the transparent duplex path. {@code SqlServerProtocolAdapter}
- * keeps {@code probeClientForRouting} empty and observes Login7 on the duplex
- * path only.</p>
- *
- * <p>This helper exists so tests and a future cleartext-terminating probe can
- * share one mapping without inventing a second identity model.</p>
+ * <p>Used by {@link SqlServerDeferredIdentityRouter} after a real PreLogin
+ * round-trip with the bootstrap backend. PreLogin itself has no user/database,
+ * so {@code probeClientForRouting} stays empty; identity selection happens in
+ * the deferred phase (match → Login7 replay; mismatch → silent PreLogin rebind).
+ * See {@code docs/SQLSERVER_TDS_PLAN.md} and scratch
+ * {@code SQLSERVER_LOGIN7_IDENTITY_ROUTING_2026-10-23.md}.</p>
  */
 public final class SqlServerLogin7Routing {
 

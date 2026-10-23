@@ -4,15 +4,15 @@
 > **更新原则**：只写有代码/测试/配置证据的结论；「规划中」不得写成「已实现」。  
 > **导航**：见 [README.md](README.md)。
 >
-> **近况**：Vue console Phase A/A+/B/B+ + **C partial / E lite** — 审计状态 · 进程内 metrics history · 风控规则热挂 · 连接池徽章 · 可选 read-token；**UI**：改版 + 浅色默认主题切换 + **UX 微抛光**；**脱敏**：MySQL/PG decimal/时间/uuid；**SQL Server P2**：ROW/**NBCROW** 脱敏扩至 **TEXTPTR/MONEY*/VARBINARY(+MAX)**；XML/UDT **仅 NULL**；TVP/未知仍 fail-closed；RPC/Bulk 观测 + `sp_reset_connection`；P1 ERROR/Attention/Login7 hint 仍在；本环境 Docker 冒烟仍缺口。**boundary**：`runtime`↛`console`（`runtime.spi`）+ console API controllers 按域拆分。
+> **近况**：Vue console Phase A/A+/B/B+ + **C partial / E lite**；**脱敏**：MySQL/PG decimal/时间/uuid；**SQL Server P2**：ROW/**NBCROW** 脱敏（TEXTPTR/MONEY*/VARBINARY(+MAX)；XML/UDT 仅 NULL）+ RPC/Bulk + `sp_reset_connection` + **Login7 deferred 身份选路**；MySQL deferred AuthSwitch；OIDC lab harness；本环境 Docker 冒烟仍缺口。**boundary**：`runtime`↛`console`（`runtime.spi`）。
 
 ## 1. 构建与测试基线
 
 | 项 | 现状 | 证据 |
 |---|---|---|
-| 非集成 `@Test`/`@ParameterizedTest` 注解数 | **675** | `mvn test` Results；排除 `*IntegrationTest` |
+| 非集成 `@Test`/`@ParameterizedTest` 注解数 | **684** | `mvn test` Results；排除 `*IntegrationTest` |
 | 集成测试 | **16** 条注解（含 `SqlServerGatewayIntegrationTest`×1、`ConsoleOidcKeycloakBrowserE2EIntegrationTest`×1）；默认 surefire **排除** `*IntegrationTest`；无 local props 时 `-Pintegration-test` **assumeTrue 跳过**；本机有库/Keycloak 时可相应绿 | `pom.xml` excludes；跳过策略见 `docs/OPS.md` / `integration-test.properties` |
-| 本环境 `mvn test`（`JAVA_HOME`=JDK 17） | **BUILD SUCCESS：Tests run 675, Failures 0, Errors 0, Skipped 0** | surefire；含 **MySQL deferred 首连身份路由** + OIDC lab 制品校验 + SQL Server P2 脱敏/reset/RPC·Bulk + Attention/Login7 hint + MySQL/PG decimal/时间/uuid 脱敏 + 告警规则 + 列加密 E2E + SQL IDE + form/token/open/OIDC 配置 + RBAC/实例 ACL/工作台会话联动 |
+| 本环境 `mvn test`（`JAVA_HOME`=JDK 17） | **BUILD SUCCESS：Tests run 684, Failures 0, Errors 0, Skipped 0** | surefire；含 **MySQL deferred 首连身份路由** + OIDC lab 制品校验 + SQL Server P2 脱敏/reset/RPC·Bulk + Attention/Login7 hint + MySQL/PG decimal/时间/uuid 脱敏 + 告警规则 + 列加密 E2E + SQL IDE + form/token/open/OIDC 配置 + RBAC/实例 ACL/工作台会话联动 |
 | `pom.xml` 编译目标 | `maven.compiler.source/target=17` | **保持 17**；不升到 21 |
 
 **结论**：编译目标保持 17；VT 仅在 JDK 21+ 运行期启用。管控台已完成 Phase B/B+/C partial/E lite，并完成本轮**实例编辑/克隆/导入/筛选/批量**与 **SQL 工作台经代理 listenPort**；完整 SQL IDE（MaxGUI-lite）与本地 form/token 鉴权 + HTTPS 模板已落地；OIDC 为配置路径；**审计 spool 内容浏览**已落地；**SQL 多语句 + 尽力而为取消**已落地；**列加密 E2E**（密钥轮换 + verify）已落地（非 KMS）；**管控台告警阈值**（H2 + 进程内评估）已落地；**细粒度 RBAC**（VIEWER/OPERATOR/ADMIN + 权限串，§22）已落地；**SQL 工作台会话联动**（工作台执行中 ↔ 代理会话，§23）已落地；**实例级 ACL**（§24，用户/角色↔实例权限收窄）已落地；外部 Prometheus·Grafana / PagerDuty 仍不做。见 P0 / P1 / P2。
@@ -22,7 +22,7 @@
 | 主题 | 状态 | 摘要 |
 |---|---|---|
 | MySQL / PG 透明转发 | **done** | 阻塞 `ServerSocket` + 双工 `DuplexRelay` 逐字节转发 |
-| SQL Server（TDS）透明转发 | **partial（P0 + P1 + P2）** | `SqlServerProtocolAdapter` + framing + Login7/SQL_BATCH/**ERROR**/Attention/DONE_ATTN/**RPC**/Bulk 观测 + 网关 ERROR+DONE；**ROW/NBCROW 脱敏**（text/guid/numeric/temporal + text/binary PLP + **TEXTPTR** + **MONEY***；XML/UDT **仅 NULL**；TVP/未知 fail-closed）；**`SqlServerBackendSessionReset`**；Login7 `routing.hint`（**不**驱动 acquire）；Compose + integration harness（无 Docker skip）；计划 [`SQLSERVER_TDS_PLAN.md`](SQLSERVER_TDS_PLAN.md) |
+| SQL Server（TDS）透明转发 | **partial（P0 + P1 + P2）** | `SqlServerProtocolAdapter` + framing + Login7/SQL_BATCH/**ERROR**/Attention/DONE_ATTN/**RPC**/Bulk 观测 + 网关 ERROR+DONE；**ROW/NBCROW 脱敏**（text/guid/numeric/temporal + text/binary PLP + **TEXTPTR** + **MONEY***；XML/UDT **仅 NULL**；TVP/未知 fail-closed）；**`SqlServerBackendSessionReset`**；**Login7 deferred 选路**（`SqlServerDeferredIdentityRouter`：真实 PreLogin → peek Login7；匹配透明 / 异后端静默 PreLogin 换绑；ENCRYPTION 停 bootstrap）；Compose + integration harness（无 Docker skip）；计划 [`SQLSERVER_TDS_PLAN.md`](SQLSERVER_TDS_PLAN.md) |
 | 明文观测 / 状态机 | **partial** | 命令/消息抽取与会话状态齐全；TLS/压缩后 opaque |
 | 结果集脱敏 / 列加密 | **partial（improved）** | MySQL/PG 接线；**SQL Server ROW/NBCROW** 脱敏（text/guid/numeric/temporal + text/binary PLP + TEXTPTR + MONEY*；XML/UDT 仅 NULL；TVP/未知 fail-closed）；**encrypt E2E**：`enc:v1:<keyId>:` 密文、管控台密钥 CRUD/轮换/verify、缺钥失败闭合；**仍非**完整 KMS/HSM；MySQL/PG decimal/时间/uuid 已可非空改写，geometry/interval 等仍 fail-closed（§4.2） |
 | 审计 spool / JDBC ship | **partial（improved）** | 实现齐全；专用单测（P0-3）含 **H2 JDBC sink 行断言**；shipper 状态；H2 自动建表；**管控台可只读浏览** spool/环/JDBC（`GET /console/api/v1/audit/traffic`）；默认关闭 |
@@ -85,7 +85,7 @@ Spring 实际读取的键（`@Value`）与默认 `application.yml`、模板一�
 | P1-1 | TLS/压缩可观测性 | **partial（improved）** | extractor `opaqueTunnel`；`require-cleartext-inspection`；**可选 TLS 终止**（`ClientTlsTerminator` + `gateway.tls.*`，协议无关 accept 路径）；单测用测试 keystore | 压缩后仍 opaque；协议内建 SSL 协商（MySQL capability / PG SSLRequest）仍非终止路径；后端 mTLS 未做 |
 | P1-2 | MySQL `COM_STMT_EXECUTE` 参数观测 | **partial（improved）** | PREPARE 登记 `statement_id→param_count`；EXECUTE 发出事件（statement id + 可解析时的 param types）；**不**把绑定值写入 statement 文本；单测覆盖 | 可选：审计侧对 string 类型参数做脱敏摘要；仍无改写 EXECUTE |
 | P1-3 | PG Cancel 只关联不代发 | **done（设计如此）** | `PostgreSQLCancelKeyRegistry` 仅索引；adapter / 单测明确「associate-only」；CancelRequest 仍由客户端短连接透明转发 | 若需网关代发 cancel，需 session→backend socket 映射，另开设计 |
-| P1-4 | 多后端仅 failover | **done（improved）** | failover + 冷却；**`RoutingBackendProvider`** + **`RoutingHandshakeProbe` / `ProbedHandshake`**：PG 在 `acquire` 前 peek StartupMessage 填充 `RoutingContext` 并透明 replay；MySQL **server-first** bootstrap 仍 `acquire(empty)`（禁止伪造 greeting），有路由规则时 **`MySqlDeferredIdentityRouter`**：真实 greeting → 解析 HR → 同 fallback 则透明 replay；异后端则 AuthSwitch 换绑（有限认证中介）+ 序号修复；SSLRequest 停 bootstrap；`selectProvider`/`selectsFallback`；Oracle/SQL Server 复用 SPI | 半开熔断可再增强；MySQL SSL 首包仍看不到身份；见 §4.3 / scratch `MYSQL_FIRST_CONNECT_IDENTITY_ROUTING_2026-10-23.md` |
+| P1-4 | 多后端仅 failover | **done（improved）** | failover + 冷却；**`RoutingBackendProvider`** + **`RoutingHandshakeProbe` / `ProbedHandshake`**：PG peek StartupMessage；MySQL **`MySqlDeferredIdentityRouter`**（AuthSwitch 换绑；SSLRequest 停 bootstrap）；SQL Server **`SqlServerDeferredIdentityRouter`**（真实 PreLogin → peek Login7；静默 PreLogin 换绑；ENCRYPTION 停 bootstrap）；`selectProvider`/`selectsFallback`；Oracle 仍 stub | 半开熔断可再增强；MySQL SSL / SQL Server ENCRYPTION 首包仍看不到身份；见 §4.3 / scratch |
 | P1-5 | 结果集脱敏类型边界 | **partial（improved）** | MySQL：`bit` + **`decimal`（ASCII lenenc）** + **date/time/datetime/timestamp** 二进制可改写；PG：int/bool/float + **`numeric`** + **date/time/timestamp/timestamptz** + **`uuid`** 可改写；`geometry`/interval/money/timetz/未知仍 fail-closed；边界表见 §4.2 | geometry / interval / money / timetz 仍刻意拒绝 |
 | P1-6 | 连接池化 | **partial（improved）** | `PooledBackendProvider` + `gateway.pool.enabled`（默认 false）；`gateway.pool.reset-mode=none|protocol`（默认 none）；`protocol` 时经 registry SPI：MySQL `MySqlBackendSessionReset`（`COM_RESET_CONNECTION`）、PG `PostgreSQLBackendSessionReset`（`DISCARD ALL`）、SQL Server `SqlServerBackendSessionReset`（`sp_reset_connection`）；失败/拒绝关闭 socket；单测覆盖成功/失败 | 按身份/库名分池未做；reset 仍仅在已确认可复用 socket 上执行 |
 
@@ -99,7 +99,7 @@ Spring 实际读取的键（`@Value`）与默认 `application.yml`、模板一�
 | P2-4 | Metrics 出口 | **partial（improved）** | 每 listener 独立 metrics；overview 求和 + `legacyMetrics`；**E lite**：`MetricsHistorySampler` + `GET …/metrics/history` + Overview SVG 火花图（内存环） | 外部 Prometheus/Grafana 非必需 | 可选后续接 Micrometer；告警阈值见 `docs/OPS.md` |
 | P2-5 | 审计测试与运维手册 | **partial（improved）** | P0-3 + **JDBC H2 lab 验收**（`JdbcAuditDestination` ensureSchema/幂等；`application-audit-jdbc-h2-template.yml`；OPS 一路径；管控台 status 含 `jdbcRowCount`/`lastShip`；traffic `source=jdbc`） | 外部分离 MySQL/PG 审计库需运维自建；非业务库 |
 | P2-6 | 集成测试在 CI 可复现 | **partial（improved）** | 跳过策略写入 `integration-test.properties` + OPS；`-Pintegration-test` 无 props → `assumeTrue` skip；`-Pintegration-testcontainers` **stub only** | 真 Testcontainers 接线另开；默认 `mvn test` 仍不需 Docker |
-| P2-7 | 多库扩展点 / Oracle·SQL Server | **partial（SQL Server P0+P1+P2）** | 第三库定为 **SQL Server TDS**（非 Oracle）。透明 `DuplexRelay` + Login7/SQL_BATCH/ERROR/Attention/DONE_ATTN/**RPC**/Bulk 观测 + 网关 ERROR+DONE + Login7 `routing.hint`（probe 仍 empty）+ **ROW/NBCROW 脱敏**（`SqlServerResultSetMaskingInterceptor` + `TdsBinaryValues`/`TdsRowCodec`；text/guid/numeric/temporal + text/binary PLP + **TEXTPTR** + **MONEY***；XML/UDT **仅 NULL**；TVP/未知 fail-closed）+ **`SqlServerBackendSessionReset`** + Compose `sqlserver` profile（11433）+ `SqlServerGatewayIntegrationTest`（assumeTrue skip）。模板 31433→1433；管控台经 listenPort + `mssql-jdbc`。Oracle 仍 stub。**仍无** Login7 **驱动**选路 / 本环境真库冒烟证明（无 docker/podman） | Login7 选路需 PreLogin 伪造（非透明）；Oracle 另开；有 Docker 时冒烟 |
+| P2-7 | 多库扩展点 / Oracle·SQL Server | **partial（SQL Server P0+P1+P2）** | 第三库定为 **SQL Server TDS**（非 Oracle）。透明 `DuplexRelay` + Login7/SQL_BATCH/ERROR/Attention/DONE_ATTN/**RPC**/Bulk 观测 + 网关 ERROR+DONE + **Login7 deferred 选路**（`SqlServerDeferredIdentityRouter`；probe 仍 empty；scratch `SQLSERVER_LOGIN7_IDENTITY_ROUTING_2026-10-23.md`）+ **ROW/NBCROW 脱敏**（TEXTPTR/MONEY*/VARBINARY 等；XML/UDT 仅 NULL；TVP/未知 fail-closed）+ **`SqlServerBackendSessionReset`** + Compose `sqlserver` profile（11433）+ integration harness（skip）。模板 31433→1433。Oracle 仍 stub。**仍无** 本环境真库冒烟证明（无 docker/podman） | Oracle 另开；有 Docker 时冒烟 |
 
 
 ### 4.1 TLS / 明文强制（产品策略，P1-1）
@@ -122,10 +122,10 @@ Spring 实际读取的键（`@Value`）与默认 `application.yml`、模板一�
 |---|---|---|---|
 | **PostgreSQL** | **有**（cleartext StartupMessage 的 `user` / `database`） | `PostgreSQLStartupRouting` peek 首包 → `acquire(context)` → `DuplexRelay` 前缀 replay 原字节 | 客户端先发；SSLRequest/CancelRequest 无身份 → empty + replay |
 | **MySQL** | bootstrap **空**；有 `gateway.routing` 规则时 HR 后 **deferred** | `acquire(empty)` 转发**真实** greeting；`MySqlDeferredIdentityRouter`：匹配 fallback → HR 透明 replay；异后端 → AuthSwitch 换绑（真实新 greeting 的 scramble，禁止伪造 IH）+ 序号修复；SSLRequest 停 bootstrap；身份写入 session attribute | server-first；匹配路径全透明；换绑路径有限认证中介；见 scratch `MYSQL_FIRST_CONNECT_IDENTITY_ROUTING_2026-10-23.md` |
-| **SQL Server（TDS）** | 路由身份仍 **空** `RoutingContext`（PreLogin 无 user/db）；双工路径观测 Login7/ERROR/Attention/RPC/Bulk；可选 ROW 脱敏；`SqlServerLogin7Routing` → `routing.hint`；网关拒绝可伪造 ERROR+DONE | `SqlServerProtocolAdapter` 先 `acquire(empty)` 再双工；Login7 **不**驱动选路（伪造 PreLogin 才可能，属握手终结） | 见 [`SQLSERVER_TDS_PLAN.md`](SQLSERVER_TDS_PLAN.md) |
+| **SQL Server（TDS）** | bootstrap **空**；有 `gateway.routing` 规则时 Login7 后 **deferred** | `acquire(empty)` 真实 PreLogin；`SqlServerDeferredIdentityRouter`：匹配 fallback → Login7 透明 replay；异后端 → 静默 PreLogin 换绑 + Login7 转发；ENCRYPTION 停 bootstrap；身份写入 session / `routing.hint` | 见 [`SQLSERVER_TDS_PLAN.md`](SQLSERVER_TDS_PLAN.md) / scratch `SQLSERVER_LOGIN7_IDENTITY_ROUTING_2026-10-23.md` |
 | **Oracle** | 未实现 wire | stub；应实现同一 `RoutingHandshakeProbe` | 扩展点已预留 |
 
-**配置含义**：`gateway.routing.rules` 的 `match-database` / `match-username` 对 **PostgreSQL cleartext startup** 在首连 peek 时生效；对 **MySQL** 在 Handshake Response 之后经 deferred 路由生效（bootstrap 仍 fallback；SSLRequest 看不到身份则停 bootstrap）。SSL/加密协商后的 PG opaque 路径同样看不到 StartupMessage 参数，走 fallback。
+**配置含义**：`gateway.routing.rules` 的 `match-database` / `match-username` 对 **PostgreSQL cleartext startup** 在首连 peek 时生效；对 **MySQL** 在 Handshake Response 之后经 deferred 路由生效（bootstrap 仍 fallback；SSLRequest 停 bootstrap）；对 **SQL Server** 在真实 PreLogin 之后 Login7 经 deferred 路由生效（ENCRYPTION 停 bootstrap）。SSL/加密协商后的 opaque 路径看不到身份，走 fallback。
 
 ### 4.4 同 JVM 多 listener（P2-3）
 

@@ -2,7 +2,7 @@
 
 > **决策**：第三协议为 **SQL Server / TDS**（非 Oracle）。  
 > **分支**：`future/database-wire-protocol-foundation`  
-> **状态**：P0 透明双工中继 + P1 观测/拒绝 + **P2**：ROW/**NBCROW** 脱敏（text/guid/numeric/temporal + text/binary PLP + TEXTPTR + MONEY*；XML/UDT 仅 NULL）、RPC/Bulk 观测、`sp_reset_connection`。**仍非** MySQL/PG 对等（无 Login7 驱动选路；XML/UDT 非空与 TVP/未知仍 fail-closed；无本环境真库冒烟）。见 [STATUS_AND_GAPS.md](STATUS_AND_GAPS.md) P2-7。
+> **状态**：P0 透明双工中继 + P1 观测/拒绝 + **P2**：ROW/**NBCROW** 脱敏（text/guid/numeric/temporal + text/binary PLP + TEXTPTR + MONEY*；XML/UDT 仅 NULL）、RPC/Bulk 观测、`sp_reset_connection`、**Login7 deferred 身份选路**（bootstrap 真实 PreLogin → peek Login7 → 匹配透明 / 异后端静默 PreLogin 换绑；ENCRYPTION 停 bootstrap）。**仍非** MySQL/PG 全对等（XML/UDT 非空与 TVP/未知仍 fail-closed；无本环境真库冒烟）。见 [STATUS_AND_GAPS.md](STATUS_AND_GAPS.md) P2-7。
 
 ## 1. 目标
 
@@ -34,6 +34,7 @@ ASCII：
                     ├─ pool / TLS terminate / routing（基类）
                     ├─ DuplexRelay 透明双工（P0）
                     ├─ 明文观测 Login7/SQL_BATCH/ERROR/Attention/RPC/Bulk（P1/P2）
+                    ├─ Login7 deferred 选路（有 routing 规则时；P2）
                     └─ 可选 ROW/NBCROW 脱敏（含 numeric/temporal/PLP text）+ pool reset（P2）
 ```
 
@@ -48,16 +49,16 @@ ASCII：
 - [x] `application-sqlserver-template.yml`（proxy-port **31433** → target **1433**，密码占位 `change-me`）
 - [x] 单测：registry、framing、adapter start/stop、透明中继
 
-**说明**：TDS 虽为 client-first（PreLogin），但 PreLogin 不含 user/database；`acquire` 使用空 `RoutingContext`（与 MySQL 首连类似）。Login7 / SQL_BATCH / ERROR / Attention **观测**已在双工路径落地（P1）；Login7 **不**驱动选路（须先与某后端完成 PreLogin；伪造 PreLogin 属握手终结，见 P2）。
+**说明**：TDS 虽为 client-first（PreLogin），但 PreLogin 不含 user/database；bootstrap `acquire` 仍用空 `RoutingContext`。Login7 / SQL_BATCH / ERROR / Attention **观测**已在双工路径落地（P1）。有 `gateway.routing` 规则时，**Login7 deferred 选路**（P2）在真实 PreLogin 之后 peek Login7 再决定；见下。
 
 ### P1 — 基础观测与冒烟
 
-- [x] 可解析时观测 Login7 用户 / 初始库（写入 `SqlServerSession` / `client.*` 属性 / `LOGIN7` 事件；记录 `routing.hint`；**明文**路径；**不**驱动 `acquire`）
+- [x] 可解析时观测 Login7 用户 / 初始库（写入 `SqlServerSession` / `client.*` 属性 / `LOGIN7` 事件；记录 `routing.hint`；**明文**路径）；有 routing 规则时另见 P2 deferred 选路
 - [x] 可解析时观测 SQL_BATCH 文本为 `SQL_BATCH` 流量事件（无 RPC 名解析）
 - [x] 可解析时观测后端 ERROR token（`0xAA`）为 `ERROR` 流量事件；会话记录 `last.error.*`
 - [x] 可解析时观测 Attention（`0x06`）与 DONE_ATTN（`ATTENTION` / `ATTENTION_ACK`）；同连接 observe-only，字节仍透明转发（不代发、不关后端）
 - [x] 网关侧拒绝 / 风控拒绝 / acquire 失败：伪造最小 TDS `TABULAR_RESULT`（ERROR + DONE）；后端错误仍透明转发
-- [x] `SqlServerLogin7Routing`：Login7 → `RoutingContext` 映射（单测覆盖）；透明路径 `probeClientForRouting` **仍 empty**（见下）
+- [x] `SqlServerLogin7Routing`：Login7 → `RoutingContext` 映射（单测覆盖）；`probeClientForRouting` **仍 empty**（身份在 deferred 阶段）
 - [x] Docker Compose `sqlserver` profile + `SqlServerGatewayIntegrationTest` harness（无 Docker/`integration.sqlserver.password` 时 assumeTrue skip；见 §5）
 
 ### P2 — 深化
@@ -66,12 +67,12 @@ ASCII：
 - [x] 结果集脱敏：`SqlServerResultSetMaskingInterceptor`（REWRITE）；COLMETADATA→ROW/**NBCROW**；非空改写含 **nvarchar/nchar/varchar/char（含 MAX/PLP）**、**uniqueidentifier**、**INT*/FLOAT*/BIT*/DECIMALN/NUMERICN**、**DATEN/TIMEN/DATETIME2N/DATETIMEOFFSETN/DATETIM*/DATETIMN**、**MONEY*/MONEY4/MONEYN**、**TEXT/NTEXT/IMAGE（TEXTPTR）**、**VARBINARY/BINARY（含 MAX/PLP）**（`TdsBinaryValues` / `TdsRowCodec`）；NULL 规则对 BYTE_LEN/USHORT_LEN/TEXTPTR/PLP（含 **XML/UDT 仅 NULL**）；**XML/UDT 非空**、**TVP**、**未知 type** 仍 fail-closed（DENY）
 - [x] 协议级 `SqlServerBackendSessionReset`：`sp_reset_connection` RPC + 等 DONE/DONEPROC（无 ERROR）
 - [x] 更深 token 改写（NBCROW 位图、text PLP 流、decimal/datetime 非空二进制）— 已落地；不确定布局仍拒绝
-- [ ] Login7 **驱动** `acquire(RoutingContext)`：需伪造 PreLogin 响应（部分握手终结），**透明代理不可行**；仅 cleartext 终结路径可另开设计
+- [x] Login7 **驱动**选路：`SqlServerDeferredIdentityRouter`（bootstrap 真实 PreLogin → peek Login7；匹配 → Login7 replay；异后端 → 静默 PreLogin 换绑 + Login7 转发；ENCRYPTION 停 bootstrap）。**不**向客户端伪造 PreLogin。scratch：`SQLSERVER_LOGIN7_IDENTITY_ROUTING_2026-10-23.md`
 - [ ] 真库 Docker 冒烟证明（本构建环境 **无** `docker`/`podman`；有 Engine 的机器按 §5 + Compose profile 自测）
 
 ## 4. 非目标
 
-- 完整 TDS 协议重写 / 认证终结（网关代登）
+- 完整 TDS 协议重写 / 网关代登（Login7 deferred 仅做选路换绑，不代持口令）
 - Oracle TNS（仍为 stub；本决策明确第三库为 SQL Server）
 - 将生产 SA 密码提交进 git
 
@@ -142,7 +143,7 @@ JDBC 示例 URL：`jdbc:sqlserver://localhost:31433;databaseName=master;encrypt=
 | `adapter/sqlserver/TdsMessageFraming` | EOM 逻辑消息边界 |
 | `adapter/sqlserver/SqlServerSession` | 会话状态（Login7 身份 + last ERROR + Attention 请求/确认） |
 | `adapter/sqlserver/SqlServerDatabaseEventExtractor` / `Login7Observation` | P1 明文观测（Login7 + SQL_BATCH + ERROR + Attention/DONE_ATTN）；挂入 adapter 管线 |
-| `adapter/sqlserver/SqlServerLogin7Routing` | Login7 → `RoutingContext` 映射（**不**用于透明 `acquire`） |
+| `adapter/sqlserver/SqlServerLogin7Routing` / `SqlServerDeferredIdentityRouter` / `TdsLogicalMessage` / `TdsPreLoginOptions` | Login7 → `RoutingContext`；有 routing 规则时 deferred 选路（静默 PreLogin 换绑） |
 | `adapter/sqlserver/TdsErrorToken` / `TdsDoneToken` / `SqlServerGatewayErrorMapper` | ERROR 解析/伪造 + DONE/DONE_ATTN 解析；`ProtocolErrorResponder` 接线 |
 | `adapter/sqlserver/SqlServerResultSetMaskingInterceptor` / `TdsColMetadata` / `TdsRowCodec` / `TdsBinaryValues` | ROW/NBCROW 脱敏（text/guid/numeric/temporal + text/binary PLP + TEXTPTR + MONEY*；XML/UDT 仅 NULL；TVP/未知 fail-closed） |
 | `adapter/sqlserver/SqlServerBackendSessionReset` / `RpcObservation` | 池 reset（`sp_reset_connection`）；RPC 名观测 |

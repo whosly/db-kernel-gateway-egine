@@ -8,7 +8,10 @@ import com.whosly.gateway.adapter.protocol.GatewayException;
 import com.whosly.gateway.adapter.protocol.MessagePipeline;
 import com.whosly.gateway.adapter.protocol.ProbedHandshake;
 import com.whosly.gateway.adapter.protocol.ProtocolErrorResponder;
+import com.whosly.gateway.adapter.protocol.RoutingBackendProvider;
+import com.whosly.gateway.adapter.protocol.RoutingContext;
 import com.whosly.gateway.adapter.sqlserver.SqlServerDatabaseEventExtractor;
+import com.whosly.gateway.adapter.sqlserver.SqlServerDeferredIdentityRouter;
 import com.whosly.gateway.adapter.sqlserver.SqlServerResultSetMaskingInterceptor;
 import com.whosly.gateway.adapter.sqlserver.SqlServerGatewayErrorMapper;
 import com.whosly.gateway.adapter.sqlserver.SqlServerSession;
@@ -30,17 +33,20 @@ import java.util.UUID;
  * observation (Login7, SQL_BATCH, RPC name, Bulk, ERROR, Attention/DONE_ATTN),
  * gateway-side ERROR+DONE rejects, optional result-set ROW/NBCROW masking
  * (text/guid/numeric/temporal/money/TEXTPTR/varbinary PLP; XML/UDT NULL-only;
- * TVP/unknown fail-closed), and {@code sp_reset_connection} pool reset.
- * Still <em>not</em> MySQL/PostgreSQL parity — no Login7-driven {@code acquire}
- * routing, no deep RPC parameter rewrite. See {@code docs/SQLSERVER_TDS_PLAN.md}.</p>
+ * TVP/unknown fail-closed), {@code sp_reset_connection} pool reset, and
+ * <em>deferred Login7 identity routing</em> when {@link RoutingBackendProvider}
+ * has rules (bootstrap PreLogin + peek Login7; mismatch → silent PreLogin
+ * rebind). Still <em>not</em> MySQL/PostgreSQL full parity — XML/UDT non-null
+ * and TVP/unknown remain fail-closed. See {@code docs/SQLSERVER_TDS_PLAN.md}.</p>
  *
  * <p><b>Handshake / routing:</b> TDS is client-first (PreLogin → Login7).
- * PreLogin carries no user/database, so {@link BackendProvider#acquire} uses an
- * empty {@link com.whosly.gateway.adapter.protocol.RoutingContext}. Login7 is
- * observed on the duplex path after acquire (session labels / traffic events /
- * {@code routing.hint} attribute only; bytes forwarded unchanged). True
- * Login7-before-acquire routing would require forging a PreLogin response and
- * is deferred.</p>
+ * PreLogin carries no user/database, so bootstrap {@link BackendProvider#acquire}
+ * uses an empty {@link RoutingContext}. With routing rules,
+ * {@link SqlServerDeferredIdentityRouter} completes a real PreLogin with the
+ * bootstrap backend, peeks Login7, and either stays on fallback (Login7 replay)
+ * or rebinds to the matched backend (silent PreLogin + Login7 forward).
+ * ENCRYPTION-before-Login7 aborts deferred routing (stay bootstrap). Without
+ * rules, behaviour is unchanged: {@code acquire(empty)} then duplex.</p>
  *
  * <p><b>Cancel:</b> Attention (packet type {@code 0x06}) rides the same
  * connection as the query. The relay forwards it transparently; the extractor
@@ -70,8 +76,9 @@ public class SqlServerProtocolAdapter extends AbstractProtocolAdapter {
     }
 
     /**
-     * Client-first, but PreLogin carries no user/database. Empty probe — Login7
-     * observation runs after acquire and does not select the backend in this slice.
+     * Client-first, but PreLogin carries no user/database. Empty probe — identity
+     * routing uses {@link SqlServerDeferredIdentityRouter} after bootstrap acquire
+     * when routing rules are present.
      */
     @Override
     protected ProbedHandshake probeClientForRouting(Socket clientSocket) {
@@ -85,23 +92,43 @@ public class SqlServerProtocolAdapter extends AbstractProtocolAdapter {
         registerSession(session, clientSocket);
 
         BackendProvider backendProvider = backendProvider();
-        ProbedHandshake probed = probeClientForRouting(clientSocket);
-        Socket targetSocket;
+        Socket targetSocket = null;
+        byte[] clientPrefix = new byte[0];
+        RoutingContext routed = RoutingContext.empty();
+        boolean rebound = false;
         try {
-            targetSocket = backendProvider.acquire(probed.context());
-        } catch (IOException e) {
-            log.warn("SQL Server proxy session {} could not reach target {}:{}: {}",
+            Socket bootstrap = backendProvider.acquire(RoutingContext.empty());
+            targetSocket = bootstrap;
+            if (backendProvider instanceof RoutingBackendProvider routing
+                    && !routing.rules().isEmpty()) {
+                SqlServerDeferredIdentityRouter.Result deferred = SqlServerDeferredIdentityRouter.route(
+                        clientSocket,
+                        bootstrap,
+                        routing,
+                        socket -> releaseBackend(backendProvider, socket, null));
+                targetSocket = deferred.backendSocket();
+                clientPrefix = deferred.clientToBackendPrefix();
+                routed = deferred.context();
+                rebound = deferred.rebound();
+                applyRoutedIdentity(session, routed);
+            }
+        } catch (IOException | GatewayException e) {
+            log.warn("SQL Server proxy session {} could not complete backend route {}:{}: {}",
                     sessionId, targetHost, targetPort, e.getMessage());
             sendGatewayError(clientSocket, e);
             session.close();
             unregisterSession(session);
             closeQuietly(clientSocket);
+            if (targetSocket != null) {
+                releaseBackend(backendProvider, targetSocket, null);
+            }
             return;
         }
 
         try {
-            log.info("SQL Server proxy session {} connected {} to target {}:{} (routing={})",
-                    sessionId, clientSocket.getRemoteSocketAddress(), targetHost, targetPort, probed.context());
+            log.info("SQL Server proxy session {} connected {} to target {}:{} (routing={}, rebound={})",
+                    sessionId, clientSocket.getRemoteSocketAddress(), targetHost, targetPort,
+                    routed, rebound);
             SqlServerDatabaseEventExtractor extractor =
                     new SqlServerDatabaseEventExtractor(PROTOCOL_NAME, sessionId, session);
             DatabaseTrafficInspector trafficInspector = new DatabaseTrafficInspector(
@@ -118,7 +145,7 @@ public class SqlServerProtocolAdapter extends AbstractProtocolAdapter {
                             new SqlServerResultSetMaskingInterceptor(extractor, maskingEngine))
                     : MessagePipeline.of(trafficInspector);
             new DuplexRelay(sessionId, pipeline, GATEWAY_ERROR_RESPONDER, rewriteLimits)
-                    .relay(clientSocket, targetSocket, probed.replayToBackend());
+                    .relay(clientSocket, targetSocket, clientPrefix);
         } catch (IOException e) {
             log.warn("SQL Server proxy session {} closed: {}", sessionId, e.getMessage());
         } finally {
@@ -135,6 +162,21 @@ public class SqlServerProtocolAdapter extends AbstractProtocolAdapter {
         log.warn("Rejecting SQL Server client connection from {}", clientSocket.getRemoteSocketAddress());
         sendGatewayError(clientSocket, new GatewayException(GatewayErrorMapping.RESOURCE_EXHAUSTED));
         closeQuietly(clientSocket);
+    }
+
+    private static void applyRoutedIdentity(SqlServerSession session, RoutingContext routed) {
+        if (routed == null || routed.isEmpty()) {
+            return;
+        }
+        routed.username().ifPresent(user -> {
+            session.setLoginUsername(user);
+            session.putAttribute("client.user", user);
+        });
+        routed.database().ifPresent(db -> {
+            session.setInitialDatabase(db);
+            session.putAttribute("client.database", db);
+        });
+        session.putAttribute("routing.hint", routed.toString());
     }
 
     private static void sendGatewayError(Socket clientSocket, Throwable cause) {
