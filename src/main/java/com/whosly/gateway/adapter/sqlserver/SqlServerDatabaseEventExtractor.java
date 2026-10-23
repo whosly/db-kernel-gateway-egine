@@ -15,15 +15,14 @@ import java.util.List;
 import java.util.Optional;
 
 /**
- * TDS observation: Login7 identity, SQL_BATCH text, Attention/DONE_ATTN cancel,
- * and backend ERROR tokens.
+ * TDS observation: Login7 identity, SQL_BATCH / RPC / Bulk, Attention/DONE_ATTN,
+ * backend ERROR, and COLMETADATA/ROW tracking for result-set masking.
  *
- * <p>Bytes are never rewritten — the extractor only reads cleartext TDS frames
- * that {@link TdsMessageFraming} can bound. Encrypted tunnels after PreLogin
- * simply yield no events (fail-open observation). Password bytes in Login7 are
- * never decoded into events. Attention is observe-only on the same duplex
- * connection (transparent forward already cancels; we do not synthesize
- * Attention or close the backend).</p>
+ * <p>Observation is fail-open (encrypted tunnels yield no events). Password bytes
+ * in Login7 are never decoded. Attention / RPC / Bulk are observe-only on the
+ * transparent path — bytes are not rewritten here. Column metadata retained for
+ * {@link SqlServerResultSetMaskingInterceptor} is best-effort; incomplete parses
+ * leave columns empty so masking fails closed.</p>
  */
 public class SqlServerDatabaseEventExtractor {
 
@@ -36,6 +35,12 @@ public class SqlServerDatabaseEventExtractor {
     private final ByteArrayOutputStream pendingTarget = new ByteArrayOutputStream();
     private boolean loginObserved;
     private boolean opaqueTunnel;
+    /** Columns from the latest successfully parsed COLMETADATA (empty if unknown). */
+    private List<TdsColumnDefinition> currentTdsColumns = List.of();
+    /** True when the last observed target tabular message contained at least one ROW. */
+    private boolean lastTargetMessageContainedRow;
+    /** True when the last observed target tabular message contained NBCROW. */
+    private boolean lastTargetMessageContainedNbcRow;
 
     public SqlServerDatabaseEventExtractor(String protocolName, String sessionId, SqlServerSession session) {
         this.protocolName = protocolName;
@@ -45,6 +50,18 @@ public class SqlServerDatabaseEventExtractor {
 
     public boolean isOpaqueTunnel() {
         return opaqueTunnel;
+    }
+
+    public List<TdsColumnDefinition> currentTdsColumns() {
+        return currentTdsColumns;
+    }
+
+    public boolean lastTargetMessageContainedRow() {
+        return lastTargetMessageContainedRow;
+    }
+
+    public boolean lastTargetMessageContainedNbcRow() {
+        return lastTargetMessageContainedNbcRow;
     }
 
     public MessageBounder messageBounder(TrafficDirection direction) {
@@ -116,12 +133,16 @@ public class SqlServerDatabaseEventExtractor {
             }
             case TDS7_LOGIN -> observeLogin7(payload);
             case SQL_BATCH -> observeSqlBatch(payload);
+            case RPC -> observeRpc(payload);
+            case BULK_LOAD -> observeBulkLoad(payload);
             case ATTENTION -> observeAttention();
             default -> List.of();
         };
     }
 
     private List<DatabaseTrafficEvent> observeTargetMessage(byte[] bytes, int offset, int length) {
+        lastTargetMessageContainedRow = false;
+        lastTargetMessageContainedNbcRow = false;
         if (length < TdsFrameCodec.HEADER_LENGTH) {
             return List.of();
         }
@@ -145,6 +166,43 @@ public class SqlServerDatabaseEventExtractor {
         int cursor = 0;
         while (cursor < payload.length) {
             int token = payload[cursor] & 0xFF;
+            if (token == TdsTokenType.COLMETADATA.getCode()) {
+                Optional<TdsColMetadata.Parsed> parsed = TdsColMetadata.tryParse(payload, cursor);
+                if (parsed.isEmpty()) {
+                    // Incomplete COLMETADATA — clear so masking cannot attribute wrongly.
+                    currentTdsColumns = List.of();
+                    cursor++;
+                    continue;
+                }
+                currentTdsColumns = parsed.get().columns();
+                cursor += parsed.get().wireLength();
+                continue;
+            }
+            if (token == TdsTokenType.ROW.getCode()) {
+                lastTargetMessageContainedRow = true;
+                if (session != null) {
+                    session.tryTransitionTo(ProtocolConnectionState.STREAMING);
+                }
+                // Skip ROW body only when columns are known; otherwise byte-walk.
+                if (!currentTdsColumns.isEmpty()) {
+                    Optional<TdsRowCodec.ParsedRow> row = TdsRowCodec.tryParse(payload, cursor, currentTdsColumns);
+                    if (row.isPresent()) {
+                        cursor += row.get().wireLength();
+                        continue;
+                    }
+                }
+                cursor++;
+                continue;
+            }
+            if (token == TdsTokenType.NBCROW.getCode()) {
+                lastTargetMessageContainedNbcRow = true;
+                lastTargetMessageContainedRow = true;
+                if (session != null) {
+                    session.tryTransitionTo(ProtocolConnectionState.STREAMING);
+                }
+                cursor++;
+                continue;
+            }
             if (token == TdsErrorToken.TOKEN_TYPE) {
                 Optional<TdsErrorToken> parsed = TdsErrorToken.tryParse(payload, cursor);
                 if (parsed.isEmpty()) {
@@ -155,22 +213,53 @@ public class SqlServerDatabaseEventExtractor {
                 cursor += parsed.get().wireLength();
                 continue;
             }
-            if (token == TdsDoneToken.TOKEN_TYPE) {
-                Optional<TdsDoneToken> parsed = TdsDoneToken.tryParse(payload, cursor);
-                if (parsed.isEmpty()) {
+            if (token == TdsDoneToken.TOKEN_TYPE
+                    || token == TdsTokenType.DONEPROC.getCode()
+                    || token == TdsTokenType.DONEINPROC.getCode()) {
+                if (cursor + TdsDoneToken.WIRE_LENGTH > payload.length) {
                     cursor++;
                     continue;
                 }
-                TdsDoneToken done = parsed.get();
-                if (done.isAttentionAck()) {
-                    events.add(toAttentionAckEvent(done));
+                int status = TdsColMetadata.u16le(payload, cursor + 1);
+                int curCmd = TdsColMetadata.u16le(payload, cursor + 3);
+                long rowCount = 0L; // not needed for Attention check
+                // Attention ack only on DONE (0xFD) with STATUS_ATTN.
+                if (token == TdsDoneToken.TOKEN_TYPE
+                        && (status & TdsDoneToken.STATUS_ATTN) != 0) {
+                    events.add(toAttentionAckEvent(newDone(status, curCmd, rowCount)));
                 }
-                cursor += done.wireLength();
+                boolean more = (status & TdsDoneToken.STATUS_MORE) != 0;
+                if (!more && token != TdsTokenType.DONEINPROC.getCode()) {
+                    // Result set finished — columns may be replaced by the next COLMETADATA.
+                    if (session != null
+                            && (session.getState() == ProtocolConnectionState.EXECUTING
+                            || session.getState() == ProtocolConnectionState.STREAMING)) {
+                        session.tryTransitionTo(ProtocolConnectionState.READY);
+                    }
+                }
+                cursor += TdsDoneToken.WIRE_LENGTH;
                 continue;
+            }
+            // Length-prefixed INFO / ENVCHANGE — skip when possible.
+            if (token == TdsTokenType.INFO.getCode() || token == TdsTokenType.ENVCHANGE.getCode()) {
+                if (cursor + 3 <= payload.length) {
+                    int len = TdsColMetadata.u16le(payload, cursor + 1);
+                    int total = 1 + 2 + len;
+                    if (cursor + total <= payload.length) {
+                        cursor += total;
+                        continue;
+                    }
+                }
             }
             cursor++;
         }
         return events;
+    }
+
+    /** Test/helper bridge — DONE token is package-private construct via parse. */
+    private static TdsDoneToken newDone(int status, int curCmd, long rowCount) {
+        byte[] wire = TdsDoneToken.encode(status, curCmd, rowCount);
+        return TdsDoneToken.tryParse(wire, 0).orElseThrow();
     }
 
     private DatabaseTrafficEvent toErrorEvent(TdsErrorToken error) {
@@ -227,6 +316,36 @@ public class SqlServerDatabaseEventExtractor {
         log.debug("SQL Server session {} Attention observed (cancel request)", sessionId);
         return List.of(DatabaseTrafficEvent.builder(protocolName, sessionId, "ATTENTION", "cancel")
                 .attribute("sameConnection", "true")
+                .build());
+    }
+
+    private List<DatabaseTrafficEvent> observeRpc(byte[] payload) {
+        Optional<RpcObservation> parsed = RpcObservation.tryParse(payload);
+        String label = parsed.map(RpcObservation::displayName).orElse("(rpc)");
+        if (session != null) {
+            session.tryTransitionTo(ProtocolConnectionState.READY);
+            session.tryTransitionTo(ProtocolConnectionState.EXECUTING);
+            session.putAttribute("last.rpc", label);
+        }
+        log.debug("SQL Server session {} RPC observed: {}", sessionId, label);
+        DatabaseTrafficEvent.Builder builder = DatabaseTrafficEvent.builder(
+                protocolName, sessionId, "RPC", label);
+        parsed.ifPresent(rpc -> {
+            rpc.name().ifPresent(n -> builder.attribute("name", n));
+            rpc.procId().ifPresent(id -> builder.attribute("procId", String.valueOf(id)));
+        });
+        return List.of(builder.build());
+    }
+
+    private List<DatabaseTrafficEvent> observeBulkLoad(byte[] payload) {
+        int bytes = payload == null ? 0 : payload.length;
+        if (session != null) {
+            session.tryTransitionTo(ProtocolConnectionState.STREAMING);
+            session.putAttribute("last.bulk.bytes", String.valueOf(bytes));
+        }
+        log.debug("SQL Server session {} BULK_LOAD observed ({} payload bytes)", sessionId, bytes);
+        return List.of(DatabaseTrafficEvent.builder(protocolName, sessionId, "BULK_LOAD", "bulk")
+                .attribute("payloadBytes", String.valueOf(bytes))
                 .build());
     }
 

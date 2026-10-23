@@ -140,4 +140,55 @@ class SqlServerDatabaseEventExtractorTest {
         // Would-be acquire context only — transparent probe stays empty (PreLogin first).
         assertThat(SqlServerLogin7Routing.fromLogin7Payload(loginPayload).username()).contains("routeuser");
     }
+
+    @Test
+    void observesRpcNameAsEvent() {
+        SqlServerSession session = new SqlServerSession("sqlserver-rpc-1");
+        SqlServerDatabaseEventExtractor extractor =
+                new SqlServerDatabaseEventExtractor("SQLServer", session.getConnectionId(), session);
+        byte[] name = "sp_who".getBytes(StandardCharsets.UTF_16LE);
+        ByteBuffer payload = ByteBuffer.allocate(4 + 2 + name.length + 2).order(ByteOrder.LITTLE_ENDIAN);
+        payload.putInt(4);
+        payload.putShort((short) (name.length / 2));
+        payload.put(name);
+        payload.putShort((short) 0);
+        byte[] packet = CODEC.packet(TdsPacketType.RPC.getCode(), payload.array(), 1);
+        List<DatabaseTrafficEvent> events =
+                extractor.inspect(TrafficDirection.CLIENT_TO_TARGET, packet, 0, packet.length);
+        assertThat(events).hasSize(1);
+        assertThat(events.get(0).getOperation()).isEqualTo("RPC");
+        assertThat(events.get(0).getStatement()).isEqualTo("sp_who");
+        assertThat(events.get(0).getAttribute("name")).contains("sp_who");
+    }
+
+    @Test
+    void observesBulkLoadAsEvent() {
+        SqlServerSession session = new SqlServerSession("sqlserver-bulk-1");
+        SqlServerDatabaseEventExtractor extractor =
+                new SqlServerDatabaseEventExtractor("SQLServer", session.getConnectionId(), session);
+        byte[] packet = CODEC.packet(TdsPacketType.BULK_LOAD.getCode(), new byte[]{1, 2, 3, 4}, 1);
+        List<DatabaseTrafficEvent> events =
+                extractor.inspect(TrafficDirection.CLIENT_TO_TARGET, packet, 0, packet.length);
+        assertThat(events).hasSize(1);
+        assertThat(events.get(0).getOperation()).isEqualTo("BULK_LOAD");
+        assertThat(events.get(0).getAttribute("payloadBytes")).contains("4");
+    }
+
+    @Test
+    void tracksColMetadataAndRowFlagsForMasking() {
+        SqlServerSession session = new SqlServerSession("sqlserver-meta-1");
+        SqlServerDatabaseEventExtractor extractor =
+                new SqlServerDatabaseEventExtractor("SQLServer", session.getConnectionId(), session);
+        byte[] payload = TdsTestFrames.concat(
+                TdsTestFrames.nvarcharColumnMeta("email", 40, true),
+                TdsTestFrames.nvarcharRow("a@b.c"),
+                TdsTestFrames.doneFinal());
+        byte[] packet = CODEC.packet(TdsPacketType.TABULAR_RESULT.getCode(), payload, 1);
+        extractor.inspect(TrafficDirection.TARGET_TO_CLIENT, packet, 0, packet.length);
+        assertThat(extractor.currentTdsColumns()).hasSize(1);
+        assertThat(extractor.currentTdsColumns().get(0).name()).isEqualTo("email");
+        assertThat(extractor.lastTargetMessageContainedRow()).isTrue();
+        assertThat(extractor.lastTargetMessageContainedNbcRow()).isFalse();
+    }
+
 }

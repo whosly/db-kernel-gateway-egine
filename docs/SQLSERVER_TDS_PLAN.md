@@ -2,7 +2,7 @@
 
 > **决策**：第三协议为 **SQL Server / TDS**（非 Oracle）。  
 > **分支**：`future/database-wire-protocol-foundation`  
-> **状态**：P0 透明双工中继已落地；P1 Login7/SQL_BATCH/**ERROR**/Attention/**DONE_ATTN** 明文观测 + 网关侧最小 ERROR+DONE 拒绝响应已挂入管线。**仍非** MySQL/PG 对等（无脱敏/深 token 改写/协议 reset；Login7 **不**驱动 `acquire` 选路）。见 [STATUS_AND_GAPS.md](STATUS_AND_GAPS.md) P2-7。
+> **状态**：P0 透明双工中继 + P1 观测/拒绝 + **P2 部分**：ROW 脱敏（fail-closed）、RPC/Bulk 观测、`sp_reset_connection` 池 reset。**仍非** MySQL/PG 对等（无 Login7 驱动选路；NBCROW/PLP/数值时间非空改写仍拒绝）。见 [STATUS_AND_GAPS.md](STATUS_AND_GAPS.md) P2-7。
 
 ## 1. 目标
 
@@ -13,7 +13,7 @@
 | 后端连接池 | `PooledBackendProvider` + `gateway.pool.*` |
 | 客户端 TLS 终止 | `ClientTlsTerminator` + `gateway.tls.*` |
 | 多后端 failover / 路由 | `RoutingBackendProvider` + `gateway.routing.*` |
-| Session reset SPI | `BackendSessionReset`（P0 为 `none()`；协议 reset 后续） |
+| Session reset SPI | `BackendSessionReset` → `SqlServerBackendSessionReset`（`sp_reset_connection`；`reset-mode=protocol`） |
 | 适配器注册 | `ProtocolAdapterRegistry`：`sqlserver` / `mssql` |
 
 **不**做完整 TDS 改写引擎；默认路径是字节透明转发（与早期 MySQL/PG 一致）。
@@ -32,7 +32,9 @@ ASCII：
   Client ──TDS──▶ Gateway:31433 ──TDS──▶ SQL Server:1433
                     │
                     ├─ pool / TLS terminate / routing（基类）
-                    └─ DuplexRelay 透明双工（P0）
+                    ├─ DuplexRelay 透明双工（P0）
+                    ├─ 明文观测 Login7/SQL_BATCH/ERROR/Attention/RPC/Bulk（P1/P2）
+                    └─ 可选 ROW 脱敏 + pool reset（P2 partial）
 ```
 
 ## 3. 阶段
@@ -40,7 +42,7 @@ ASCII：
 ### P0（本提交）— 透明中继 + 生命周期
 
 - [x] `SqlServerProtocolAdapter` 继承 `AbstractProtocolAdapter`
-- [x] 注册 `sqlserver` / `mssql`；`BackendSessionReset.none()`
+- [x] 注册 `sqlserver` / `mssql`（P0 曾为 `none()`；现为 `SqlServerBackendSessionReset`）
 - [x] 最小 TDS：`TdsFrameCodec` / `TdsMessageFraming`（8 字节头、BE length、EOM 拼逻辑消息）
 - [x] accept 后双工透明转发（PreLogin/Login7 等由客户端与后端自行完成）
 - [x] `application-sqlserver-template.yml`（proxy-port **31433** → target **1433**，密码占位 `change-me`）
@@ -56,14 +58,16 @@ ASCII：
 - [x] 可解析时观测 Attention（`0x06`）与 DONE_ATTN（`ATTENTION` / `ATTENTION_ACK`）；同连接 observe-only，字节仍透明转发（不代发、不关后端）
 - [x] 网关侧拒绝 / 风控拒绝 / acquire 失败：伪造最小 TDS `TABULAR_RESULT`（ERROR + DONE）；后端错误仍透明转发
 - [x] `SqlServerLogin7Routing`：Login7 → `RoutingContext` 映射（单测覆盖）；透明路径 `probeClientForRouting` **仍 empty**（见下）
-- [ ] 本机 Docker 集成冒烟（可选；**本构建环境无 Docker，文档化 skip**，见 §5）
+- [x] Docker Compose `sqlserver` profile + `SqlServerGatewayIntegrationTest` harness（无 Docker/`integration.sqlserver.password` 时 assumeTrue skip；见 §5）
 
-### P2 — 深化（延期）
+### P2 — 深化（部分落地）
 
-- [ ] 更深 TDS 消息类型（RPC 名解析、Bulk 等）
-- [ ] 结果集脱敏 / 改写
-- [ ] 协议级 `BackendSessionReset`（若有稳定 wire 语义）
+- [x] RPC 名观测（`RPC` 事件 / `RpcObservation`）+ Bulk Load 包观测（`BULK_LOAD`）；**不**改写 RPC/Bulk 载荷
+- [x] 结果集脱敏：`SqlServerResultSetMaskingInterceptor`（REWRITE）；COLMETADATA→ROW；非空改写限 **nvarchar/nchar/varchar/char/uniqueidentifier**；NULL 规则对可编码布局；**NBCROW / PLP / TEXTPTR / 未知类型 / 数值·时间非空** fail-closed（DENY）
+- [x] 协议级 `SqlServerBackendSessionReset`：`sp_reset_connection` RPC + 等 DONE/DONEPROC（无 ERROR）
+- [ ] 更深 token 改写（NBCROW 位图、PLP 流、decimal/datetime 非空二进制改写）— **刻意延期**；当前拒绝而非猜测
 - [ ] Login7 **驱动** `acquire(RoutingContext)`：需伪造 PreLogin 响应（部分握手终结），**透明代理不可行**；仅 cleartext 终结路径可另开设计
+- [ ] 真库 Docker 冒烟证明（本构建环境 **无** `docker`/`podman`；有 Engine 的机器按 §5 + Compose profile 自测）
 
 ## 4. 非目标
 
@@ -73,7 +77,9 @@ ASCII：
 
 ## 5. 本地 Docker（冒烟）
 
-> **CI / 本构建环境**：默认 **不**要求 Docker。无 `docker` 命令时跳过本节冒烟，以单元测试为验收；有 Docker 的机器可按下列步骤自测。
+> **CI / 本构建环境**：默认 **不**要求 Docker。本环境已确认 **无** `docker`/`podman`，冒烟 **skip**；以单元测试为验收。有 Docker 的机器可用 Compose profile 或下列 `docker run` 自测。
+>
+> Compose：`docker compose --profile sqlserver up -d` → 宿主 **11433**（SA 默认 `Aa123456.`）。集成：`integration-test-local.properties` 设 `integration.enabled=true` + `integration.sqlserver.password=...`，再 `mvn -Pintegration-test test`（跑 `SqlServerGatewayIntegrationTest`）。
 
 
 | 项 | 建议 |
@@ -138,4 +144,8 @@ JDBC 示例 URL：`jdbc:sqlserver://localhost:31433;databaseName=master;encrypt=
 | `adapter/sqlserver/SqlServerDatabaseEventExtractor` / `Login7Observation` | P1 明文观测（Login7 + SQL_BATCH + ERROR + Attention/DONE_ATTN）；挂入 adapter 管线 |
 | `adapter/sqlserver/SqlServerLogin7Routing` | Login7 → `RoutingContext` 映射（**不**用于透明 `acquire`） |
 | `adapter/sqlserver/TdsErrorToken` / `TdsDoneToken` / `SqlServerGatewayErrorMapper` | ERROR 解析/伪造 + DONE/DONE_ATTN 解析；`ProtocolErrorResponder` 接线 |
+| `adapter/sqlserver/SqlServerResultSetMaskingInterceptor` / `TdsColMetadata` / `TdsRowCodec` | ROW 脱敏（fail-closed NBCROW/PLP） |
+| `adapter/sqlserver/SqlServerBackendSessionReset` / `RpcObservation` | 池 reset（`sp_reset_connection`）；RPC 名观测 |
 | `application-sqlserver-template.yml` | 配置模板 |
+| `docker-compose.yml` profile `sqlserver` | 可选真库（11433）；无 Docker 时跳过 |
+| `SqlServerGatewayIntegrationTest` | `-Pintegration-test` + local props；否则 assumeTrue skip |

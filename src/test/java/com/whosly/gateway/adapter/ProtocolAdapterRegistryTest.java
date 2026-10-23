@@ -3,6 +3,7 @@ package com.whosly.gateway.adapter;
 import com.whosly.gateway.adapter.mysql.MySqlBackendSessionReset;
 import com.whosly.gateway.adapter.postgresql.PostgreSQLBackendSessionReset;
 import com.whosly.gateway.adapter.protocol.BackendSessionReset;
+import com.whosly.gateway.adapter.sqlserver.SqlServerBackendSessionReset;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -28,8 +29,10 @@ class ProtocolAdapterRegistryTest {
                 .isInstanceOf(PostgreSQLBackendSessionReset.class);
         assertThat(registry.createSessionReset("postgres"))
                 .isInstanceOf(PostgreSQLBackendSessionReset.class);
-        assertThat(registry.createSessionReset("sqlserver")).isSameAs(BackendSessionReset.NONE);
-        assertThat(registry.createSessionReset("mssql")).isSameAs(BackendSessionReset.NONE);
+        assertThat(registry.createSessionReset("sqlserver"))
+                .isInstanceOf(SqlServerBackendSessionReset.class);
+        assertThat(registry.createSessionReset("mssql"))
+                .isInstanceOf(SqlServerBackendSessionReset.class);
     }
 
     @Test

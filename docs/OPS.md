@@ -14,7 +14,7 @@
 | 5 | （可选）审计 | `gateway.audit.enabled=true`；生产建议独立盘与 `destination` |
 | 6 | （可选）明文强制 | 需审计时设 `gateway.require-cleartext-inspection=true`（或随审计默认） |
 | 6b | （可选）TLS 终止 | `gateway.tls.enabled=true` + `keystore-path`（PKCS12/JKS）；客户端从首字节 TLS；密码用环境变量 |
-| 6c | （可选）后端连接池 | `gateway.pool.enabled=true`；可选 `gateway.pool.reset-mode=protocol`（MySQL COM_RESET_CONNECTION / PG DISCARD ALL）；默认 `none` |
+| 6c | （可选）后端连接池 | `gateway.pool.enabled=true`；可选 `gateway.pool.reset-mode=protocol`（MySQL COM_RESET_CONNECTION / PG DISCARD ALL / SQL Server sp_reset_connection）；默认 `none` |
 | 6d | （可选）按库/用户路由 | `gateway.routing.enabled=true` + `rules`（`match-database` / `match-username` + `endpoints`）；**PG** cleartext Startup 首连生效；**MySQL** 首连仍 fallback（server-first）；未命中回退 `target`/`backend-endpoints`；默认关 |
 | 7 | （可选）风控拒绝清单 | `gateway.risk.denied-operations` / `denied-statement-keywords` |
 | 8 | （可选）交互 CLI | 仅调试：`gateway.cli.interactive=true`（会读 `System.in`） |
@@ -73,7 +73,7 @@
 
 ## SQL Server 本地实验室（可选）
 
-> 计划与阶段见 [`SQLSERVER_TDS_PLAN.md`](SQLSERVER_TDS_PLAN.md)。P0 透明中继 + P1 明文 Login7/SQL_BATCH/ERROR 观测与网关 ERROR+DONE；**勿**把生产 SA 密码写入已提交文件。
+> 计划与阶段见 [`SQLSERVER_TDS_PLAN.md`](SQLSERVER_TDS_PLAN.md)。P0 透明中继 + P1 观测/拒绝 + P2 partial（ROW 脱敏 text/guid、RPC/Bulk 观测、`sp_reset_connection`）；**勿**把生产 SA 密码写入已提交文件。
 >
 > 管控台 SQL 工作台：实例 RUNNING 后，JDBC 经网关 **31433**（或实例 listenPort）执行；依赖 `mssql-jdbc`（默认已打包）。
 
@@ -86,7 +86,17 @@
 | 本地 Docker 示例 SA | `Aa123456.`（含末尾点号；与本机 MySQL/PG lab 习惯一致） |
 | 生产 | 另行配置；环境变量 / 密钥管理，**不**提交 git |
 
-若 SA 复杂度策略拒绝 `Aa123456.`，可改用 `Aa123456!` 并只改本地 `application-dev.yml`。本仓库执行环境默认 **不**自动 `docker run`。
+若 SA 复杂度策略拒绝 `Aa123456.`，可改用 `Aa123456!` 并只改本地 `application-dev.yml`。本仓库执行环境默认 **不**自动 `docker run`（本环境无 `docker`/`podman`）。
+
+```bash
+# 可选真库（宿主 11433）
+docker compose --profile sqlserver up -d
+# 集成冒烟（需 integration-test-local.properties）：
+#   integration.enabled=true
+#   integration.sqlserver.password=Aa123456.
+mvn -Pintegration-test test -Dtest=SqlServerGatewayIntegrationTest
+```
+
 
 
 ## 管控台鉴权与 HTTPS（实验室）

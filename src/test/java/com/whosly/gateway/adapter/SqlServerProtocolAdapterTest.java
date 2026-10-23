@@ -1,6 +1,6 @@
 package com.whosly.gateway.adapter;
 
-import com.whosly.gateway.adapter.protocol.BackendSessionReset;
+import com.whosly.gateway.adapter.sqlserver.SqlServerBackendSessionReset;
 import com.whosly.gateway.adapter.protocol.GatewayErrorMapping;
 import com.whosly.gateway.adapter.sqlserver.TdsErrorToken;
 import com.whosly.gateway.adapter.sqlserver.TdsPacketStatus;
@@ -106,8 +106,8 @@ class SqlServerProtocolAdapterTest {
         ProtocolAdapterRegistry registry = ProtocolAdapterRegistry.withBuiltIns();
         assertThat(registry.create("sqlserver")).isInstanceOf(SqlServerProtocolAdapter.class);
         assertThat(registry.create("mssql")).isInstanceOf(SqlServerProtocolAdapter.class);
-        assertThat(registry.createSessionReset("sqlserver")).isSameAs(BackendSessionReset.NONE);
-        assertThat(registry.createSessionReset("mssql")).isSameAs(BackendSessionReset.NONE);
+        assertThat(registry.createSessionReset("sqlserver")).isInstanceOf(SqlServerBackendSessionReset.class);
+        assertThat(registry.createSessionReset("mssql")).isInstanceOf(SqlServerBackendSessionReset.class);
     }
 
     private static byte[] readFully(InputStream inputStream, int length) throws Exception {

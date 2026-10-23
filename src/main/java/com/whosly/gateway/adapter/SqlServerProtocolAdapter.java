@@ -9,6 +9,7 @@ import com.whosly.gateway.adapter.protocol.MessagePipeline;
 import com.whosly.gateway.adapter.protocol.ProbedHandshake;
 import com.whosly.gateway.adapter.protocol.ProtocolErrorResponder;
 import com.whosly.gateway.adapter.sqlserver.SqlServerDatabaseEventExtractor;
+import com.whosly.gateway.adapter.sqlserver.SqlServerResultSetMaskingInterceptor;
 import com.whosly.gateway.adapter.sqlserver.SqlServerGatewayErrorMapper;
 import com.whosly.gateway.adapter.sqlserver.SqlServerSession;
 import com.whosly.gateway.adapter.sqlserver.TdsFrameCodec;
@@ -25,13 +26,12 @@ import java.util.UUID;
 /**
  * SQL Server (TDS) protocol proxy adapter.
  *
- * <p><b>Maturity (honest):</b> P0 transparent {@link DuplexRelay} plus P1
- * cleartext observation of Login7 identity, SQL_BATCH text, backend ERROR
- * tokens, and Attention / DONE_ATTN cancel on the same duplex connection;
- * gateway-side rejects forge a minimal TDS ERROR+DONE tabular reply. This is
- * <em>not</em> MySQL/PostgreSQL parity — no result-set masking, no deep token
- * rewrite, no protocol session reset, no Login7-driven {@code acquire}
- * routing. See {@code docs/SQLSERVER_TDS_PLAN.md}.</p>
+ * <p><b>Maturity (honest):</b> transparent {@link DuplexRelay} plus cleartext
+ * observation (Login7, SQL_BATCH, RPC name, Bulk, ERROR, Attention/DONE_ATTN),
+ * gateway-side ERROR+DONE rejects, optional result-set ROW masking (text/uuid,
+ * fail-closed on NBCROW/PLP/unknown), and {@code sp_reset_connection} pool reset.
+ * Still <em>not</em> MySQL/PostgreSQL parity — no Login7-driven {@code acquire}
+ * routing, no deep RPC parameter rewrite. See {@code docs/SQLSERVER_TDS_PLAN.md}.</p>
  *
  * <p><b>Handshake / routing:</b> TDS is client-first (PreLogin → Login7).
  * PreLogin carries no user/database, so {@link BackendProvider#acquire} uses an
@@ -112,8 +112,10 @@ public class SqlServerProtocolAdapter extends AbstractProtocolAdapter {
                     extractor::isOpaqueTunnel,
                     isRequireCleartextInspection(),
                     getRuntimeMetrics());
-            // No TDS result-set masking yet (deferred). Observation + risk + gateway ERROR.
-            MessagePipeline pipeline = MessagePipeline.of(trafficInspector);
+            MessagePipeline pipeline = maskingEngine.isActive()
+                    ? MessagePipeline.of(trafficInspector,
+                            new SqlServerResultSetMaskingInterceptor(extractor, maskingEngine))
+                    : MessagePipeline.of(trafficInspector);
             new DuplexRelay(sessionId, pipeline, GATEWAY_ERROR_RESPONDER, rewriteLimits)
                     .relay(clientSocket, targetSocket, probed.replayToBackend());
         } catch (IOException e) {

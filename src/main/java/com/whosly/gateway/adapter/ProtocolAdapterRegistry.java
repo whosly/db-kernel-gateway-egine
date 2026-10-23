@@ -3,6 +3,7 @@ package com.whosly.gateway.adapter;
 import com.whosly.gateway.adapter.mysql.MySqlBackendSessionReset;
 import com.whosly.gateway.adapter.postgresql.PostgreSQLBackendSessionReset;
 import com.whosly.gateway.adapter.protocol.BackendSessionReset;
+import com.whosly.gateway.adapter.sqlserver.SqlServerBackendSessionReset;
 import com.whosly.gateway.adapter.stub.OracleProtocolAdapterStub;
 
 import java.util.Locale;
@@ -46,7 +47,7 @@ public final class ProtocolAdapterRegistry {
         registry.register("mysql", MySqlProtocolAdapter::new, MySqlBackendSessionReset::new);
         registry.register("postgresql", PostgreSQLProtocolAdapter::new, PostgreSQLBackendSessionReset::new);
         registry.registerAlias("postgres", "postgresql");
-        registry.register("sqlserver", SqlServerProtocolAdapter::new, BackendSessionReset::none);
+        registry.register("sqlserver", SqlServerProtocolAdapter::new, SqlServerBackendSessionReset::new);
         registry.registerAlias("mssql", "sqlserver");
         registry.register("oracle", OracleProtocolAdapterStub::unsupported, BackendSessionReset::none);
         return registry;
