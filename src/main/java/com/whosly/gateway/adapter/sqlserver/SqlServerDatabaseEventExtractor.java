@@ -200,6 +200,14 @@ public class SqlServerDatabaseEventExtractor {
                 if (session != null) {
                     session.tryTransitionTo(ProtocolConnectionState.STREAMING);
                 }
+                if (!currentTdsColumns.isEmpty()) {
+                    Optional<TdsRowCodec.ParsedRow> row =
+                            TdsRowCodec.tryParseNbc(payload, cursor, currentTdsColumns);
+                    if (row.isPresent()) {
+                        cursor += row.get().wireLength();
+                        continue;
+                    }
+                }
                 cursor++;
                 continue;
             }

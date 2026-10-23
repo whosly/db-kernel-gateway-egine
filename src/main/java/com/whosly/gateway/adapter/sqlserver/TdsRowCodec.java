@@ -14,8 +14,9 @@ import java.util.UUID;
 /**
  * Parse / re-encode TDS {@code ROW} ({@code 0xD1}) values for known layouts.
  *
- * <p>Fail-closed: PLP, TEXTPTR, NBCROW, and unknown layouts return empty so the
- * masking interceptor can deny rather than mis-attribute values.</p>
+ * <p>Supports ROW and NBCROW for known layouts, including non-null PLP text and
+ * numeric/temporal values via {@link TdsBinaryValues}. TEXTPTR, MONEY, XML/UDT and
+ * unknown layouts return empty so the interceptor can deny rather than guess.</p>
  */
 public final class TdsRowCodec {
 
@@ -65,6 +66,86 @@ public final class TdsRowCodec {
             writeValue(out, columns.get(i), values.get(i));
         }
         return out.toByteArray();
+    }
+
+    /**
+     * Parses one NBCROW token starting at {@code offset} (must point at {@code 0xD2}).
+     *
+     * @return empty when truncated or a present column layout is unsupported
+     */
+    public static Optional<ParsedRow> tryParseNbc(byte[] payload, int offset, List<TdsColumnDefinition> columns) {
+        if (payload == null || columns == null || offset < 0 || offset >= payload.length) {
+            return Optional.empty();
+        }
+        if ((payload[offset] & 0xFF) != TdsTokenType.NBCROW.getCode()) {
+            return Optional.empty();
+        }
+        int bitmapBytes = nullBitmapByteCount(columns.size());
+        int cursor = offset + 1;
+        if (cursor + bitmapBytes > payload.length) {
+            return Optional.empty();
+        }
+        byte[] bitmap = new byte[bitmapBytes];
+        System.arraycopy(payload, cursor, bitmap, 0, bitmapBytes);
+        cursor += bitmapBytes;
+        List<MaskedValue> values = new ArrayList<>(columns.size());
+        for (int i = 0; i < columns.size(); i++) {
+            if (isNbcNull(bitmap, i)) {
+                values.add(MaskedValue.ofNull());
+                continue;
+            }
+            Optional<ValueParse> parsed = readValue(payload, cursor, columns.get(i));
+            if (parsed.isEmpty()) {
+                return Optional.empty();
+            }
+            values.add(parsed.get().value());
+            cursor = parsed.get().nextOffset();
+        }
+        return Optional.of(new ParsedRow(List.copyOf(values), cursor - offset));
+    }
+
+    /**
+     * Encodes an NBCROW token from masked values (nulls omitted per bitmap).
+     */
+    public static byte[] encodeNbc(List<TdsColumnDefinition> columns, List<MaskedValue> values) {
+        if (columns.size() != values.size()) {
+            throw new IllegalArgumentException("column/value count mismatch");
+        }
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        out.write(TdsTokenType.NBCROW.getCode());
+        byte[] bitmap = new byte[nullBitmapByteCount(columns.size())];
+        for (int i = 0; i < values.size(); i++) {
+            if (values.get(i).isNull()) {
+                setNbcNull(bitmap, i);
+            }
+        }
+        out.write(bitmap, 0, bitmap.length);
+        for (int i = 0; i < columns.size(); i++) {
+            if (values.get(i).isNull()) {
+                continue;
+            }
+            writeValue(out, columns.get(i), values.get(i));
+        }
+        return out.toByteArray();
+    }
+
+    static int nullBitmapByteCount(int columnCount) {
+        if (columnCount < 0) {
+            throw new IllegalArgumentException("columnCount");
+        }
+        return (columnCount + 7) / 8;
+    }
+
+    static boolean isNbcNull(byte[] bitmap, int columnIndex) {
+        int byteIndex = columnIndex / 8;
+        int bit = columnIndex % 8;
+        return ((bitmap[byteIndex] >> bit) & 0x01) != 0;
+    }
+
+    static void setNbcNull(byte[] bitmap, int columnIndex) {
+        int byteIndex = columnIndex / 8;
+        int bit = columnIndex % 8;
+        bitmap[byteIndex] = (byte) (bitmap[byteIndex] | (1 << bit));
     }
 
     private static Optional<ValueParse> readValue(byte[] payload, int offset, TdsColumnDefinition column) {
@@ -154,7 +235,7 @@ public final class TdsRowCodec {
 
     private static void writeValue(ByteArrayOutputStream out, TdsColumnDefinition column, MaskedValue value) {
         if (column.plp()) {
-            writePlp(out, value);
+            writePlp(out, column, value);
             return;
         }
         switch (column.type().layout()) {
@@ -205,19 +286,39 @@ public final class TdsRowCodec {
         out.write(bytes, 0, bytes.length);
     }
 
-    private static void writePlp(ByteArrayOutputStream out, MaskedValue value) {
-        if (!value.isNull()) {
-            throw new IllegalArgumentException("non-null PLP rewrite is not supported");
+    private static void writePlp(ByteArrayOutputStream out, TdsColumnDefinition column, MaskedValue value) {
+        if (value.isNull()) {
+            // PLP_NULL = 0xFFFFFFFFFFFFFFFF
+            for (int i = 0; i < 8; i++) {
+                out.write(0xFF);
+            }
+            return;
         }
-        // PLP_NULL = 0xFFFFFFFFFFFFFFFF
+        byte[] bytes = encodeNonNullBytes(column, value);
+        // Known-length PLP: ULONGLONGLEN + one chunk + terminator.
+        writeU64le(out, bytes.length);
+        writeU32le(out, bytes.length);
+        if (bytes.length > 0) {
+            out.write(bytes, 0, bytes.length);
+        }
+        writeU32le(out, 0);
+    }
+
+    private static void writeU32le(ByteArrayOutputStream out, int value) {
+        out.write(value & 0xFF);
+        out.write((value >> 8) & 0xFF);
+        out.write((value >> 16) & 0xFF);
+        out.write((value >> 24) & 0xFF);
+    }
+
+    private static void writeU64le(ByteArrayOutputStream out, long value) {
         for (int i = 0; i < 8; i++) {
-            out.write(0xFF);
+            out.write((int) ((value >> (8 * i)) & 0xFF));
         }
     }
 
     /**
-     * Converts a rule output into TDS value bytes for text / uuid columns.
-     * Numeric/temporal FIXED/BYTE_LEN keep raw bytes when already binary.
+     * Converts a rule output into TDS value bytes (text / uuid / numeric / temporal).
      */
     static byte[] encodeNonNullBytes(TdsColumnDefinition column, MaskedValue value) {
         if (value.isNull()) {
@@ -236,8 +337,10 @@ public final class TdsRowCodec {
         if (type == TdsTypeCode.GUIDTYPE) {
             return encodeGuid(value);
         }
-        // Already binary (INTN etc.) — pass through when lengths match.
-        return value.bytes();
+        if (TdsBinaryValues.isEncodable(type)) {
+            return TdsBinaryValues.encode(column, value);
+        }
+        throw new IllegalArgumentException("unsupported non-null encode for " + type.typeName());
     }
 
     private static byte[] encodeGuid(MaskedValue value) {

@@ -73,7 +73,147 @@ final class TdsTestFrames {
         return buffer.array();
     }
 
-    static byte[] doneFinal() {
+    static byte[] intnColumnMeta(String name, int maxLen, boolean nullable) {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        out.write(TdsTokenType.COLMETADATA.getCode());
+        writeU16(out, 1);
+        writeU32(out, 0);
+        writeU16(out, nullable ? 1 : 0);
+        out.write(TdsTypeCode.INTN.getCode());
+        out.write(maxLen & 0xFF);
+        writeBVarchar(out, name);
+        return out.toByteArray();
+    }
+
+    static byte[] decimalColumnMeta(String name, int precision, int scale, boolean nullable) {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        out.write(TdsTokenType.COLMETADATA.getCode());
+        writeU16(out, 1);
+        writeU32(out, 0);
+        writeU16(out, nullable ? 1 : 0);
+        out.write(TdsTypeCode.DECIMALN.getCode());
+        int width = 1 + TdsBinaryValues.decimalIntegerWidth(precision);
+        out.write(width & 0xFF);
+        out.write(precision & 0xFF);
+        out.write(scale & 0xFF);
+        writeBVarchar(out, name);
+        return out.toByteArray();
+    }
+
+    static byte[] dateColumnMeta(String name, boolean nullable) {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        out.write(TdsTokenType.COLMETADATA.getCode());
+        writeU16(out, 1);
+        writeU32(out, 0);
+        writeU16(out, nullable ? 1 : 0);
+        out.write(TdsTypeCode.DATEN.getCode());
+        writeBVarchar(out, name);
+        return out.toByteArray();
+    }
+
+    static byte[] nvarcharMaxColumnMeta(String name, boolean nullable) {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        out.write(TdsTokenType.COLMETADATA.getCode());
+        writeU16(out, 1);
+        writeU32(out, 0);
+        writeU16(out, nullable ? 1 : 0);
+        out.write(TdsTypeCode.NVARCHAR.getCode());
+        writeU16(out, TdsColumnDefinition.MAXLENGTH_PLP);
+        writeRaw(out, new byte[]{0x09, 0x04, 0x00, 0x00, 0x00});
+        writeBVarchar(out, name);
+        return out.toByteArray();
+    }
+
+    static byte[] twoNvarcharColumnMeta(String left, String right, boolean nullable) {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        out.write(TdsTokenType.COLMETADATA.getCode());
+        writeU16(out, 2);
+        for (String name : new String[]{left, right}) {
+            writeU32(out, 0);
+            writeU16(out, nullable ? 1 : 0);
+            out.write(TdsTypeCode.NVARCHAR.getCode());
+            writeU16(out, 100);
+            writeRaw(out, new byte[]{0x09, 0x04, 0x00, 0x00, 0x00});
+            writeBVarchar(out, name);
+        }
+        return out.toByteArray();
+    }
+
+    static byte[] intnRow(int width, long value) {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        out.write(TdsTokenType.ROW.getCode());
+        out.write(width & 0xFF);
+        for (int i = 0; i < width; i++) {
+            out.write((int) ((value >> (8 * i)) & 0xFF));
+        }
+        return out.toByteArray();
+    }
+
+    static byte[] dateRow(java.time.LocalDate date) {
+        long days = java.time.temporal.ChronoUnit.DAYS.between(java.time.LocalDate.of(1, 1, 1), date);
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        out.write(TdsTokenType.ROW.getCode());
+        out.write(3);
+        out.write((int) (days & 0xFF));
+        out.write((int) ((days >> 8) & 0xFF));
+        out.write((int) ((days >> 16) & 0xFF));
+        return out.toByteArray();
+    }
+
+    static byte[] decimalRow(int precision, int scale, String text) {
+        TdsColumnDefinition col = new TdsColumnDefinition(
+                "amount", TdsTypeCode.DECIMALN, 1 + TdsBinaryValues.decimalIntegerWidth(precision),
+                precision, scale, 1, 0, false, null);
+        byte[] payload = TdsBinaryValues.encode(col, com.whosly.gateway.masking.MaskedValue.ofText(text, java.nio.charset.StandardCharsets.UTF_8));
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        out.write(TdsTokenType.ROW.getCode());
+        out.write(payload.length & 0xFF);
+        writeRaw(out, payload);
+        return out.toByteArray();
+    }
+
+    static byte[] nvarcharPlpRow(String value) {
+        byte[] utf16 = value.getBytes(java.nio.charset.StandardCharsets.UTF_16LE);
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        out.write(TdsTokenType.ROW.getCode());
+        // ULONGLONGLEN
+        long len = utf16.length;
+        for (int i = 0; i < 8; i++) {
+            out.write((int) ((len >> (8 * i)) & 0xFF));
+        }
+        // chunk
+        writeU32(out, utf16.length);
+        writeRaw(out, utf16);
+        writeU32(out, 0);
+        return out.toByteArray();
+    }
+
+    static byte[] nbcNvarcharRow(String presentOrNullLeft, String presentOrNullRight) {
+        // bit0=left null?, bit1=right null?
+        byte bitmap = 0;
+        if (presentOrNullLeft == null) {
+            bitmap |= 0x01;
+        }
+        if (presentOrNullRight == null) {
+            bitmap |= 0x02;
+        }
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        out.write(TdsTokenType.NBCROW.getCode());
+        out.write(bitmap);
+        if (presentOrNullLeft != null) {
+            byte[] utf16 = presentOrNullLeft.getBytes(java.nio.charset.StandardCharsets.UTF_16LE);
+            writeU16(out, utf16.length);
+            writeRaw(out, utf16);
+        }
+        if (presentOrNullRight != null) {
+            byte[] utf16 = presentOrNullRight.getBytes(java.nio.charset.StandardCharsets.UTF_16LE);
+            writeU16(out, utf16.length);
+            writeRaw(out, utf16);
+        }
+        return out.toByteArray();
+    }
+
+        static byte[] doneFinal() {
         return TdsDoneToken.encode(TdsDoneToken.STATUS_FINAL | TdsDoneToken.STATUS_COUNT, 0xC1, 1L);
     }
 

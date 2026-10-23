@@ -8,8 +8,8 @@ import java.util.Optional;
 /**
  * One COLMETADATA column with enough wire detail for ROW parse/rewrite.
  *
- * <p>{@link #plp} is true when maxlength is {@code 0xFFFF} (MAX / PLP). PLP and
- * TEXTPTR layouts are observed but non-null masking is refused (fail-closed).</p>
+ * <p>{@link #plp} is true when maxlength is {@code 0xFFFF} (MAX / PLP). Text PLP
+ * can be rewritten; TEXTPTR / XML / UDT / MONEY stay fail-closed.</p>
  */
 public final class TdsColumnDefinition {
 
@@ -109,15 +109,23 @@ public final class TdsColumnDefinition {
      * NULL masks are handled separately for every nullable layout we can encode.
      */
     public boolean supportsNonNullRewrite() {
-        if (plp || type.layout() == TdsTypeCode.WireLayout.UNSUPPORTED
+        if (type.layout() == TdsTypeCode.WireLayout.UNSUPPORTED
                 || type.layout() == TdsTypeCode.WireLayout.TEXTPTR) {
             return false;
+        }
+        if (plp) {
+            // nvarchar(max) / varchar(max) / nchar / char MAX only — not varbinary(max)/xml.
+            return type == TdsTypeCode.NVARCHAR
+                    || type == TdsTypeCode.NCHAR
+                    || type == TdsTypeCode.BIGVARCHR
+                    || type == TdsTypeCode.BIGCHAR;
         }
         return type == TdsTypeCode.NVARCHAR
                 || type == TdsTypeCode.NCHAR
                 || type == TdsTypeCode.BIGVARCHR
                 || type == TdsTypeCode.BIGCHAR
-                || type == TdsTypeCode.GUIDTYPE;
+                || type == TdsTypeCode.GUIDTYPE
+                || TdsBinaryValues.isEncodable(type);
     }
 
     public boolean supportsNullRewrite() {

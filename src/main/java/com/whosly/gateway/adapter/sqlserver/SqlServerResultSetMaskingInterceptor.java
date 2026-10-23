@@ -27,9 +27,11 @@ import java.util.Optional;
 /**
  * Applies masking rules to TDS {@code ROW} tokens inside {@code TABULAR_RESULT}.
  *
- * <p>Fail-closed (rule 8.2): NBCROW, incomplete COLMETADATA, PLP/TEXTPTR/unknown
+ * <p>Fail-closed (rule 8.2): incomplete COLMETADATA, TEXTPTR/MONEY/XML/unknown
  * non-null rewrites, and rows that cannot be re-encoded are denied rather than
- * approximated. With no matching rules the message is forwarded byte-identical.</p>
+ * approximated. ROW and NBCROW text/guid/numeric/temporal (including text PLP)
+ * are rewritten when rules match. With no matching rules the message is forwarded
+ * byte-identical.</p>
  */
 public final class SqlServerResultSetMaskingInterceptor implements MessageInterceptor {
 
@@ -70,13 +72,6 @@ public final class SqlServerResultSetMaskingInterceptor implements MessageInterc
         if (columns.isEmpty()) {
             return refuse(message, "COLMETADATA was not fully observed before ROW");
         }
-        if (extractor.lastTargetMessageContainedNbcRow()) {
-            if (anyRuleApplies(columns)) {
-                return refuse(message, "NBCROW result sets cannot be masked safely");
-            }
-            return TrafficDecision.forward(message);
-        }
-
         byte[] payload = SqlServerDatabaseEventExtractor.concatenatePayloads(
                 message.originalBytes(), message.originalOffset(), message.originalLength());
         Optional<byte[]> rewritten = rewriteTabularPayload(payload, columns);
@@ -118,7 +113,25 @@ public final class SqlServerResultSetMaskingInterceptor implements MessageInterc
                 continue;
             }
             if (token == TdsTokenType.NBCROW.getCode()) {
-                return Optional.empty();
+                Optional<TdsRowCodec.ParsedRow> parsed = TdsRowCodec.tryParseNbc(payload, cursor, columns);
+                if (parsed.isEmpty()) {
+                    return Optional.empty();
+                }
+                try {
+                    List<MaskedValue> masked = applyRules(columns, parsed.get().values());
+                    if (!sameValues(parsed.get().values(), masked)) {
+                        mutated = true;
+                        byte[] row = TdsRowCodec.encodeNbc(columns, masked);
+                        out.write(row, 0, row.length);
+                    } else {
+                        out.write(payload, cursor, parsed.get().wireLength());
+                    }
+                } catch (MaskingException | IllegalArgumentException e) {
+                    log.debug("SQL Server NBCROW mask refused: {}", e.getMessage());
+                    return Optional.empty();
+                }
+                cursor += parsed.get().wireLength();
+                continue;
             }
             Optional<Integer> skip = skipToken(payload, cursor);
             if (skip.isEmpty()) {
@@ -186,6 +199,9 @@ public final class SqlServerResultSetMaskingInterceptor implements MessageInterc
         }
         if (type == TdsTypeCode.GUIDTYPE) {
             return MaskedValue.ofText(decodeGuid(wire.bytes()), StandardCharsets.UTF_8);
+        }
+        if (TdsBinaryValues.isEncodable(type)) {
+            return MaskedValue.ofText(TdsBinaryValues.decodeToText(column, wire.bytes()), StandardCharsets.UTF_8);
         }
         return wire;
     }
