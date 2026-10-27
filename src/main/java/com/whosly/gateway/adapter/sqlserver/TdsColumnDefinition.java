@@ -2,6 +2,7 @@ package com.whosly.gateway.adapter.sqlserver;
 
 import com.whosly.gateway.masking.ColumnMetadata;
 
+import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 
@@ -9,9 +10,9 @@ import java.util.Optional;
  * One COLMETADATA column with enough wire detail for ROW parse/rewrite.
  *
  * <p>{@link #plp} is true when maxlength is {@code 0xFFFF} (MAX / PLP) or the type
- * is XML/UDT. Text/binary PLP, TEXTPTR, XML (MS-BINXML), and hierarchyid UDT can be
- * rewritten; generic CLR UDT non-null stays fail-closed unless the rule supplies
- * opaque {@code 0x} hex; TVP/unknown stay fail-closed.</p>
+ * is XML/UDT. Text/binary PLP, TEXTPTR, XML (MS-BINXML), hierarchyid UDT, and TVP
+ * nested cells can be rewritten; generic CLR UDT non-null stays fail-closed unless
+ * the rule supplies opaque {@code 0x} hex; unknown types stay fail-closed.</p>
  */
 public final class TdsColumnDefinition {
 
@@ -28,6 +29,10 @@ public final class TdsColumnDefinition {
     private final boolean plp;
     private final byte[] collationBytes;
     private final String udtTypeName;
+    /** Nested TVP columns (empty when not TVP or TVP_NULL). */
+    private final List<TdsColumnDefinition> nestedColumns;
+    /** True when TVP TYPE_INFO Count was {@code 0xFFFF}. */
+    private final boolean tvpNull;
 
     public TdsColumnDefinition(
             String name,
@@ -39,7 +44,7 @@ public final class TdsColumnDefinition {
             int fixedByteLength,
             boolean plp,
             byte[] collationBytes) {
-        this(name, type, maxLength, precision, scale, flags, fixedByteLength, plp, collationBytes, null);
+        this(name, type, maxLength, precision, scale, flags, fixedByteLength, plp, collationBytes, null, List.of(), false);
     }
 
     public TdsColumnDefinition(
@@ -53,6 +58,22 @@ public final class TdsColumnDefinition {
             boolean plp,
             byte[] collationBytes,
             String udtTypeName) {
+        this(name, type, maxLength, precision, scale, flags, fixedByteLength, plp, collationBytes, udtTypeName, List.of(), false);
+    }
+
+    public TdsColumnDefinition(
+            String name,
+            TdsTypeCode type,
+            int maxLength,
+            int precision,
+            int scale,
+            int flags,
+            int fixedByteLength,
+            boolean plp,
+            byte[] collationBytes,
+            String udtTypeName,
+            List<TdsColumnDefinition> nestedColumns,
+            boolean tvpNull) {
         this.name = Objects.requireNonNull(name, "name");
         this.type = Objects.requireNonNull(type, "type");
         this.maxLength = maxLength;
@@ -63,6 +84,8 @@ public final class TdsColumnDefinition {
         this.plp = plp;
         this.collationBytes = collationBytes == null ? null : collationBytes.clone();
         this.udtTypeName = udtTypeName;
+        this.nestedColumns = nestedColumns == null ? List.of() : List.copyOf(nestedColumns);
+        this.tvpNull = tvpNull;
     }
 
     public String name() {
@@ -109,6 +132,14 @@ public final class TdsColumnDefinition {
         return udtTypeName == null || udtTypeName.isBlank()
                 ? Optional.empty()
                 : Optional.of(udtTypeName);
+    }
+
+    public List<TdsColumnDefinition> nestedColumns() {
+        return nestedColumns;
+    }
+
+    public boolean tvpNull() {
+        return tvpNull;
     }
 
     public boolean isHierarchyId() {

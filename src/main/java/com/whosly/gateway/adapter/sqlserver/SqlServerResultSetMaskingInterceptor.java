@@ -27,13 +27,14 @@ import java.util.Optional;
 /**
  * Applies masking rules to TDS {@code ROW} tokens inside {@code TABULAR_RESULT}.
  *
- * <p>Fail-closed (rule 8.2): incomplete COLMETADATA, TVP cell rewrite, unknown
- * layouts, undecodable hierarchyid / non-{@code 0x} generic UDT, and rows that
- * cannot be re-encoded are denied rather than approximated. ROW and NBCROW
+ * <p>Fail-closed (rule 8.2): incomplete COLMETADATA, unknown layouts, undecodable
+ * hierarchyid / non-{@code 0x} generic UDT, unsupported nested TVP cell types, and
+ * rows that cannot be re-encoded are denied rather than approximated. ROW and NBCROW
  * text/guid/numeric/temporal/money/TEXTPTR/varbinary (including PLP), XML
- * (MS-BINXML via {@link TdsBinXml}), and hierarchyid / opaque-{@code 0x} UDT are
- * rewritten when rules match. With no matching rules the message is forwarded
- * byte-identical.</p>
+ * (MS-BINXML via {@link TdsBinXml}), hierarchyid / opaque-{@code 0x} UDT, and
+ * <strong>TVP nested cells</strong> (via {@link TdsTvpCodec}) are rewritten when
+ * rules match. Wholesale rewrite of a TVP column itself stays denied. With no
+ * matching rules the message is forwarded byte-identical.</p>
  */
 public final class SqlServerResultSetMaskingInterceptor implements MessageInterceptor {
 
@@ -74,7 +75,7 @@ public final class SqlServerResultSetMaskingInterceptor implements MessageInterc
         if (columns.isEmpty()) {
             return refuse(message, "COLMETADATA was not fully observed before ROW");
         }
-        // No matching rules → byte-identical forward (keeps TVP / exotic cells transparent).
+        // No matching rules → byte-identical forward (keeps exotic / unruled cells transparent).
         if (!anyRuleApplies(columns)) {
             return TrafficDecision.forward(message);
         }
@@ -160,15 +161,19 @@ public final class SqlServerResultSetMaskingInterceptor implements MessageInterc
         List<MaskedValue> masked = new ArrayList<>(originals.size());
         for (int i = 0; i < columns.size(); i++) {
             TdsColumnDefinition column = columns.get(i);
-            ColumnMetadata meta = column.toColumnMetadata();
-            MaskingRule rule = engine.ruleFor(meta).orElse(null);
             MaskedValue original = originals.get(i);
-            if (rule == null) {
-                masked.add(original);
+            if (column.type() == TdsTypeCode.TVP) {
+                masked.add(applyTvpRules(column, original));
                 continue;
             }
-            // Rules operate on UTF-8 text / uuid strings; convert from TDS wire first.
+            ColumnMetadata meta = column.toColumnMetadata();
+            // Canonicalize wire → rule form so sibling re-encode stays round-trippable.
             MaskedValue forRule = toRuleValue(column, original);
+            MaskingRule rule = engine.ruleFor(meta).orElse(null);
+            if (rule == null) {
+                masked.add(forRule);
+                continue;
+            }
             MaskedValue replacement = engine.apply(rule, meta, forRule);
             if (replacement.isNull()) {
                 if (!column.supportsNullRewrite()) {
@@ -185,6 +190,60 @@ public final class SqlServerResultSetMaskingInterceptor implements MessageInterc
             masked.add(replacement);
         }
         return masked;
+    }
+
+    /**
+     * Masks nested TVP cells. A rule on the outer TVP column itself is refused
+     * (no safe wholesale table encode). Rules matching nested column names rewrite
+     * those cells; with no nested matches the wire bytes are kept.
+     */
+    private MaskedValue applyTvpRules(TdsColumnDefinition column, MaskedValue original)
+            throws MaskingException {
+        if (engine.ruleFor(column.toColumnMetadata()).isPresent()) {
+            throw new MaskingException(
+                    "wholesale TVP mask not representable for column " + column.name());
+        }
+        if (column.tvpNull() || original.isNull()) {
+            return MaskedValue.ofNull();
+        }
+        byte[] wire = original.bytes();
+        Optional<TdsTvpCodec.ParsedTvp> parsed = TdsTvpCodec.tryParse(
+                wire, 0, column.nestedColumns(), false);
+        if (parsed.isEmpty()) {
+            throw new MaskingException("TVP value parse failed for column " + column.name());
+        }
+        TdsTvpCodec.ParsedTvp tvp = parsed.get();
+        boolean nestedRule = false;
+        for (TdsColumnDefinition nested : column.nestedColumns()) {
+            if (engine.ruleFor(nested.toColumnMetadata()).isPresent()) {
+                nestedRule = true;
+                break;
+            }
+        }
+        if (!nestedRule) {
+            return original;
+        }
+        List<List<MaskedValue>> maskedRows = new ArrayList<>(tvp.rows().size());
+        for (List<MaskedValue> row : tvp.rows()) {
+            maskedRows.add(applyRules(column.nestedColumns(), row));
+        }
+        if (sameTvpRows(tvp.rows(), maskedRows)) {
+            return original;
+        }
+        byte[] encoded = TdsTvpCodec.encode(column.nestedColumns(), tvp.prefix(), maskedRows);
+        return MaskedValue.of(encoded);
+    }
+
+    private static boolean sameTvpRows(List<List<MaskedValue>> a, List<List<MaskedValue>> b) {
+        if (a.size() != b.size()) {
+            return false;
+        }
+        for (int r = 0; r < a.size(); r++) {
+            if (!sameValues(a.get(r), b.get(r))) {
+                return false;
+            }
+        }
+        return true;
     }
 
     /**
@@ -246,6 +305,9 @@ public final class SqlServerResultSetMaskingInterceptor implements MessageInterc
     private boolean anyRuleApplies(List<TdsColumnDefinition> columns) {
         for (TdsColumnDefinition column : columns) {
             if (engine.ruleFor(column.toColumnMetadata()).isPresent()) {
+                return true;
+            }
+            if (anyRuleApplies(column.nestedColumns())) {
                 return true;
             }
         }

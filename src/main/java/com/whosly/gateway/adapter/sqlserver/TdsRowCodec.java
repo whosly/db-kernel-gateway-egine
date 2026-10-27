@@ -16,8 +16,9 @@ import java.util.UUID;
  *
  * <p>Supports ROW and NBCROW for known layouts, including TEXTPTR (text/ntext/image),
  * MONEY*, VARBINARY PLP, numeric/temporal via {@link TdsBinaryValues}, XML via
- * {@link TdsBinXml}, UDT hierarchyid / opaque {@code 0x} hex via {@link TdsHierarchyId}.
- * TVP / unknown layouts return empty so the interceptor can deny.</p>
+ * {@link TdsBinXml}, UDT hierarchyid / opaque {@code 0x} hex via {@link TdsHierarchyId},
+ * and TVP value streams via {@link TdsTvpCodec}. Unknown layouts return empty so the
+ * interceptor can deny.</p>
  */
 public final class TdsRowCodec {
 
@@ -42,7 +43,7 @@ public final class TdsRowCodec {
         int cursor = offset + 1;
         List<MaskedValue> values = new ArrayList<>(columns.size());
         for (TdsColumnDefinition column : columns) {
-            Optional<ValueParse> parsed = readValue(payload, cursor, column);
+            Optional<ValueParse> parsed = readCell(payload, cursor, column, false);
             if (parsed.isEmpty()) {
                 return Optional.empty();
             }
@@ -64,7 +65,7 @@ public final class TdsRowCodec {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         out.write(TdsTokenType.ROW.getCode());
         for (int i = 0; i < columns.size(); i++) {
-            writeValue(out, columns.get(i), values.get(i));
+            writeCell(out, columns.get(i), values.get(i), false);
         }
         return out.toByteArray();
     }
@@ -95,7 +96,7 @@ public final class TdsRowCodec {
                 values.add(MaskedValue.ofNull());
                 continue;
             }
-            Optional<ValueParse> parsed = readValue(payload, cursor, columns.get(i));
+            Optional<ValueParse> parsed = readCell(payload, cursor, columns.get(i), false);
             if (parsed.isEmpty()) {
                 return Optional.empty();
             }
@@ -125,7 +126,7 @@ public final class TdsRowCodec {
             if (values.get(i).isNull()) {
                 continue;
             }
-            writeValue(out, columns.get(i), values.get(i));
+            writeCell(out, columns.get(i), values.get(i), false);
         }
         return out.toByteArray();
     }
@@ -149,7 +150,19 @@ public final class TdsRowCodec {
         bitmap[byteIndex] = (byte) (bitmap[byteIndex] | (1 << bit));
     }
 
-    private static Optional<ValueParse> readValue(byte[] payload, int offset, TdsColumnDefinition column) {
+    /**
+     * Reads one cell value. When {@code tvpRow} is true, TEXT/NTEXT/IMAGE omit
+     * TextPointer+Timestamp (MS-TDS TVP_ROW rule).
+     */
+    static Optional<ValueParse> readCell(
+            byte[] payload, int offset, TdsColumnDefinition column, boolean tvpRow) {
+        if (column.type().layout() == TdsTypeCode.WireLayout.TVP_META) {
+            if (tvpRow) {
+                // Nested TVP inside TVP is not supported.
+                return Optional.empty();
+            }
+            return readTvp(payload, offset, column);
+        }
         if (column.plp()) {
             return readPlp(payload, offset);
         }
@@ -157,9 +170,45 @@ public final class TdsRowCodec {
             case FIXED -> readFixed(payload, offset, column);
             case BYTE_LEN -> readByteLen(payload, offset, column);
             case USHORT_LEN -> readUshortLen(payload, offset, column);
-            case TEXTPTR -> readTextPtr(payload, offset);
-            case PLP_META, TVP_META, UNSUPPORTED -> Optional.empty();
+            case TEXTPTR -> tvpRow ? readTextPtrTvp(payload, offset) : readTextPtr(payload, offset);
+            case PLP_META, UNSUPPORTED -> Optional.empty();
+            case TVP_META -> Optional.empty(); // handled above
         };
+    }
+
+    private static Optional<ValueParse> readTvp(byte[] payload, int offset, TdsColumnDefinition column) {
+        Optional<TdsTvpCodec.ParsedTvp> parsed = TdsTvpCodec.tryParse(
+                payload, offset, column.nestedColumns(), column.tvpNull());
+        if (parsed.isEmpty()) {
+            return Optional.empty();
+        }
+        TdsTvpCodec.ParsedTvp tvp = parsed.get();
+        if (tvp.nullTvp()) {
+            return Optional.of(new ValueParse(MaskedValue.ofNull(), offset + tvp.wireLength()));
+        }
+        byte[] wire = new byte[tvp.wireLength()];
+        System.arraycopy(payload, offset, wire, 0, tvp.wireLength());
+        return Optional.of(new ValueParse(MaskedValue.of(wire), offset + tvp.wireLength()));
+    }
+
+    /**
+     * TVP_ROW TEXT/NTEXT/IMAGE: LONGLEN ({@code 0xFFFFFFFF}=NULL) + data — no textptr/timestamp.
+     */
+    private static Optional<ValueParse> readTextPtrTvp(byte[] payload, int offset) {
+        if (offset + 4 > payload.length) {
+            return Optional.empty();
+        }
+        int dataLen = TdsColMetadata.u32le(payload, offset);
+        int cursor = offset + 4;
+        if (dataLen == -1) {
+            return Optional.of(new ValueParse(MaskedValue.ofNull(), cursor));
+        }
+        if (dataLen < 0 || cursor + dataLen > payload.length) {
+            return Optional.empty();
+        }
+        byte[] bytes = new byte[dataLen];
+        System.arraycopy(payload, cursor, bytes, 0, dataLen);
+        return Optional.of(new ValueParse(MaskedValue.of(bytes), cursor + dataLen));
     }
 
     private static Optional<ValueParse> readFixed(byte[] payload, int offset, TdsColumnDefinition column) {
@@ -272,7 +321,15 @@ public final class TdsRowCodec {
         return Optional.of(new ValueParse(MaskedValue.of(sink.toByteArray()), cursor));
     }
 
-    private static void writeValue(ByteArrayOutputStream out, TdsColumnDefinition column, MaskedValue value) {
+    static void writeCell(
+            ByteArrayOutputStream out, TdsColumnDefinition column, MaskedValue value, boolean tvpRow) {
+        if (column.type().layout() == TdsTypeCode.WireLayout.TVP_META) {
+            if (tvpRow) {
+                throw new IllegalArgumentException("nested TVP not supported");
+            }
+            writeTvp(out, value);
+            return;
+        }
         if (column.plp()) {
             writePlp(out, column, value);
             return;
@@ -281,8 +338,35 @@ public final class TdsRowCodec {
             case FIXED -> writeFixed(out, column, value);
             case BYTE_LEN -> writeByteLen(out, column, value);
             case USHORT_LEN -> writeUshortLen(out, column, value);
-            case TEXTPTR -> writeTextPtr(out, column, value);
+            case TEXTPTR -> {
+                if (tvpRow) {
+                    writeTextPtrTvp(out, column, value);
+                } else {
+                    writeTextPtr(out, column, value);
+                }
+            }
             default -> throw new IllegalArgumentException("unsupported layout for encode: " + column.type());
+        }
+    }
+
+    private static void writeTvp(ByteArrayOutputStream out, MaskedValue value) {
+        if (value.isNull()) {
+            // TVP_NULL is expressed in TYPE_INFO (Count=0xFFFF); no value bytes.
+            return;
+        }
+        byte[] bytes = value.bytes();
+        out.write(bytes, 0, bytes.length);
+    }
+
+    private static void writeTextPtrTvp(ByteArrayOutputStream out, TdsColumnDefinition column, MaskedValue value) {
+        if (value.isNull()) {
+            writeU32le(out, 0xFFFFFFFF);
+            return;
+        }
+        byte[] bytes = encodeNonNullBytes(column, value);
+        writeU32le(out, bytes.length);
+        if (bytes.length > 0) {
+            out.write(bytes, 0, bytes.length);
         }
     }
 
@@ -452,6 +536,6 @@ public final class TdsRowCodec {
     public record ParsedRow(List<MaskedValue> values, int wireLength) {
     }
 
-    private record ValueParse(MaskedValue value, int nextOffset) {
+    record ValueParse(MaskedValue value, int nextOffset) {
     }
 }

@@ -133,28 +133,109 @@ class TdsXmlUdtTvpTest {
     }
 
     @Test
-    void tvpColumnMetaParsesButCellRewriteDenied() {
-        byte[] meta = TdsTestFrames.tvpColumnMeta("tvp", true);
+    void tvpColumnMetaRetainsNestedColumns() {
+        byte[] meta = TdsTestFrames.tvpColumnMetaWithNested("tvp", true, "ssn", "name");
         TdsColumnDefinition col = TdsColMetadata.tryParse(meta, 0).orElseThrow().columns().get(0);
         assertThat(col.type()).isEqualTo(TdsTypeCode.TVP);
         assertThat(col.udtTypeName()).contains("MyTvp");
-        assertThat(col.supportsNonNullRewrite()).isFalse();
+        assertThat(col.nestedColumns()).hasSize(2);
+        assertThat(col.nestedColumns().get(0).name()).isEqualTo("ssn");
+        assertThat(col.nestedColumns().get(1).name()).isEqualTo("name");
+        assertThat(col.supportsNonNullRewrite()).isFalse(); // wholesale still denied
         assertThat(col.supportsNullRewrite()).isFalse();
+    }
 
-        // ROW with a dummy byte after token — TVP layout cannot be read → DENY when rule hits.
-        byte[] row = new byte[]{(byte) TdsTokenType.ROW.getCode(), 0x00};
-        byte[] payload = TdsTestFrames.concat(meta, row, TdsTestFrames.doneFinal());
+    @Test
+    void tvpNestedCellRewriteFixed() {
+        byte[] meta = TdsTestFrames.tvpColumnMetaWithNested("tvp", true, "ssn", "name");
+        String[][] rows = {{"111-22-3333", "Alice"}, {"444-55-6666", "Bob"}};
+        byte[] payload = TdsTestFrames.concat(
+                meta, TdsTestFrames.tvpValueRow(rows), TdsTestFrames.doneFinal());
+        byte[] replacement = assertForwardMutated(payload,
+                new FixedValueRule("ssn-fixed", 10, ColumnSelector.named("ssn"), "***-**-****"));
+        // Nested ssn cells become UTF-16LE "***-**-****"; name cells stay.
+        byte[] masked = "***-**-****".getBytes(StandardCharsets.UTF_16LE);
+        byte[] alice = "Alice".getBytes(StandardCharsets.UTF_16LE);
+        byte[] bob = "Bob".getBytes(StandardCharsets.UTF_16LE);
+        assertThat(indexOf(replacement, masked)).isGreaterThanOrEqualTo(0);
+        assertThat(indexOf(replacement, alice)).isGreaterThanOrEqualTo(0);
+        assertThat(indexOf(replacement, bob)).isGreaterThanOrEqualTo(0);
+        assertThat(indexOf(replacement, "111-22-3333".getBytes(StandardCharsets.UTF_16LE))).isEqualTo(-1);
+    }
+
+    @Test
+    void tvpOptionalOrderUniqueSkippedThenRewrite() {
+        byte[] meta = TdsTestFrames.tvpColumnMetaWithNested("tvp", true, "ssn");
+        // ORDER_UNIQUE Count=1, ColNum=0, Flags=0 → then END + one row + END
+        byte[] value = new byte[]{
+                (byte) TdsTvpCodec.ORDER_UNIQUE_TOKEN,
+                0x01, 0x00, // Count=1
+                0x00, 0x00, // ColNum
+                0x00,       // Flags
+                (byte) TdsTvpCodec.END_TOKEN
+        };
+        byte[] cell = "secret".getBytes(StandardCharsets.UTF_16LE);
+        java.io.ByteArrayOutputStream body = new java.io.ByteArrayOutputStream();
+        body.write(value, 0, value.length);
+        body.write(TdsTvpCodec.ROW_TOKEN);
+        body.write((byte) (cell.length & 0xFF));
+        body.write((byte) ((cell.length >> 8) & 0xFF));
+        body.write(cell, 0, cell.length);
+        body.write(TdsTvpCodec.END_TOKEN);
+        java.io.ByteArrayOutputStream row = new java.io.ByteArrayOutputStream();
+        row.write(TdsTokenType.ROW.getCode());
+        byte[] tvpBytes = body.toByteArray();
+        row.write(tvpBytes, 0, tvpBytes.length);
+        byte[] payload = TdsTestFrames.concat(meta, row.toByteArray(), TdsTestFrames.doneFinal());
+        byte[] replacement = assertForwardMutated(payload,
+                new FixedValueRule("ssn-fixed", 10, ColumnSelector.named("ssn"), "REDACTED"));
+        assertThat(indexOf(replacement, "REDACTED".getBytes(StandardCharsets.UTF_16LE)))
+                .isGreaterThanOrEqualTo(0);
+        assertThat(indexOf(replacement, cell)).isEqualTo(-1);
+        // ORDER_UNIQUE prefix preserved
+        assertThat(indexOf(replacement, new byte[]{
+                (byte) TdsTvpCodec.ORDER_UNIQUE_TOKEN, 0x01, 0x00, 0x00, 0x00, 0x00
+        })).isGreaterThanOrEqualTo(0);
+    }
+
+    @Test
+    void tvpNestedCellRoundTripCodec() {
+        byte[] meta = TdsTestFrames.tvpColumnMetaWithNested("tvp", true, "ssn", "name");
+        TdsColumnDefinition col = TdsColMetadata.tryParse(meta, 0).orElseThrow().columns().get(0);
+        String[][] rows = {{"111-22-3333", "Alice"}};
+        byte[] value = TdsTestFrames.tvpValueBytes(rows);
+        Optional<TdsTvpCodec.ParsedTvp> parsed =
+                TdsTvpCodec.tryParse(value, 0, col.nestedColumns(), false);
+        assertThat(parsed).isPresent();
+        assertThat(parsed.get().rows()).hasSize(1);
+        assertThat(parsed.get().rows().get(0)).hasSize(2);
+
+        // Mask ssn cell to fixed text and re-encode
+        MaskedValue ssn = MaskedValue.ofText("***-**-****", StandardCharsets.UTF_8);
+        MaskedValue name = MaskedValue.ofText("Alice", StandardCharsets.UTF_8);
+        byte[] encoded = TdsTvpCodec.encode(
+                col.nestedColumns(), parsed.get().prefix(), List.of(List.of(ssn, name)));
+        Optional<TdsTvpCodec.ParsedTvp> again =
+                TdsTvpCodec.tryParse(encoded, 0, col.nestedColumns(), false);
+        assertThat(again).isPresent();
+        assertThat(again.get().rows()).hasSize(1);
+        String ssnText = new String(again.get().rows().get(0).get(0).bytes(), StandardCharsets.UTF_16LE);
+        assertThat(ssnText).isEqualTo("***-**-****");
+    }
+
+    @Test
+    void tvpWholesaleRuleDenied() {
+        byte[] meta = TdsTestFrames.tvpColumnMetaWithNested("tvp", true, "ssn");
+        String[][] rows = {{"111-22-3333"}};
+        byte[] payload = TdsTestFrames.concat(
+                meta, TdsTestFrames.tvpValueRow(rows), TdsTestFrames.doneFinal());
         SqlServerSession session = new SqlServerSession("tvp-deny");
         SqlServerDatabaseEventExtractor extractor =
                 new SqlServerDatabaseEventExtractor("SQLServer", session.getConnectionId(), session);
         byte[] packet = CODEC.packet(TdsPacketType.TABULAR_RESULT.getCode(), payload, 1);
         extractor.inspect(TrafficDirection.TARGET_TO_CLIENT, packet, 0, packet.length);
-        // Ensure extractor saw the TVP column
         assertThat(extractor.currentTdsColumns()).hasSize(1);
 
-        SqlServerResultSetMaskingInterceptor interceptor = interceptor(extractor,
-                new FixedValueRule("tvp-fixed", 10, ColumnSelector.named("tvp"), "x"));
-        // Force rule match on OTHER category via anonymous rule if FixedValue misses OTHER
         MaskingRule force = new MaskingRule() {
             @Override public String name() { return "tvp-force"; }
             @Override public int priority() { return 10; }
@@ -176,9 +257,10 @@ class TdsXmlUdtTvpTest {
 
     @Test
     void tvpWithoutRulesForwardsByteIdentical() {
-        byte[] meta = TdsTestFrames.tvpColumnMeta("tvp", true);
-        byte[] row = new byte[]{(byte) TdsTokenType.ROW.getCode(), 0x00};
-        byte[] payload = TdsTestFrames.concat(meta, row, TdsTestFrames.doneFinal());
+        byte[] meta = TdsTestFrames.tvpColumnMetaWithNested("tvp", true, "ssn");
+        String[][] rows = {{"111-22-3333"}};
+        byte[] payload = TdsTestFrames.concat(
+                meta, TdsTestFrames.tvpValueRow(rows), TdsTestFrames.doneFinal());
         SqlServerSession session = new SqlServerSession("tvp-fwd");
         SqlServerDatabaseEventExtractor extractor =
                 new SqlServerDatabaseEventExtractor("SQLServer", session.getConnectionId(), session);
@@ -195,6 +277,20 @@ class TdsXmlUdtTvpTest {
     }
 
     @Test
+    void tvpEmptyValueParses() {
+        byte[] meta = TdsTestFrames.tvpColumnMetaWithNested("tvp", true, "ssn");
+        TdsColumnDefinition col = TdsColMetadata.tryParse(meta, 0).orElseThrow().columns().get(0);
+        byte[] row = TdsTestFrames.tvpEmptyValueRow();
+        Optional<TdsRowCodec.ParsedRow> parsed = TdsRowCodec.tryParse(row, 0, List.of(col));
+        assertThat(parsed).isPresent();
+        assertThat(parsed.get().values().get(0).isNull()).isFalse();
+        Optional<TdsTvpCodec.ParsedTvp> tvp = TdsTvpCodec.tryParse(
+                parsed.get().values().get(0).bytes(), 0, col.nestedColumns(), false);
+        assertThat(tvp).isPresent();
+        assertThat(tvp.get().rows()).isEmpty();
+    }
+
+    @Test
     void hexHelpers() {
         assertThat(TdsHierarchyId.tryParseHexBytes("0xAABB").orElseThrow())
                 .containsExactly((byte) 0xAA, (byte) 0xBB);
@@ -202,7 +298,7 @@ class TdsXmlUdtTvpTest {
         assertThat(TdsHierarchyId.tryParseHexBytes("nope")).isEmpty();
     }
 
-    private static void assertForwardMutated(byte[] payload, MaskingRule rule) {
+    private static byte[] assertForwardMutated(byte[] payload, MaskingRule rule) {
         SqlServerSession session = new SqlServerSession("t-" + rule.name());
         SqlServerDatabaseEventExtractor extractor =
                 new SqlServerDatabaseEventExtractor("SQLServer", session.getConnectionId(), session);
@@ -213,6 +309,26 @@ class TdsXmlUdtTvpTest {
                 RawBackedMessage.of(TrafficDirection.TARGET_TO_CLIENT, packet, 0, packet.length));
         assertThat(decision.action()).isEqualTo(TrafficAction.FORWARD);
         assertThat(decision.message().mutated()).isTrue();
+        var msg = decision.message();
+        byte[] replacement = new byte[msg.outputLength()];
+        System.arraycopy(msg.outputBytes(), msg.outputOffset(), replacement, 0, msg.outputLength());
+        return replacement;
+    }
+
+    private static int indexOf(byte[] haystack, byte[] needle) {
+        if (haystack == null || needle == null || needle.length == 0 || haystack.length < needle.length) {
+            return -1;
+        }
+        outer:
+        for (int i = 0; i <= haystack.length - needle.length; i++) {
+            for (int j = 0; j < needle.length; j++) {
+                if (haystack[i + j] != needle[j]) {
+                    continue outer;
+                }
+            }
+            return i;
+        }
+        return -1;
     }
 
     private static SqlServerResultSetMaskingInterceptor interceptor(

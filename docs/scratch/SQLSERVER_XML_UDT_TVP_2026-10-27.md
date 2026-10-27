@@ -71,4 +71,17 @@
 | TVP 单元格改写 | ❌ 仍 DENY（无规则时透传） |
 | geometry 等非 `0x` CLR / hierarchyid `.` fake | ❌ 仍 DENY |
 
-测试：`TdsXmlUdtTvpTest` + 既有 XML/UDT 用例更新；全量 **694** 绿。
+测试：`TdsXmlUdtTvpTest` + 既有 XML/UDT 用例更新；全量 **699** 绿。
+
+
+## 落地（TVP 嵌套单元格 · 同日续）
+
+| 项 | 状态 |
+|---|---|
+| `TdsTvpCodec` 解析/重编码（ORDER_UNIQUE / COLUMN_ORDERING / END / ROW cells） | ✅ |
+| 嵌套单元格按列名规则改写（TEXT/NTEXT/IMAGE 走 TVP_ROW 无 TextPointer） | ✅ |
+| `fDefault`（Flags 0x200）省略单元格 | ✅ |
+| TVP **整列** wholesale 规则 | ❌ 仍 DENY |
+| 嵌套未知 type / 嵌套 TVP | ❌ 仍 DENY |
+
+规则命中嵌套列名 → 改写；无嵌套规则 → 字节透传；命中外层 TVP 列名 → DENY。

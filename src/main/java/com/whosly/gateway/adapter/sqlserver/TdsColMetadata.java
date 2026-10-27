@@ -11,7 +11,7 @@ import java.util.Optional;
  * <p>Best-effort / fail-closed: truncated or unknown TYPE_INFO yields empty so
  * the masking interceptor can refuse rather than guess column attribution.
  * XML (MS-BINXML) and UDT (hierarchyid / opaque hex) TYPE_INFO are fully parsed;
- * TVP_META is consumed so COLMETADATA can complete, but TVP cells stay fail-closed.</p>
+ * TVP_META nests column definitions so {@link TdsTvpCodec} can rewrite cells.</p>
  */
 public final class TdsColMetadata {
 
@@ -82,7 +82,9 @@ public final class TdsColMetadata {
                 typeInfo.get().fixedByteLength(),
                 typeInfo.get().plp(),
                 typeInfo.get().collation(),
-                typeInfo.get().udtTypeName());
+                typeInfo.get().udtTypeName(),
+                typeInfo.get().nestedColumns(),
+                typeInfo.get().tvpNull());
         return Optional.of(new ParseColumnResult(def, cursor));
     }
 
@@ -239,7 +241,8 @@ public final class TdsColMetadata {
 
     /**
      * TVP_TYPE_INFO: DbName + Schema + TypeName + Count(+ nested columns).
-     * Consumed so COLMETADATA can complete; cell rewrite stays fail-closed.
+     * Nested definitions are retained for {@link TdsTvpCodec} cell rewrite.
+     * Optional ORDER_UNIQUE / COLUMN_ORDERING live in the value stream, not here.
      */
     private static Optional<TypeInfo> parseTvpMetaTypeInfo(byte[] payload, int cursor, TdsTypeCode type) {
         Optional<NameParse> db = readBVarchar(payload, cursor);
@@ -263,14 +266,19 @@ public final class TdsColMetadata {
         int count = u16le(payload, cursor);
         cursor += 2;
         if (count == 0xFFFF) {
-            // TVP_NULL — no columns.
-            return Optional.of(new TypeInfo(type, 0, 0, 0, 0, false, null, typeName.get().value(), cursor));
+            // TVP_NULL — no columns / no value stream.
+            return Optional.of(new TypeInfo(
+                    type, 0, 0, 0, 0, false, null, typeName.get().value(),
+                    List.of(), true, cursor));
         }
+        List<TdsColumnDefinition> nestedColumns = new ArrayList<>(count);
         for (int i = 0; i < count; i++) {
-            if (cursor + 4 > payload.length) {
+            // MS-TDS: UserType ULONG + Flags USHORT
+            if (cursor + 6 > payload.length) {
                 return Optional.empty();
             }
-            cursor += 4; // UserType USHORT + Flags USHORT
+            int nestedFlags = u16le(payload, cursor + 4);
+            cursor += 6;
             Optional<TypeInfo> nested = parseTypeInfo(payload, cursor);
             if (nested.isEmpty()) {
                 return Optional.empty();
@@ -281,10 +289,24 @@ public final class TdsColMetadata {
                 return Optional.empty();
             }
             cursor = colName.get().nextOffset();
+            TypeInfo ni = nested.get();
+            nestedColumns.add(new TdsColumnDefinition(
+                    colName.get().value(),
+                    ni.type(),
+                    ni.maxLength(),
+                    ni.precision(),
+                    ni.scale(),
+                    nestedFlags,
+                    ni.fixedByteLength(),
+                    ni.plp(),
+                    ni.collation(),
+                    ni.udtTypeName(),
+                    ni.nestedColumns(),
+                    ni.tvpNull()));
         }
-        // Optional TVP_ORDER_UNIQUE (0x10) / TVP_COLUMN_ORDERING (0x11) may follow in
-        // some TDS versions inside the TVP value stream, not in COLMETADATA TYPE_INFO.
-        return Optional.of(new TypeInfo(type, 0, 0, 0, 0, false, null, typeName.get().value(), cursor));
+        return Optional.of(new TypeInfo(
+                type, 0, 0, 0, 0, false, null, typeName.get().value(),
+                List.copyOf(nestedColumns), false, cursor));
     }
 
     private static Optional<Integer> skipPartTableName(byte[] payload, int offset) {
@@ -374,7 +396,22 @@ public final class TdsColMetadata {
             boolean plp,
             byte[] collation,
             String udtTypeName,
+            List<TdsColumnDefinition> nestedColumns,
+            boolean tvpNull,
             int nextOffset) {
+        private TypeInfo(
+                TdsTypeCode type,
+                int maxLength,
+                int precision,
+                int scale,
+                int fixedByteLength,
+                boolean plp,
+                byte[] collation,
+                String udtTypeName,
+                int nextOffset) {
+            this(type, maxLength, precision, scale, fixedByteLength, plp, collation, udtTypeName,
+                    List.of(), false, nextOffset);
+        }
     }
 
     record NameParse(String value, int nextOffset) {

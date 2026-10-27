@@ -379,6 +379,14 @@ final class TdsTestFrames {
 
     /** TVP column with zero nested columns (Count=0). */
     static byte[] tvpColumnMeta(String name, boolean nullable) {
+        return tvpColumnMetaWithNested(name, nullable);
+    }
+
+    /**
+     * COLMETADATA with one TVP column whose nested columns are NVARCHAR(50) named
+     * as given. Nested UserType=ULONG(0) + Flags=USHORT(nullable).
+     */
+    static byte[] tvpColumnMetaWithNested(String tvpName, boolean nullable, String... nestedNames) {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         out.write(TdsTokenType.COLMETADATA.getCode());
         writeU16(out, 1);
@@ -388,8 +396,51 @@ final class TdsTestFrames {
         writeBVarchar(out, "db");
         writeBVarchar(out, "dbo");
         writeBVarchar(out, "MyTvp");
-        writeU16(out, 0); // Count = 0 columns
-        writeBVarchar(out, name);
+        writeU16(out, nestedNames.length);
+        for (String nested : nestedNames) {
+            writeU32(out, 0); // UserType ULONG
+            writeU16(out, 1); // Flags nullable
+            out.write(TdsTypeCode.NVARCHAR.getCode());
+            writeU16(out, 100);
+            writeRaw(out, new byte[]{0x09, 0x04, 0x00, 0x00, 0x00});
+            writeBVarchar(out, nested);
+        }
+        writeBVarchar(out, tvpName);
+        return out.toByteArray();
+    }
+
+    /**
+     * ROW token containing one TVP value: metadata END + rows of NVARCHAR cells + row END.
+     * {@code rows} is row-major; each inner array is UCS-16 text per nested column.
+     */
+    static byte[] tvpValueRow(String[][] rows) {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        out.write(TdsTokenType.ROW.getCode());
+        writeRaw(out, tvpValueBytes(rows));
+        return out.toByteArray();
+    }
+
+    static byte[] tvpValueBytes(String[][] rows) {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        out.write(TdsTvpCodec.END_TOKEN); // end optional metadata
+        for (String[] row : rows) {
+            out.write(TdsTvpCodec.ROW_TOKEN);
+            for (String cell : row) {
+                byte[] utf16 = cell.getBytes(StandardCharsets.UTF_16LE);
+                writeU16(out, utf16.length);
+                writeRaw(out, utf16);
+            }
+        }
+        out.write(TdsTvpCodec.END_TOKEN);
+        return out.toByteArray();
+    }
+
+    /** Empty TVP value (meta END + row END). */
+    static byte[] tvpEmptyValueRow() {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        out.write(TdsTokenType.ROW.getCode());
+        out.write(TdsTvpCodec.END_TOKEN);
+        out.write(TdsTvpCodec.END_TOKEN);
         return out.toByteArray();
     }
 
