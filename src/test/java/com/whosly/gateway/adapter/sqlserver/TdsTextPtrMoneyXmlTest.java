@@ -13,8 +13,6 @@ import com.whosly.gateway.masking.MaskingRule;
 import com.whosly.gateway.masking.MaskingRuleRegistry;
 import com.whosly.gateway.masking.NullingRule;
 
-import java.util.EnumSet;
-import java.util.Set;
 import org.junit.jupiter.api.Test;
 
 import java.nio.charset.StandardCharsets;
@@ -94,19 +92,21 @@ class TdsTextPtrMoneyXmlTest {
     }
 
     @Test
-    void parsesXmlAndUdtMetadataNullOnly() {
+    void parsesXmlAndUdtMetadataAllowNonNull() {
         byte[] xmlMeta = TdsTestFrames.xmlColumnMeta("doc", true);
         TdsColumnDefinition xml = TdsColMetadata.tryParse(xmlMeta, 0).orElseThrow().columns().get(0);
         assertThat(xml.type()).isEqualTo(TdsTypeCode.XML);
         assertThat(xml.plp()).isTrue();
         assertThat(xml.supportsNullRewrite()).isTrue();
-        assertThat(xml.supportsNonNullRewrite()).isFalse();
+        assertThat(xml.supportsNonNullRewrite()).isTrue();
+        assertThat(xml.toColumnMetadata().category()).isEqualTo(ColumnMetadata.Category.TEXT);
 
         byte[] udtMeta = TdsTestFrames.udtColumnMeta("geo", true);
         TdsColumnDefinition udt = TdsColMetadata.tryParse(udtMeta, 0).orElseThrow().columns().get(0);
         assertThat(udt.type()).isEqualTo(TdsTypeCode.UDT);
         assertThat(udt.plp()).isTrue();
-        assertThat(udt.supportsNonNullRewrite()).isFalse();
+        assertThat(udt.udtTypeName()).contains("MyUdt");
+        assertThat(udt.supportsNonNullRewrite()).isTrue();
         assertThat(udt.supportsNullRewrite()).isTrue();
     }
 
@@ -128,14 +128,16 @@ class TdsTextPtrMoneyXmlTest {
     }
 
     @Test
-    void interceptorNullsXmlAndDeniesXmlNonNullRewrite() {
+    void interceptorNullsAndRewritesXmlNonNull() {
+        byte[] binxml = TdsBinXml.encodeTextDocument("secret");
+        byte[] payload = TdsTestFrames.concat(
+                TdsTestFrames.xmlColumnMeta("doc", true),
+                TdsTestFrames.plpOpaqueRow(binxml),
+                TdsTestFrames.doneFinal());
+
         SqlServerSession session = new SqlServerSession("xml-null");
         SqlServerDatabaseEventExtractor extractor =
                 new SqlServerDatabaseEventExtractor("SQLServer", session.getConnectionId(), session);
-        byte[] payload = TdsTestFrames.concat(
-                TdsTestFrames.xmlColumnMeta("doc", true),
-                TdsTestFrames.plpOpaqueRow(new byte[]{0x01, 0x02}),
-                TdsTestFrames.doneFinal());
         byte[] packet = CODEC.packet(TdsPacketType.TABULAR_RESULT.getCode(), payload, 1);
         extractor.inspect(TrafficDirection.TARGET_TO_CLIENT, packet, 0, packet.length);
 
@@ -146,27 +148,12 @@ class TdsTextPtrMoneyXmlTest {
         assertThat(nulled.action()).isEqualTo(TrafficAction.FORWARD);
         assertThat(nulled.message().mutated()).isTrue();
 
-        SqlServerSession session2 = new SqlServerSession("xml-fixed");
-        SqlServerDatabaseEventExtractor extractor2 =
-                new SqlServerDatabaseEventExtractor("SQLServer", session2.getConnectionId(), session2);
-        extractor2.inspect(TrafficDirection.TARGET_TO_CLIENT, packet, 0, packet.length);
-        MaskingRule otherFixed = new MaskingRule() {
-            @Override public String name() { return "doc-other"; }
-            @Override public int priority() { return 10; }
-            @Override public Set<ColumnMetadata.Category> supportedCategories() {
-                return EnumSet.of(ColumnMetadata.Category.OTHER);
-            }
-            @Override public boolean matches(ColumnMetadata column) {
-                return "doc".equals(column.name());
-            }
-            @Override public MaskedValue mask(ColumnMetadata column, MaskedValue original) {
-                return MaskedValue.ofText("<x/>", StandardCharsets.UTF_8);
-            }
-        };
-        SqlServerResultSetMaskingInterceptor forced = interceptor(extractor2, otherFixed);
-        TrafficDecision denied = forced.intercept(
-                RawBackedMessage.of(TrafficDirection.TARGET_TO_CLIENT, packet, 0, packet.length));
-        assertThat(denied.action()).isEqualTo(TrafficAction.DENY);
+        assertForwardMutated(
+                TdsTestFrames.concat(
+                        TdsTestFrames.xmlColumnMeta("doc", true),
+                        TdsTestFrames.plpOpaqueRow(binxml),
+                        TdsTestFrames.doneFinal()),
+                new FixedValueRule("doc-fixed", 10, ColumnSelector.named("doc"), "REDACTED"));
     }
 
     @Test

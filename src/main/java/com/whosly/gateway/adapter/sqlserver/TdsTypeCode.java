@@ -44,8 +44,9 @@ public enum TdsTypeCode {
     NVARCHAR(0xE7, ColumnMetadata.Category.TEXT, WireLayout.USHORT_LEN, "nvarchar"),
     NCHAR(0xEF, ColumnMetadata.Category.TEXT, WireLayout.USHORT_LEN, "nchar"),
     UDT(0xF0, ColumnMetadata.Category.OTHER, WireLayout.PLP_META, "udt"),
-    XML(0xF1, ColumnMetadata.Category.OTHER, WireLayout.PLP_META, "xml"),
-    TVP(0xF3, ColumnMetadata.Category.OTHER, WireLayout.UNSUPPORTED, "table");
+    /** XML wire is MS-BINXML; masking presents decoded text as TEXT. */
+    XML(0xF1, ColumnMetadata.Category.TEXT, WireLayout.PLP_META, "xml"),
+    TVP(0xF3, ColumnMetadata.Category.OTHER, WireLayout.TVP_META, "table");
 
     /** How a ROW value is length-prefixed / nulled on the wire. */
     public enum WireLayout {
@@ -55,6 +56,8 @@ public enum TdsTypeCode {
         TEXTPTR,
         /** Always PLP on the wire; TYPE_INFO carries XML_INFO / UDT_INFO, not USHORTMAXLEN. */
         PLP_META,
+        /** Table-valued parameter TYPE_INFO (RPC); result-set cell rewrite stays fail-closed. */
+        TVP_META,
         UNSUPPORTED
     }
 

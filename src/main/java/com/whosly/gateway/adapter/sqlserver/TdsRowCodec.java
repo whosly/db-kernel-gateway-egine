@@ -15,8 +15,9 @@ import java.util.UUID;
  * Parse / re-encode TDS {@code ROW} ({@code 0xD1}) values for known layouts.
  *
  * <p>Supports ROW and NBCROW for known layouts, including TEXTPTR (text/ntext/image),
- * MONEY*, VARBINARY PLP, numeric/temporal via {@link TdsBinaryValues}, and PLP NULL
- * for XML/UDT. Unknown / TVP layouts return empty so the interceptor can deny.</p>
+ * MONEY*, VARBINARY PLP, numeric/temporal via {@link TdsBinaryValues}, XML via
+ * {@link TdsBinXml}, UDT hierarchyid / opaque {@code 0x} hex via {@link TdsHierarchyId}.
+ * TVP / unknown layouts return empty so the interceptor can deny.</p>
  */
 public final class TdsRowCodec {
 
@@ -157,7 +158,7 @@ public final class TdsRowCodec {
             case BYTE_LEN -> readByteLen(payload, offset, column);
             case USHORT_LEN -> readUshortLen(payload, offset, column);
             case TEXTPTR -> readTextPtr(payload, offset);
-            case PLP_META, UNSUPPORTED -> Optional.empty();
+            case PLP_META, TVP_META, UNSUPPORTED -> Optional.empty();
         };
     }
 
@@ -400,6 +401,19 @@ public final class TdsRowCodec {
         if (type == TdsTypeCode.BIGVARBIN || type == TdsTypeCode.BIGBINARY || type == TdsTypeCode.IMAGE) {
             // Fixed/null rules supply UTF-8 bytes of the constant (or prior wire bytes).
             return value.bytes();
+        }
+        if (type == TdsTypeCode.XML) {
+            return TdsBinXml.encodeOrThrow(value.asText(StandardCharsets.UTF_8));
+        }
+        if (type == TdsTypeCode.UDT) {
+            String textVal = value.asText(StandardCharsets.UTF_8);
+            if (column.isHierarchyId()) {
+                return TdsHierarchyId.encode(textVal);
+            }
+            return TdsHierarchyId.tryParseHexBytes(textVal).orElseThrow(() ->
+                    new IllegalArgumentException(
+                            "UDT non-null mask requires hierarchyid path or 0x hex for "
+                                    + column.name()));
         }
         if (TdsBinaryValues.isEncodable(type)) {
             return TdsBinaryValues.encode(column, value);

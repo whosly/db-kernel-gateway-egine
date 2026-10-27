@@ -9,7 +9,9 @@ import java.util.Optional;
  * Parses TDS {@code COLMETADATA} ({@code 0x81}) into {@link TdsColumnDefinition}s.
  *
  * <p>Best-effort / fail-closed: truncated or unknown TYPE_INFO yields empty so
- * the masking interceptor can refuse rather than guess column attribution.</p>
+ * the masking interceptor can refuse rather than guess column attribution.
+ * XML (MS-BINXML) and UDT (hierarchyid / opaque hex) TYPE_INFO are fully parsed;
+ * TVP_META is consumed so COLMETADATA can complete, but TVP cells stay fail-closed.</p>
  */
 public final class TdsColMetadata {
 
@@ -79,7 +81,8 @@ public final class TdsColMetadata {
                 flags,
                 typeInfo.get().fixedByteLength(),
                 typeInfo.get().plp(),
-                typeInfo.get().collation());
+                typeInfo.get().collation(),
+                typeInfo.get().udtTypeName());
         return Optional.of(new ParseColumnResult(def, cursor));
     }
 
@@ -94,25 +97,26 @@ public final class TdsColMetadata {
         }
         int cursor = offset + 1;
         return switch (type.layout()) {
-            case FIXED -> Optional.of(new TypeInfo(type, 0, 0, 0, fixedLength(type), false, null, cursor));
+            case FIXED -> Optional.of(new TypeInfo(type, 0, 0, 0, fixedLength(type), false, null, null, cursor));
             case BYTE_LEN -> parseByteLenTypeInfo(payload, cursor, type);
             case USHORT_LEN -> parseUshortLenTypeInfo(payload, cursor, type);
             case TEXTPTR -> parseTextPtrTypeInfo(payload, cursor, type);
             case PLP_META -> parsePlpMetaTypeInfo(payload, cursor, type);
+            case TVP_META -> parseTvpMetaTypeInfo(payload, cursor, type);
             case UNSUPPORTED -> Optional.empty();
         };
     }
 
     private static Optional<TypeInfo> parseByteLenTypeInfo(byte[] payload, int cursor, TdsTypeCode type) {
         if (type == TdsTypeCode.DATEN) {
-            return Optional.of(new TypeInfo(type, 3, 0, 0, 3, false, null, cursor));
+            return Optional.of(new TypeInfo(type, 3, 0, 0, 3, false, null, null, cursor));
         }
         if (type == TdsTypeCode.TIMEN || type == TdsTypeCode.DATETIME2N || type == TdsTypeCode.DATETIMEOFFSETN) {
             if (cursor >= payload.length) {
                 return Optional.empty();
             }
             int scale = payload[cursor] & 0xFF;
-            return Optional.of(new TypeInfo(type, 0, 0, scale, 0, false, null, cursor + 1));
+            return Optional.of(new TypeInfo(type, 0, 0, scale, 0, false, null, null, cursor + 1));
         }
         if (cursor >= payload.length) {
             return Optional.empty();
@@ -129,7 +133,7 @@ public final class TdsColMetadata {
             scale = payload[cursor + 1] & 0xFF;
             cursor += 2;
         }
-        return Optional.of(new TypeInfo(type, maxLen, precision, scale, maxLen, false, null, cursor));
+        return Optional.of(new TypeInfo(type, maxLen, precision, scale, maxLen, false, null, null, cursor));
     }
 
     private static Optional<TypeInfo> parseUshortLenTypeInfo(byte[] payload, int cursor, TdsTypeCode type) {
@@ -148,7 +152,7 @@ public final class TdsColMetadata {
             System.arraycopy(payload, cursor, collation, 0, 5);
             cursor += 5;
         }
-        return Optional.of(new TypeInfo(type, maxLen, 0, 0, 0, plp, collation, cursor));
+        return Optional.of(new TypeInfo(type, maxLen, 0, 0, 0, plp, collation, null, cursor));
     }
 
     private static Optional<TypeInfo> parseTextPtrTypeInfo(byte[] payload, int cursor, TdsTypeCode type) {
@@ -167,7 +171,7 @@ public final class TdsColMetadata {
             System.arraycopy(payload, cursor, collation, 0, 5);
             cursor += 5;
         }
-        return Optional.of(new TypeInfo(type, maxLen, 0, 0, 0, false, collation, cursor));
+        return Optional.of(new TypeInfo(type, maxLen, 0, 0, 0, false, collation, null, cursor));
     }
 
     private static Optional<TypeInfo> parsePlpMetaTypeInfo(byte[] payload, int cursor, TdsTypeCode type) {
@@ -196,8 +200,9 @@ public final class TdsColMetadata {
             } else if (schemaPresent != 0x00) {
                 return Optional.empty();
             }
-            // XML ROW values are always PLP (MS-BINXML). Non-null rewrite stays fail-closed.
-            return Optional.of(new TypeInfo(type, TdsColumnDefinition.MAXLENGTH_PLP, 0, 0, 0, true, null, cursor));
+            // XML ROW values are always PLP (MS-BINXML); non-null rewrite via TdsBinXml.
+            return Optional.of(new TypeInfo(
+                    type, TdsColumnDefinition.MAXLENGTH_PLP, 0, 0, 0, true, null, null, cursor));
         }
         if (type == TdsTypeCode.UDT) {
             if (cursor + 2 > payload.length) {
@@ -225,10 +230,61 @@ public final class TdsColMetadata {
                 return Optional.empty();
             }
             cursor = assembly.get().nextOffset();
-            // UDT ROW values use PLP; non-null rewrite stays fail-closed (MS-SSCLRT).
-            return Optional.of(new TypeInfo(type, maxByteSize, 0, 0, 0, true, null, cursor));
+            // UDT ROW values use PLP; hierarchyid path / opaque 0x hex via TdsHierarchyId.
+            return Optional.of(new TypeInfo(
+                    type, maxByteSize, 0, 0, 0, true, null, typeName.get().value(), cursor));
         }
         return Optional.empty();
+    }
+
+    /**
+     * TVP_TYPE_INFO: DbName + Schema + TypeName + Count(+ nested columns).
+     * Consumed so COLMETADATA can complete; cell rewrite stays fail-closed.
+     */
+    private static Optional<TypeInfo> parseTvpMetaTypeInfo(byte[] payload, int cursor, TdsTypeCode type) {
+        Optional<NameParse> db = readBVarchar(payload, cursor);
+        if (db.isEmpty()) {
+            return Optional.empty();
+        }
+        cursor = db.get().nextOffset();
+        Optional<NameParse> schema = readBVarchar(payload, cursor);
+        if (schema.isEmpty()) {
+            return Optional.empty();
+        }
+        cursor = schema.get().nextOffset();
+        Optional<NameParse> typeName = readBVarchar(payload, cursor);
+        if (typeName.isEmpty()) {
+            return Optional.empty();
+        }
+        cursor = typeName.get().nextOffset();
+        if (cursor + 2 > payload.length) {
+            return Optional.empty();
+        }
+        int count = u16le(payload, cursor);
+        cursor += 2;
+        if (count == 0xFFFF) {
+            // TVP_NULL — no columns.
+            return Optional.of(new TypeInfo(type, 0, 0, 0, 0, false, null, typeName.get().value(), cursor));
+        }
+        for (int i = 0; i < count; i++) {
+            if (cursor + 4 > payload.length) {
+                return Optional.empty();
+            }
+            cursor += 4; // UserType USHORT + Flags USHORT
+            Optional<TypeInfo> nested = parseTypeInfo(payload, cursor);
+            if (nested.isEmpty()) {
+                return Optional.empty();
+            }
+            cursor = nested.get().nextOffset();
+            Optional<NameParse> colName = readBVarchar(payload, cursor);
+            if (colName.isEmpty()) {
+                return Optional.empty();
+            }
+            cursor = colName.get().nextOffset();
+        }
+        // Optional TVP_ORDER_UNIQUE (0x10) / TVP_COLUMN_ORDERING (0x11) may follow in
+        // some TDS versions inside the TVP value stream, not in COLMETADATA TYPE_INFO.
+        return Optional.of(new TypeInfo(type, 0, 0, 0, 0, false, null, typeName.get().value(), cursor));
     }
 
     private static Optional<Integer> skipPartTableName(byte[] payload, int offset) {
@@ -317,6 +373,7 @@ public final class TdsColMetadata {
             int fixedByteLength,
             boolean plp,
             byte[] collation,
+            String udtTypeName,
             int nextOffset) {
     }
 

@@ -358,6 +358,10 @@ final class TdsTestFrames {
     }
 
     static byte[] udtColumnMeta(String name, boolean nullable) {
+        return udtColumnMeta(name, nullable, "MyUdt");
+    }
+
+    static byte[] udtColumnMeta(String name, boolean nullable, String typeName) {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         out.write(TdsTokenType.COLMETADATA.getCode());
         writeU16(out, 1);
@@ -367,8 +371,24 @@ final class TdsTestFrames {
         writeU16(out, 8000); // MAX_BYTE_SIZE
         writeBVarchar(out, "db");
         writeBVarchar(out, "dbo");
-        writeBVarchar(out, "MyUdt");
-        writeUsVarchar(out, "MyUdt, Assembly");
+        writeBVarchar(out, typeName);
+        writeUsVarchar(out, typeName + ", Assembly");
+        writeBVarchar(out, name);
+        return out.toByteArray();
+    }
+
+    /** TVP column with zero nested columns (Count=0). */
+    static byte[] tvpColumnMeta(String name, boolean nullable) {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        out.write(TdsTokenType.COLMETADATA.getCode());
+        writeU16(out, 1);
+        writeU32(out, 0);
+        writeU16(out, nullable ? 1 : 0);
+        out.write(TdsTypeCode.TVP.getCode());
+        writeBVarchar(out, "db");
+        writeBVarchar(out, "dbo");
+        writeBVarchar(out, "MyTvp");
+        writeU16(out, 0); // Count = 0 columns
         writeBVarchar(out, name);
         return out.toByteArray();
     }

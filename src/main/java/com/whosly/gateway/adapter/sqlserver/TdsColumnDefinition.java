@@ -9,8 +9,9 @@ import java.util.Optional;
  * One COLMETADATA column with enough wire detail for ROW parse/rewrite.
  *
  * <p>{@link #plp} is true when maxlength is {@code 0xFFFF} (MAX / PLP) or the type
- * is XML/UDT. Text/binary PLP and TEXTPTR can be rewritten; XML/UDT non-null and
- * TVP/unknown stay fail-closed.</p>
+ * is XML/UDT. Text/binary PLP, TEXTPTR, XML (MS-BINXML), and hierarchyid UDT can be
+ * rewritten; generic CLR UDT non-null stays fail-closed unless the rule supplies
+ * opaque {@code 0x} hex; TVP/unknown stay fail-closed.</p>
  */
 public final class TdsColumnDefinition {
 
@@ -26,6 +27,7 @@ public final class TdsColumnDefinition {
     private final int fixedByteLength;
     private final boolean plp;
     private final byte[] collationBytes;
+    private final String udtTypeName;
 
     public TdsColumnDefinition(
             String name,
@@ -37,6 +39,20 @@ public final class TdsColumnDefinition {
             int fixedByteLength,
             boolean plp,
             byte[] collationBytes) {
+        this(name, type, maxLength, precision, scale, flags, fixedByteLength, plp, collationBytes, null);
+    }
+
+    public TdsColumnDefinition(
+            String name,
+            TdsTypeCode type,
+            int maxLength,
+            int precision,
+            int scale,
+            int flags,
+            int fixedByteLength,
+            boolean plp,
+            byte[] collationBytes,
+            String udtTypeName) {
         this.name = Objects.requireNonNull(name, "name");
         this.type = Objects.requireNonNull(type, "type");
         this.maxLength = maxLength;
@@ -46,6 +62,7 @@ public final class TdsColumnDefinition {
         this.fixedByteLength = fixedByteLength;
         this.plp = plp;
         this.collationBytes = collationBytes == null ? null : collationBytes.clone();
+        this.udtTypeName = udtTypeName;
     }
 
     public String name() {
@@ -88,21 +105,45 @@ public final class TdsColumnDefinition {
         return collationBytes == null ? Optional.empty() : Optional.of(collationBytes.clone());
     }
 
+    public Optional<String> udtTypeName() {
+        return udtTypeName == null || udtTypeName.isBlank()
+                ? Optional.empty()
+                : Optional.of(udtTypeName);
+    }
+
+    public boolean isHierarchyId() {
+        return type == TdsTypeCode.UDT && TdsHierarchyId.isHierarchyIdTypeName(udtTypeName);
+    }
+
     public ColumnMetadata toColumnMetadata() {
-        // Present text/uuid as TEXT so shared rules (partial/hash/fixed) see UTF-8
-        // strings after {@link SqlServerResultSetMaskingInterceptor#toRuleValue}.
+        ColumnMetadata.Category category = maskingCategory();
         ColumnMetadata.ValueFormat format =
-                (type.category() == ColumnMetadata.Category.TEXT
-                        || type.category() == ColumnMetadata.Category.UUID)
+                (category == ColumnMetadata.Category.TEXT
+                        || category == ColumnMetadata.Category.UUID)
                         ? ColumnMetadata.ValueFormat.TEXT
                         : ColumnMetadata.ValueFormat.BINARY;
+        String typeName = type.typeName();
+        if (type == TdsTypeCode.UDT && udtTypeName != null && !udtTypeName.isBlank()) {
+            typeName = udtTypeName;
+        }
         return new ColumnMetadata(
                 name,
                 Optional.empty(),
-                type.typeName(),
-                type.category(),
+                typeName,
+                category,
                 format,
                 nullable());
+    }
+
+    private ColumnMetadata.Category maskingCategory() {
+        if (type == TdsTypeCode.XML || isHierarchyId()) {
+            return ColumnMetadata.Category.TEXT;
+        }
+        if (type == TdsTypeCode.UDT) {
+            // Opaque hex fixed values claim BINARY.
+            return ColumnMetadata.Category.BINARY;
+        }
+        return type.category();
     }
 
     /**
@@ -111,9 +152,15 @@ public final class TdsColumnDefinition {
      */
     public boolean supportsNonNullRewrite() {
         if (type.layout() == TdsTypeCode.WireLayout.UNSUPPORTED
-                || type.layout() == TdsTypeCode.WireLayout.PLP_META) {
-            // XML/UDT non-null is MS-BINXML / CLR — no safe rewriter.
+                || type.layout() == TdsTypeCode.WireLayout.TVP_META) {
             return false;
+        }
+        if (type == TdsTypeCode.XML) {
+            return true; // MS-BINXML via TdsBinXml
+        }
+        if (type == TdsTypeCode.UDT) {
+            // hierarchyid path strings, or opaque 0x hex for other UDTs (checked at encode).
+            return true;
         }
         if (type.layout() == TdsTypeCode.WireLayout.TEXTPTR) {
             return type == TdsTypeCode.TEXT
@@ -141,7 +188,8 @@ public final class TdsColumnDefinition {
     public boolean supportsNullRewrite() {
         // FIXED types have no NULL marker in ROW (nullable ints use INTN etc.).
         if (type.layout() == TdsTypeCode.WireLayout.FIXED
-                || type.layout() == TdsTypeCode.WireLayout.UNSUPPORTED) {
+                || type.layout() == TdsTypeCode.WireLayout.UNSUPPORTED
+                || type.layout() == TdsTypeCode.WireLayout.TVP_META) {
             return false;
         }
         if (plp || type.layout() == TdsTypeCode.WireLayout.PLP_META) {
