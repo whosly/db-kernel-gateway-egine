@@ -24,6 +24,7 @@ import java.util.concurrent.ConcurrentHashMap;
 /**
  * Alert notification channels (HTTP webhook + SMTP email).
  * Fires on threshold rising-edge (and optional cooldown re-notify while still firing).
+ * Webhook supports {@code format=dingtalk_markdown|dingtalk_text} for DingTalk robots.
  * Not Prometheus / PagerDuty — lab control-plane delivery only.
  */
 @Service
@@ -79,8 +80,9 @@ public class AlertNotificationService {
         body.put("total", items.size());
         body.put("types", List.of(TYPE_WEBHOOK, TYPE_EMAIL));
         body.put("severities", List.of("INFO", "WARN", "CRITICAL"));
-        body.put("note", "阈值上升沿触发外发；WEBHOOK=HTTP JSON；EMAIL=SMTP(Jakarta Mail)；"
-                + "非 Prometheus / 非 PagerDuty；SMTP 密码/Webhook Authorization 落库时可 enc:v1: 密封");
+        body.put("note", "阈值上升沿触发外发；WEBHOOK=HTTP JSON（format=generic|dingtalk_markdown|dingtalk_text，"
+                + "钉钉机器人 URL 可自动选用 markdown）；EMAIL=SMTP(Jakarta Mail)；"
+                + "非 Prometheus / 非 PagerDuty；SMTP 密码/Webhook Authorization/钉钉 secret 落库时可 enc:v1: 密封");
         return body;
     }
 
@@ -290,6 +292,10 @@ public class AlertNotificationService {
             if (url == null || url.isBlank()) {
                 throw new IllegalArgumentException("WEBHOOK 需要 config.url");
             }
+            Object fmt = opened.get("format");
+            if (fmt != null && !String.valueOf(fmt).isBlank()) {
+                AlertWebhookSender.normalizeFormat(String.valueOf(fmt));
+            }
         } else if (TYPE_EMAIL.equals(type)) {
             if (str(opened.get("smtpHost")) == null || str(opened.get("smtpHost")).isBlank()) {
                 throw new IllegalArgumentException("EMAIL 需要 config.smtpHost");
@@ -323,6 +329,32 @@ public class AlertNotificationService {
                 }
             } else {
                 out.put("authHeader", cipher.sealForStorage(String.valueOf(auth)));
+            }
+            Object secret = out.get("secret");
+            if (secret == null || REDACTED.equals(String.valueOf(secret)) || String.valueOf(secret).isBlank()) {
+                if (prevOpen.containsKey("secret") && prevOpen.get("secret") != null
+                        && !String.valueOf(prevOpen.get("secret")).isBlank()) {
+                    out.put("secret", cipher.sealForStorage(String.valueOf(prevOpen.get("secret"))));
+                } else {
+                    out.remove("secret");
+                }
+            } else {
+                out.put("secret", cipher.sealForStorage(String.valueOf(secret)));
+            }
+            // normalize format aliases early
+            Object fmt = out.get("format");
+            if (fmt != null && !String.valueOf(fmt).isBlank()) {
+                out.put("format", AlertWebhookSender.normalizeFormat(String.valueOf(fmt)));
+            }
+            Object mobiles = out.get("atMobiles");
+            if (mobiles instanceof String s) {
+                java.util.List<String> list = new java.util.ArrayList<>();
+                for (String part : s.split("[,;\\s]+")) {
+                    if (!part.isBlank()) {
+                        list.add(part.trim());
+                    }
+                }
+                out.put("atMobiles", list);
             }
         } else if (TYPE_EMAIL.equals(type)) {
             Object pass = out.get("password");
@@ -364,6 +396,9 @@ public class AlertNotificationService {
         if (raw.containsKey("authHeader") && raw.get("authHeader") != null) {
             raw.put("authHeader", cipher.openFromStorage(String.valueOf(raw.get("authHeader"))));
         }
+        if (raw.containsKey("secret") && raw.get("secret") != null) {
+            raw.put("secret", cipher.openFromStorage(String.valueOf(raw.get("secret"))));
+        }
         if (raw.containsKey("password") && raw.get("password") != null) {
             raw.put("password", cipher.openFromStorage(String.valueOf(raw.get("password"))));
         }
@@ -387,12 +422,18 @@ public class AlertNotificationService {
         }
         boolean authConfigured = cfg.containsKey("authHeader") && cfg.get("authHeader") != null
                 && !String.valueOf(cfg.get("authHeader")).isBlank();
+        boolean secretConfigured = cfg.containsKey("secret") && cfg.get("secret") != null
+                && !String.valueOf(cfg.get("secret")).isBlank();
         boolean passwordConfigured = cfg.containsKey("password") && cfg.get("password") != null
                 && !String.valueOf(cfg.get("password")).isBlank();
         cfg.remove("authHeader");
+        cfg.remove("secret");
         cfg.remove("password");
         if (authConfigured) {
             cfg.put("authHeaderConfigured", true);
+        }
+        if (secretConfigured) {
+            cfg.put("secretConfigured", true);
         }
         if (passwordConfigured) {
             cfg.put("passwordConfigured", true);

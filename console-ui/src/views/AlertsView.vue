@@ -58,6 +58,10 @@ const channelForm = ref({
   url: '',
   authHeader: '',
   timeoutMs: 8000,
+  format: 'generic',
+  secret: '',
+  isAtAll: false,
+  atMobiles: '',
   smtpHost: '',
   smtpPort: 587,
   username: '',
@@ -108,6 +112,10 @@ function resetChannelForm() {
     url: '',
     authHeader: '',
     timeoutMs: 8000,
+    format: 'generic',
+    secret: '',
+    isAtAll: false,
+    atMobiles: '',
     smtpHost: '',
     smtpPort: 587,
     username: '',
@@ -146,6 +154,12 @@ function editChannel(c: AlertChannel) {
     url: String(cfg.url || ''),
     authHeader: '',
     timeoutMs: Number(cfg.timeoutMs ?? 8000),
+    format: String(cfg.format || 'generic'),
+    secret: '',
+    isAtAll: !!cfg.isAtAll,
+    atMobiles: Array.isArray(cfg.atMobiles)
+      ? (cfg.atMobiles as string[]).join(', ')
+      : String(cfg.atMobiles || ''),
     smtpHost: String(cfg.smtpHost || ''),
     smtpPort: Number(cfg.smtpPort ?? 587),
     username: String(cfg.username || ''),
@@ -234,7 +248,11 @@ function buildChannelPayload() {
     config.url = f.url.trim()
     config.method = 'POST'
     config.timeoutMs = Number(f.timeoutMs) || 8000
+    config.format = f.format || 'generic'
     if (f.authHeader.trim()) config.authHeader = f.authHeader.trim()
+    if (f.secret.trim()) config.secret = f.secret.trim()
+    if (f.atMobiles.trim()) config.atMobiles = f.atMobiles.trim()
+    config.isAtAll = !!f.isAtAll
   }
   return {
     name: f.name.trim() || undefined,
@@ -490,7 +508,7 @@ function sevClass(s?: string) {
     <div class="grid">
       <div class="panel">
         <h3>通知通道</h3>
-        <p class="muted tiny">{{ channelNote || 'WEBHOOK=HTTP JSON；EMAIL=SMTP；阈值上升沿触发，冷却期内不重复。' }}</p>
+        <p class="muted tiny">{{ channelNote || 'WEBHOOK=HTTP JSON（可钉钉 markdown/text）；EMAIL=SMTP；阈值上升沿触发，冷却期内不重复。' }}</p>
         <table v-if="channels.length" class="tbl">
           <thead>
             <tr>
@@ -557,15 +575,45 @@ function sevClass(s?: string) {
           <template v-if="channelForm.type === 'WEBHOOK'">
             <label>
               Webhook URL
-              <input v-model="channelForm.url" placeholder="https://hooks.example/alert" required />
+              <input
+                v-model="channelForm.url"
+                placeholder="https://oapi.dingtalk.com/robot/send?access_token=…"
+                required
+              />
+            </label>
+            <label>
+              载荷格式
+              <select v-model="channelForm.format">
+                <option value="generic">generic（通用 JSON）</option>
+                <option value="dingtalk_markdown">钉钉 markdown</option>
+                <option value="dingtalk_text">钉钉 text</option>
+              </select>
+            </label>
+            <p class="muted tiny">
+              钉钉自定义机器人：群设置 → 智能群助手 → 添加机器人 → 安全设置拿 Webhook。
+              URL 含 oapi.dingtalk.com 且未选手动 format 时，服务端默认 markdown。
+            </p>
+            <label>
+              钉钉加签 secret（可选；SEC…；留空保留原值）
+              <input v-model="channelForm.secret" placeholder="SEC…" autocomplete="off" />
             </label>
             <label>
               Authorization（可选；留空则保留原值）
               <input v-model="channelForm.authHeader" placeholder="Bearer …" autocomplete="off" />
             </label>
-            <label>
-              超时毫秒
-              <input v-model.number="channelForm.timeoutMs" type="number" min="1000" />
+            <div class="row2">
+              <label>
+                超时毫秒
+                <input v-model.number="channelForm.timeoutMs" type="number" min="1000" />
+              </label>
+              <label>
+                @手机号（钉钉，逗号分隔）
+                <input v-model="channelForm.atMobiles" placeholder="138…" />
+              </label>
+            </div>
+            <label class="check">
+              <input v-model="channelForm.isAtAll" type="checkbox" />
+              钉钉 @所有人
             </label>
           </template>
 

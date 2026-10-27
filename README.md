@@ -27,7 +27,7 @@
 
 | 项 | 本分支（`future/database-wire-protocol-foundation`） |
 |---|---|
-| 默认单元测试 | **706** 条全绿（JDK 17；`pom` 排除 `*IntegrationTest`；以 STATUS §1 为准） |
+| 默认单元测试 | **715** 条全绿（JDK 17；`pom` 排除 `*IntegrationTest`；以 STATUS §1 为准） |
 | 真库集成 `-Pintegration-test` | **14 / 14** 全绿（2026-09-24，本地 Docker MySQL `:13308` + PostgreSQL `:5432`） |
 | JDK / 编译 | `pom` 目标 **17**；虚拟线程经 `VirtualThreadExecutors` **反射**在 JDK 21+ 启用，JDK 17 回退平台线程池（STATUS P0-1） |
 | 核心数据路径 | 透明代理、查询/结果、预处理、错误透传、脱敏 happy path、PG `COPY` — **已在集成中 live-proven** |
@@ -393,7 +393,7 @@ mvn -Pintegration-test test
 | 安全 | `GET/PUT/DELETE /console/api/v1/security/masking-key`；管控操作审计 `GET /console/api/v1/audit/operations`（`action`/`limit` → `{ items, total }`） |
 | 审计状态 | `GET /console/api/v1/audit/status`（非密钥：enabled/destination/spoolDir/…） |
 | 流量审计内容 | `GET /console/api/v1/audit/traffic`（ring/spool/可选 jdbc；分页 `before`） |
-| 告警阈值 / 通道 | 阈值 `…/alerts/thresholds`；触发 `…/alerts/active`；通道 `…/alerts/channels`（WEBHOOK/EMAIL，上升沿外发，非 Prometheus/PagerDuty） |
+| 告警阈值 / 通道 | 阈值 `…/alerts/thresholds`；触发 `…/alerts/active`；通道 `…/alerts/channels`（WEBHOOK 含钉钉 format / EMAIL，上升沿外发，非 Prometheus/PagerDuty） |
 | 实例 ACL | `GET/PUT …/instances/{id}/acl`；绑定 CRUD；`acl:manage`（ADMIN）；见 CONSOLE_ARCHITECTURE §24 |
 | UI 主题 | 浅色默认；顶栏可切浅色 / 深色 / 跟随系统 |
 | 指标时序 | `GET /console/api/v1/metrics/history?instanceId=&limit=`（进程内环；总览火花图） |

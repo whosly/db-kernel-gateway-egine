@@ -59,10 +59,12 @@
 
 | 通道 | 配置要点 | 自检 |
 |---|---|---|
-| **WEBHOOK** | `config.url`（http/s）、可选 `authHeader`、`timeoutMs`、`headers`；POST JSON：`{ event, source, alert, sentAt }` | `POST /console/api/v1/alerts/channels/{id}/test` |
+| **WEBHOOK** | `config.url`（http/s）、可选 `authHeader`、`timeoutMs`、`headers`；`format`=`generic`（默认）/ `dingtalk_markdown` / `dingtalk_text`。通用体：`{ event, source, alert, sentAt }`；钉钉体：`{ msgtype, markdown|text, at? }`。URL 主机含 `oapi.dingtalk.com` 且未指定 format 时自动 markdown。可选 `secret`（SEC… 加签）、`atMobiles`、`isAtAll` | `POST /console/api/v1/alerts/channels/{id}/test` |
 | **EMAIL** | `smtpHost` / `smtpPort` / `from` / `to[]`；可选 `username`/`password`、`startTls`/`ssl`、`subjectPrefix`；Jakarta Mail 动态 Session（**不是** `spring.mail.*`） | 同上 |
 
-API：`GET/POST /alerts/channels`、`GET/PUT/DELETE /alerts/channels/{id}`、`POST …/test`。权限同阈值（`alerts:read` / `alerts:write`）。SMTP 密码与 Webhook `Authorization` 落库时可经 `ConsoleSecretCipher`（`enc:v1:`）密封；API/UI 回读脱敏。
+**钉钉自定义机器人**：群设置 → 智能群助手 → 添加机器人 → 复制 Webhook（`https://oapi.dingtalk.com/robot/send?access_token=…`）。管控台「告警」→ 通知通道 → 类型 WEBHOOK → 粘贴 URL，载荷选「钉钉 markdown」（或留空靠 URL 自动识别）。若机器人启用了加签，把 `SEC…` 填进 `secret`。自检：`POST …/channels/{id}/test`。
+
+API：`GET/POST /alerts/channels`、`GET/PUT/DELETE /alerts/channels/{id}`、`POST …/test`。权限同阈值（`alerts:read` / `alerts:write`）。SMTP 密码与 Webhook `Authorization` / 钉钉 `secret` 落库时可经 `ConsoleSecretCipher`（`enc:v1:`）密封；API/UI 回读脱敏。
 
 **仍不做**：PagerDuty / Alertmanager / Prometheus Alerting 专用出口。
 

@@ -1199,7 +1199,7 @@ GET /console/api/v1/audit/traffic?limit=50&before=&source=auto|ring|spool|jdbc&p
 
 > 作者自检通过后实现。运维可在控制面配置阈值，并在管控台查看当前触发态。  
 > **不做** Prometheus remote / PagerDuty / Alertmanager。
-> **已做** 通用 HTTP webhook + SMTP 邮箱通道（控制台配置，上升沿外发）。
+> **已做** 通用 HTTP webhook（`format=generic|dingtalk_markdown|dingtalk_text`）+ SMTP 邮箱通道（控制台配置，上升沿外发）。
 
 ### 21.1 目标
 
@@ -1232,7 +1232,7 @@ GET /console/api/v1/audit/traffic?limit=50&before=&source=auto|ring|spool|jdbc&p
 
 ### 21.3 UI
 
-- 侧栏 **告警** 页：阈值列表 / 新建编辑 / 当前触发 / **通知通道（Webhook·邮箱）**。
+- 侧栏 **告警** 页：阈值列表 / 新建编辑 / 当前触发 / **通知通道（Webhook·钉钉·邮箱）**。
 - 总览：活跃告警徽章（链到告警页）。
 
 ### 21.4 自检清单（作者）
@@ -1243,7 +1243,7 @@ GET /console/api/v1/audit/traffic?limit=50&before=&source=auto|ring|spool|jdbc&p
 - [x] UI 中文；API 仅 `/console/api/v1`
 - [x] 单测 + `mvn test` + `npm run build` 绿；非 Prometheus
 
-**结论：§21 已实现（进程内告警 + webhook/email 外发；非 Prometheus / 非 PagerDuty）。**
+**结论：§21 已实现（进程内告警 + webhook/钉钉/email 外发；非 Prometheus / 非 PagerDuty）。**
 
 
 ---
