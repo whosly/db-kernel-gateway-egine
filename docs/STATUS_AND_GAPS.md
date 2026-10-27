@@ -12,7 +12,7 @@
 |---|---|---|
 | 非集成 `@Test`/`@ParameterizedTest` 注解数 | **684** | `mvn test` Results；排除 `*IntegrationTest` |
 | 集成测试 | **16** 条注解（含 `SqlServerGatewayIntegrationTest`×1、`ConsoleOidcKeycloakBrowserE2EIntegrationTest`×1）；默认 surefire **排除** `*IntegrationTest`；无 local props 时 `-Pintegration-test` **assumeTrue 跳过**；本机有库/Keycloak 时可相应绿 | `pom.xml` excludes；跳过策略见 `docs/OPS.md` / `integration-test.properties` |
-| 本环境 `mvn test`（`JAVA_HOME`=JDK 17） | **BUILD SUCCESS：Tests run 684, Failures 0, Errors 0, Skipped 0** | surefire；含 **MySQL deferred 首连身份路由** + OIDC lab 制品校验 + SQL Server P2 脱敏/reset/RPC·Bulk + Attention/Login7 hint + MySQL/PG decimal/时间/uuid 脱敏 + 告警规则 + 列加密 E2E + SQL IDE + form/token/open/OIDC 配置 + RBAC/实例 ACL/工作台会话联动 |
+| 本环境 `mvn test`（`JAVA_HOME`=JDK 17） | **BUILD SUCCESS：Tests run 684, Failures 0, Errors 0, Skipped 0** | surefire；含 **MySQL deferred 首连身份路由** + **SQL Server Login7 deferred 选路** + OIDC lab 制品校验 + SQL Server P2 脱敏/reset/RPC·Bulk + Attention + MySQL/PG decimal/时间/uuid 脱敏 + 告警规则 + 列加密 E2E + SQL IDE + form/token/open/OIDC 配置 + RBAC/实例 ACL/工作台会话联动 |
 | `pom.xml` 编译目标 | `maven.compiler.source/target=17` | **保持 17**；不升到 21 |
 
 **结论**：编译目标保持 17；VT 仅在 JDK 21+ 运行期启用。管控台已完成 Phase B/B+/C partial/E lite，并完成本轮**实例编辑/克隆/导入/筛选/批量**与 **SQL 工作台经代理 listenPort**；完整 SQL IDE（MaxGUI-lite）与本地 form/token 鉴权 + HTTPS 模板已落地；OIDC 为配置路径；**审计 spool 内容浏览**已落地；**SQL 多语句 + 尽力而为取消**已落地；**列加密 E2E**（密钥轮换 + verify）已落地（非 KMS）；**管控台告警阈值**（H2 + 进程内评估）已落地；**细粒度 RBAC**（VIEWER/OPERATOR/ADMIN + 权限串，§22）已落地；**SQL 工作台会话联动**（工作台执行中 ↔ 代理会话，§23）已落地；**实例级 ACL**（§24，用户/角色↔实例权限收窄）已落地；外部 Prometheus·Grafana / PagerDuty 仍不做。见 P0 / P1 / P2。
@@ -164,7 +164,7 @@ Spring 实际读取的键（`@Value`）与默认 `application.yml`、模板一�
 | `MySqlBackendSessionReset` / `PostgreSQLBackendSessionReset` / `SqlServerBackendSessionReset` | `reset-mode=protocol` | 有单测（OK/ERR、池关闭；SQL Server RPC 帧） |
 | `ProtocolAdapterRegistry` | 内置 + stub | `ProtocolAdapterRegistryTest` |
 | `RoutingBackendProvider` / `WeightedEndpointSelector` | `gateway.routing.*`（默认关） | `RoutingBackendProviderTest` + `GatewayConfigTest` 装配 |
-| 握手填充 `RoutingContext` | PG peek；MySQL empty + parser | `PostgreSQLStartupRoutingTest` / `PostgreSQLProtocolAdapterRoutingTest`；`MySqlHandshakeResponseRoutingTest` / `MySqlProtocolAdapterRoutingTest` |
+| 握手填充 `RoutingContext` / deferred 选路 | PG peek；MySQL **deferred AuthSwitch**（`MySqlDeferredIdentityRouter`）；SQL Server **Login7 deferred**（`SqlServerDeferredIdentityRouter`） | `PostgreSQLStartupRoutingTest` / `PostgreSQLProtocolAdapterRoutingTest`；`MySqlHandshakeResponseRoutingTest` / `MySqlProtocolAdapterRoutingTest` / `MySqlDeferredIdentityRouterTest`；`SqlServerDeferredIdentityRouterTest` |
 | 真库集成 + 脱敏 | 有 | 需 `-Pintegration-test` + 本地库；无 props 则 assumeTrue 跳过（P2-6） |
 | `/gateway/*` + `/actuator/gateway` | 有 | `GatewayOpsSurfaceTest` + `CommandLineInterfaceTest`（非交互） |
 
@@ -176,7 +176,7 @@ Spring 实际读取的键（`@Value`）与默认 `application.yml`、模板一�
 
 ## 7. 已知契约偏差（代码 vs `CONSOLE_API_V1.md`）
 
-| 端点 | 文档约定 | 实际（截至 `fb01c9a`） | 影响 |
+| 端点 | 文档约定 | 实际（截至 `4ad92be`） | 影响 |
 |---|---|---|---|
 | `GET /console/api/v1/audit/operations` | `{ items, total }`（§2.2 禁用 `count`） | **已对齐**（`ee1b49b`）：`{ items, total }`（`ConsoleAuditApiController` → `ConsoleApiController#listAudit`） | 无 |
 | `GET /console/api/v1/metrics/history`、`/instances/{id}/schema/columns` | 非 list envelope（聚合/时序对象） | 含兄弟字段 `count` | 属聚合对象，可接受；对齐时一并评估 |
