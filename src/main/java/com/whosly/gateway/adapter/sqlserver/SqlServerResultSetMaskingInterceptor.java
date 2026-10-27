@@ -33,8 +33,11 @@ import java.util.Optional;
  * text/guid/numeric/temporal/money/TEXTPTR/varbinary (including PLP), XML
  * (MS-BINXML via {@link TdsBinXml}), hierarchyid / opaque-{@code 0x} UDT, and
  * <strong>TVP nested cells</strong> (via {@link TdsTvpCodec}) are rewritten when
- * rules match. Wholesale rewrite of a TVP column itself stays denied. With no
- * matching rules the message is forwarded byte-identical.</p>
+ * nested column rules match. A rule on the outer TVP column itself is applied
+ * <em>wholesale</em>: {@code null} clears all rows (empty TVP, schema kept);
+ * non-null rules broadcast into every nested cell (nested-specific rules still
+ * win per cell). Nested unknown / nested TVP / encode failure stay fail-closed.
+ * With no matching rules the message is forwarded byte-identical.</p>
  */
 public final class SqlServerResultSetMaskingInterceptor implements MessageInterceptor {
 
@@ -193,16 +196,13 @@ public final class SqlServerResultSetMaskingInterceptor implements MessageInterc
     }
 
     /**
-     * Masks nested TVP cells. A rule on the outer TVP column itself is refused
-     * (no safe wholesale table encode). Rules matching nested column names rewrite
-     * those cells; with no nested matches the wire bytes are kept.
+     * Masks a TVP value. Outer-column rules are applied wholesale (empty table or
+     * broadcast into nested cells). Nested-name rules rewrite matching cells when
+     * no outer rule claims the TVP; with no matches the wire bytes are kept.
      */
     private MaskedValue applyTvpRules(TdsColumnDefinition column, MaskedValue original)
             throws MaskingException {
-        if (engine.ruleFor(column.toColumnMetadata()).isPresent()) {
-            throw new MaskingException(
-                    "wholesale TVP mask not representable for column " + column.name());
-        }
+        Optional<MaskingRule> wholesale = engine.ruleFor(column.toColumnMetadata());
         if (column.tvpNull() || original.isNull()) {
             return MaskedValue.ofNull();
         }
@@ -213,6 +213,9 @@ public final class SqlServerResultSetMaskingInterceptor implements MessageInterc
             throw new MaskingException("TVP value parse failed for column " + column.name());
         }
         TdsTvpCodec.ParsedTvp tvp = parsed.get();
+        if (wholesale.isPresent()) {
+            return applyWholesaleTvp(column, tvp, wholesale.get());
+        }
         boolean nestedRule = false;
         for (TdsColumnDefinition nested : column.nestedColumns()) {
             if (engine.ruleFor(nested.toColumnMetadata()).isPresent()) {
@@ -229,6 +232,58 @@ public final class SqlServerResultSetMaskingInterceptor implements MessageInterc
         }
         if (sameTvpRows(tvp.rows(), maskedRows)) {
             return original;
+        }
+        byte[] encoded = TdsTvpCodec.encode(column.nestedColumns(), tvp.prefix(), maskedRows);
+        return MaskedValue.of(encoded);
+    }
+
+    /**
+     * Wholesale TVP rewrite: {@code null} → empty table (keep optional meta prefix);
+     * non-null → broadcast the rule into every nested cell. Nested-specific rules
+     * still win per cell. Cells that cannot encode the result fail closed.
+     */
+    private MaskedValue applyWholesaleTvp(
+            TdsColumnDefinition column, TdsTvpCodec.ParsedTvp tvp, MaskingRule rule)
+            throws MaskingException {
+        // Probe with a dummy value: NullingRule → null; fixed/partial/hash → non-null.
+        MaskedValue probe = engine.apply(
+                rule, column.toColumnMetadata(), MaskedValue.ofText("", StandardCharsets.UTF_8));
+        if (probe.isNull()) {
+            byte[] empty = TdsTvpCodec.encode(column.nestedColumns(), tvp.prefix(), List.of());
+            return MaskedValue.of(empty);
+        }
+        List<List<MaskedValue>> maskedRows = new ArrayList<>(tvp.rows().size());
+        for (List<MaskedValue> row : tvp.rows()) {
+            List<MaskedValue> maskedCells = new ArrayList<>(row.size());
+            for (int i = 0; i < column.nestedColumns().size(); i++) {
+                TdsColumnDefinition nested = column.nestedColumns().get(i);
+                MaskedValue cell = row.get(i);
+                if (TdsTvpCodec.isDefaultColumn(nested)) {
+                    maskedCells.add(cell);
+                    continue;
+                }
+                MaskingRule cellRule = engine.ruleFor(nested.toColumnMetadata()).orElse(rule);
+                ColumnMetadata nestedMeta = nested.toColumnMetadata();
+                MaskedValue forRule = toRuleValue(nested, cell);
+                MaskedValue replacement = engine.apply(cellRule, nestedMeta, forRule);
+                if (replacement.isNull()) {
+                    if (!nested.supportsNullRewrite()) {
+                        throw new MaskingException(
+                                "NULL mask not representable for nested column " + nested.name());
+                    }
+                    maskedCells.add(MaskedValue.ofNull());
+                    continue;
+                }
+                if (!nested.supportsNonNullRewrite()) {
+                    throw new MaskingException("non-null mask not representable for nested column "
+                            + nested.name() + " type " + nested.type().typeName());
+                }
+                maskedCells.add(replacement);
+            }
+            maskedRows.add(maskedCells);
+        }
+        if (sameTvpRows(tvp.rows(), maskedRows)) {
+            return MaskedValue.of(TdsTvpCodec.encode(column.nestedColumns(), tvp.prefix(), tvp.rows()));
         }
         byte[] encoded = TdsTvpCodec.encode(column.nestedColumns(), tvp.prefix(), maskedRows);
         return MaskedValue.of(encoded);

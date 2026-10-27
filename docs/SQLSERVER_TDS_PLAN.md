@@ -2,7 +2,7 @@
 
 > **决策**：第三协议为 **SQL Server / TDS**（非 Oracle）。  
 > **分支**：`future/database-wire-protocol-foundation`  
-> **状态**：P0 透明双工中继 + P1 观测/拒绝 + **P2**：ROW/**NBCROW** 脱敏（text/guid/numeric/temporal + text/binary PLP + TEXTPTR + MONEY*；**XML MS-BINXML**；**hierarchyid / `0x` UDT**；TVP 嵌套单元格可改写、整列仍 DENY）、RPC/Bulk 观测、`sp_reset_connection`、**Login7 deferred 身份选路**（bootstrap 真实 PreLogin → peek Login7 → 匹配透明 / 异后端静默 PreLogin 换绑；ENCRYPTION 停 bootstrap）。**仍非** MySQL/PG 全对等（TVP 整列 / 未知 type / 非安全 CLR 仍 fail-closed；无本环境真库冒烟）。见 [STATUS_AND_GAPS.md](STATUS_AND_GAPS.md) P2-7。
+> **状态**：P0 透明双工中继 + P1 观测/拒绝 + **P2**：ROW/**NBCROW** 脱敏（text/guid/numeric/temporal + text/binary PLP + TEXTPTR + MONEY*；**XML MS-BINXML**；**hierarchyid / `0x` UDT**；TVP 嵌套单元格 + 整列 wholesale（null→空表 / 非空广播））、RPC/Bulk 观测、`sp_reset_connection`、**Login7 deferred 身份选路**（bootstrap 真实 PreLogin → peek Login7 → 匹配透明 / 异后端静默 PreLogin 换绑；ENCRYPTION 停 bootstrap）。**仍非** MySQL/PG 全对等（嵌套未知 type / 嵌套 TVP / 非安全 CLR 仍 fail-closed；无本环境真库冒烟）。见 [STATUS_AND_GAPS.md](STATUS_AND_GAPS.md) P2-7。
 
 ## 1. 目标
 
@@ -64,7 +64,7 @@ ASCII：
 ### P2 — 深化
 
 - [x] RPC 名观测（`RPC` 事件 / `RpcObservation`）+ Bulk Load 包观测（`BULK_LOAD`）；**不**改写 RPC/Bulk 载荷
-- [x] 结果集脱敏：`SqlServerResultSetMaskingInterceptor`（REWRITE）；COLMETADATA→ROW/**NBCROW**；非空改写含 **nvarchar/nchar/varchar/char（含 MAX/PLP）**、**uniqueidentifier**、**INT*/FLOAT*/BIT*/DECIMALN/NUMERICN**、**DATEN/TIMEN/DATETIME2N/DATETIMEOFFSETN/DATETIM*/DATETIMN**、**MONEY*/MONEY4/MONEYN**、**TEXT/NTEXT/IMAGE（TEXTPTR）**、**VARBINARY/BINARY（含 MAX/PLP）**（`TdsBinaryValues` / `TdsRowCodec`）、**XML（`TdsBinXml` MS-BINXML）**、**UDT hierarchyid / opaque `0x`（`TdsHierarchyId`）**；NULL 规则对 BYTE_LEN/USHORT_LEN/TEXTPTR/PLP（含 XML/UDT）；**TVP 嵌套单元格**（`TdsTvpCodec`）可改写；**TVP 整列** / **未知 type** / 非安全 CLR 仍 fail-closed（DENY）
+- [x] 结果集脱敏：`SqlServerResultSetMaskingInterceptor`（REWRITE）；COLMETADATA→ROW/**NBCROW**；非空改写含 **nvarchar/nchar/varchar/char（含 MAX/PLP）**、**uniqueidentifier**、**INT*/FLOAT*/BIT*/DECIMALN/NUMERICN**、**DATEN/TIMEN/DATETIME2N/DATETIMEOFFSETN/DATETIM*/DATETIMN**、**MONEY*/MONEY4/MONEYN**、**TEXT/NTEXT/IMAGE（TEXTPTR）**、**VARBINARY/BINARY（含 MAX/PLP）**（`TdsBinaryValues` / `TdsRowCodec`）、**XML（`TdsBinXml` MS-BINXML）**、**UDT hierarchyid / opaque `0x`（`TdsHierarchyId`）**；NULL 规则对 BYTE_LEN/USHORT_LEN/TEXTPTR/PLP（含 XML/UDT）；**TVP 嵌套单元格 + 整列 wholesale**（`TdsTvpCodec`；null→空表；非空广播；嵌套专属规则优先）；**嵌套未知 type / 嵌套 TVP** / **未知 type** / 非安全 CLR 仍 fail-closed（DENY）
 - [x] 协议级 `SqlServerBackendSessionReset`：`sp_reset_connection` RPC + 等 DONE/DONEPROC（无 ERROR）
 - [x] 更深 token 改写（NBCROW 位图、text PLP 流、decimal/datetime 非空二进制）— 已落地；不确定布局仍拒绝
 - [x] Login7 **驱动**选路：`SqlServerDeferredIdentityRouter`（bootstrap 真实 PreLogin → peek Login7；匹配 → Login7 replay；异后端 → 静默 PreLogin 换绑 + Login7 转发；ENCRYPTION 停 bootstrap）。**不**向客户端伪造 PreLogin。scratch：`SQLSERVER_LOGIN7_IDENTITY_ROUTING_2026-10-23.md`
@@ -145,7 +145,7 @@ JDBC 示例 URL：`jdbc:sqlserver://localhost:31433;databaseName=master;encrypt=
 | `adapter/sqlserver/SqlServerDatabaseEventExtractor` / `Login7Observation` | P1 明文观测（Login7 + SQL_BATCH + ERROR + Attention/DONE_ATTN）；挂入 adapter 管线 |
 | `adapter/sqlserver/SqlServerLogin7Routing` / `SqlServerDeferredIdentityRouter` / `TdsLogicalMessage` / `TdsPreLoginOptions` | Login7 → `RoutingContext`；有 routing 规则时 deferred 选路（静默 PreLogin 换绑） |
 | `adapter/sqlserver/TdsErrorToken` / `TdsDoneToken` / `SqlServerGatewayErrorMapper` | ERROR 解析/伪造 + DONE/DONE_ATTN 解析；`ProtocolErrorResponder` 接线 |
-| `adapter/sqlserver/SqlServerResultSetMaskingInterceptor` / `TdsColMetadata` / `TdsRowCodec` / `TdsBinaryValues` / `TdsBinXml` / `TdsHierarchyId` / `TdsTvpCodec` | ROW/NBCROW 脱敏（text/guid/numeric/temporal + text/binary PLP + TEXTPTR + MONEY*；XML MS-BINXML；hierarchyid/`0x` UDT；TVP 嵌套单元格可改写、整列/未知 fail-closed） |
+| `adapter/sqlserver/SqlServerResultSetMaskingInterceptor` / `TdsColMetadata` / `TdsRowCodec` / `TdsBinaryValues` / `TdsBinXml` / `TdsHierarchyId` / `TdsTvpCodec` | ROW/NBCROW 脱敏（text/guid/numeric/temporal + text/binary PLP + TEXTPTR + MONEY*；XML MS-BINXML；hierarchyid/`0x` UDT；TVP 嵌套+整列 wholesale；嵌套未知/未知 fail-closed） |
 | `adapter/sqlserver/SqlServerBackendSessionReset` / `RpcObservation` | 池 reset（`sp_reset_connection`）；RPC 名观测 |
 | `application-sqlserver-template.yml` | 配置模板 |
 | `docker-compose.yml` profile `sqlserver` | 可选真库（11433）；无 Docker 时跳过 |

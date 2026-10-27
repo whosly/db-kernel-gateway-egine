@@ -48,12 +48,13 @@ public final class EncryptingRule extends AbstractMaskingRule {
 
     @Override
     public Set<ColumnMetadata.Category> supportedCategories() {
-        return Set.of(ColumnMetadata.Category.TEXT);
+        // OTHER: SQL Server TVP wholesale — interceptor broadcasts into nested TEXT cells.
+        return Set.of(ColumnMetadata.Category.TEXT, ColumnMetadata.Category.OTHER);
     }
 
     @Override
     public boolean matches(ColumnMetadata column) {
-        return column.category() == ColumnMetadata.Category.TEXT && targets(column);
+        return supportedCategories().contains(column.category()) && targets(column);
     }
 
     @Override

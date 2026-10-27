@@ -85,3 +85,16 @@
 | 嵌套未知 type / 嵌套 TVP | ❌ 仍 DENY |
 
 规则命中嵌套列名 → 改写；无嵌套规则 → 字节透传；命中外层 TVP 列名 → DENY。
+
+## 落地（TVP 整列 wholesale · 同日续）
+
+| 项 | 状态 |
+|---|---|
+| 外层 TVP 列规则 `null` → 空表（保留 optional meta prefix） | ✅ |
+| 外层非空规则广播到嵌套单元格（嵌套专属规则优先） | ✅ |
+| `FixedValue`/`Partial`/`Hash`/`Encrypt` 声明 `OTHER` 以便匹配 TVP | ✅ |
+| 广播无法编码嵌套 type → DENY | ✅ |
+| 嵌套未知 type / 嵌套 TVP | ❌ 仍 DENY |
+
+规则命中外层 TVP 列名 → wholesale；命中嵌套列名 → 单元格改写；无规则 → 透传。
+全量测试 **718** 绿。

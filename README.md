@@ -1,6 +1,6 @@
 # 数据库内核网关引擎
 
-基于 **Java 17** 的透明数据库协议网关：客户端连网关端口，网关把 **MySQL / PostgreSQL** wire 流量转发到真实目标库，并在**明文阶段**提供 SQL 观测、可选审计留痕与结果集脱敏等扩展点。第三协议 **SQL Server（TDS）** 为 **P0 透明中继 + P1 观测/拒绝 + P2**（ROW/NBCROW 脱敏含 text/guid/numeric/temporal/text·binary-PLP/TEXTPTR/MONEY*/**XML MS-BINXML**/hierarchyid·`0x` UDT；TVP 嵌套单元格可改写（整列仍 DENY）；RPC/Bulk 观测、`sp_reset_connection`、**Login7 deferred 身份选路**；见 [`docs/SQLSERVER_TDS_PLAN.md`](docs/SQLSERVER_TDS_PLAN.md)），**不是**与 MySQL/PostgreSQL 全对等（TVP 整列 / 非安全 CLR / 未知仍 fail-closed；ENCRYPTION 路径不看 Login7）。
+基于 **Java 17** 的透明数据库协议网关：客户端连网关端口，网关把 **MySQL / PostgreSQL** wire 流量转发到真实目标库，并在**明文阶段**提供 SQL 观测、可选审计留痕与结果集脱敏等扩展点。第三协议 **SQL Server（TDS）** 为 **P0 透明中继 + P1 观测/拒绝 + P2**（ROW/NBCROW 脱敏含 text/guid/numeric/temporal/text·binary-PLP/TEXTPTR/MONEY*/**XML MS-BINXML**/hierarchyid·`0x` UDT；TVP 嵌套单元格 + 整列 wholesale（null→空表 / 非空广播；嵌套未知/嵌套 TVP 仍 DENY）；RPC/Bulk 观测、`sp_reset_connection`、**Login7 deferred 身份选路**；见 [`docs/SQLSERVER_TDS_PLAN.md`](docs/SQLSERVER_TDS_PLAN.md)），**不是**与 MySQL/PostgreSQL 全对等（嵌套未知 type / 嵌套 TVP / 非安全 CLR / 未知仍 fail-closed；ENCRYPTION 路径不看 Login7）。
 
 > 网关不伪造握手能力、不校验也不保存客户端明文密码；认证与结果由目标库完成。  
 > 能力边界以本 README「功能清单」与 [`docs/STATUS_AND_GAPS.md`](docs/STATUS_AND_GAPS.md) 为准——规划中的能力不会写成「已实现」。
@@ -27,7 +27,7 @@
 
 | 项 | 本分支（`future/database-wire-protocol-foundation`） |
 |---|---|
-| 默认单元测试 | **715** 条全绿（JDK 17；`pom` 排除 `*IntegrationTest`；以 STATUS §1 为准） |
+| 默认单元测试 | **718** 条全绿（JDK 17；`pom` 排除 `*IntegrationTest`；以 STATUS §1 为准） |
 | 真库集成 `-Pintegration-test` | **14 / 14** 全绿（2026-09-24，本地 Docker MySQL `:13308` + PostgreSQL `:5432`） |
 | JDK / 编译 | `pom` 目标 **17**；虚拟线程经 `VirtualThreadExecutors` **反射**在 JDK 21+ 启用，JDK 17 回退平台线程池（STATUS P0-1） |
 | 核心数据路径 | 透明代理、查询/结果、预处理、错误透传、脱敏 happy path、PG `COPY` — **已在集成中 live-proven** |
@@ -59,7 +59,7 @@
 | 大包重组 / 流式识别 | **已实现** | MySQL 大包；`LOAD DATA LOCAL` / PG `COPY` 期间不解析命令 |
 | PG `COPY` 流转发 | **已实现** | 集成 live-proven |
 | 结果集脱敏（happy path） | **已接线·默认关** | 无 `MaskingRule` 时逐字节透明；有规则时 fail-closed 改写；文本/常见二进制 happy path 集成 live-proven |
-| 结果集脱敏（类型边界） | **部分** | MySQL：`bit`/`decimal`/date/time/datetime/timestamp；PG：int/bool/float/`numeric`/date/time/timestamp/timestamptz/`uuid`；SQL Server：ROW/NBCROW text/guid/numeric/temporal/text·binary-PLP/TEXTPTR/MONEY*/XML(BINXML)/hierarchyid·`0x` UDT；geometry/interval/money/timetz/非安全 CLR/TVP 整列/未知仍拒绝；见 STATUS §4.2 |
+| 结果集脱敏（类型边界） | **部分** | MySQL：`bit`/`decimal`/date/time/datetime/timestamp；PG：int/bool/float/`numeric`/date/time/timestamp/timestamptz/`uuid`；SQL Server：ROW/NBCROW text/guid/numeric/temporal/text·binary-PLP/TEXTPTR/MONEY*/XML(BINXML)/hierarchyid·`0x` UDT；TVP 嵌套+整列 wholesale；geometry/interval/money/timetz/非安全 CLR/嵌套未知·嵌套 TVP/未知仍拒绝；见 STATUS §4.2 |
 | 审计 spool / JDBC 搬运 | **已接线·默认关** | fail-closed；P0-3 专用单测已补；真库 JDBC 验收仍属集成 |
 | 连接上限 / CIDR / idle | **已实现** | `max-connections`、`allowed-client-cidrs`、`idle-timeout-seconds` |
 | 后端 failover / 路由 | **部分** | `backend-endpoints` 顺序 failover；可选 `gateway.routing.*` 按库名/用户/权重（默认关）；PG 首包 peek；MySQL deferred AuthSwitch 换绑；SQL Server Login7 deferred 静默 PreLogin 换绑（ENCRYPTION 停 bootstrap） |
@@ -70,7 +70,7 @@
 | 连接池化 | **已接线·默认关** | `gateway.pool.enabled`；`reset-mode=none|protocol`；protocol=MySQL `COM_RESET_CONNECTION` / PG `DISCARD ALL` / SQL Server `sp_reset_connection` |
 | Actuator / HTTP 指标出口 | **已接线·内存计数** | `/gateway/metrics` + `/actuator/gateway`；无远程 Micrometer |
 | 非交互启动 | **已实现** | `Application` 自动 start；`gateway.cli.interactive` 默认 false |
-| SQL Server（TDS）透明中继 | **部分（P0+P1+P2）** | 双工 + Login7/SQL_BATCH/ERROR/Attention/RPC/Bulk 观测 + 网关 ERROR+DONE；**ROW/NBCROW 脱敏**（text/guid/numeric/temporal + text/binary PLP + TEXTPTR + MONEY*；**XML MS-BINXML**；**hierarchyid/`0x` UDT**；TVP 嵌套单元格可改写、整列仍 fail-closed）；**`sp_reset_connection`**；**Login7 deferred 选路**。Compose `sqlserver` profile + integration harness（无 Docker skip）。计划：[`docs/SQLSERVER_TDS_PLAN.md`](docs/SQLSERVER_TDS_PLAN.md) |
+| SQL Server（TDS）透明中继 | **部分（P0+P1+P2）** | 双工 + Login7/SQL_BATCH/ERROR/Attention/RPC/Bulk 观测 + 网关 ERROR+DONE；**ROW/NBCROW 脱敏**（text/guid/numeric/temporal + text/binary PLP + TEXTPTR + MONEY*；**XML MS-BINXML**；**hierarchyid/`0x` UDT**；TVP 嵌套单元格 + 整列 wholesale；嵌套未知/嵌套 TVP/非安全 CLR 仍 fail-closed）；**`sp_reset_connection`**；**Login7 deferred 选路**。Compose `sqlserver` profile + integration harness（无 Docker skip）。计划：[`docs/SQLSERVER_TDS_PLAN.md`](docs/SQLSERVER_TDS_PLAN.md) |
 | Oracle | **未实现** | stub：`gateway.proxy-db-type=oracle` 启动失败并提示 |
 
 > 主流代理在数据平面上也不靠「跨线程共享可变协议状态」保证正确——本仓库同样让每条连接的协议状态在任一时刻只属于一个执行体。
@@ -80,7 +80,7 @@
 - **一列一规则**；未命中列保持原值；元数据不全或无法表示改写值 → **拒绝结果集**。
 - MySQL：文本行 + 预处理二进制行（长度前缀类型、常见整数/浮点、`bit`、**decimal** ASCII、**date/time/datetime/timestamp**）；`geometry`/未知类型的非空改写拒绝。
 - PostgreSQL：文本格式 + 可复现二进制（`text`/`bytea`/`json(b)`、`int2/4/8`、`bool`、`float4/8`、**numeric**、**date/time/timestamp/timestamptz**、**uuid**）；`interval`/`money`/`timetz`/未知 OID 的非空改写拒绝；置 NULL 对任意类型可用。
-- SQL Server（TDS）：**ROW/NBCROW**；**nvarchar/nchar/varchar/char**（含 MAX/PLP）、**uniqueidentifier**、**INT*/FLOAT*/BIT*/DECIMALN/NUMERICN**、**DATEN/TIMEN/DATETIME2N/DATETIMEOFFSETN/DATETIM***、**MONEY*/MONEY4/MONEYN**、**TEXT/NTEXT/IMAGE（TEXTPTR）**、**VARBINARY/BINARY（含 MAX）**、**XML（MS-BINXML）**、**UDT hierarchyid / `0x` hex**；**TVP 嵌套单元格**（整列仍拒绝）；非安全 CLR、未知仍拒绝。
+- SQL Server（TDS）：**ROW/NBCROW**；**nvarchar/nchar/varchar/char**（含 MAX/PLP）、**uniqueidentifier**、**INT*/FLOAT*/BIT*/DECIMALN/NUMERICN**、**DATEN/TIMEN/DATETIME2N/DATETIMEOFFSETN/DATETIM***、**MONEY*/MONEY4/MONEYN**、**TEXT/NTEXT/IMAGE（TEXTPTR）**、**VARBINARY/BINARY（含 MAX）**、**XML（MS-BINXML）**、**UDT hierarchyid / `0x` hex**；**TVP 嵌套单元格 + 整列 wholesale**（null→空表；非空广播到嵌套单元格）；非安全 CLR、未知仍拒绝。
 - `NullingRule` **只匹配可空列**：MySQL 字面量列常为 `NOT NULL`，置 NULL 规则不会生效——需固定值/哈希/加密等。
 - 规则策略 ↔ 列类别：`null` 全类别；`fixed` → TEXT/NUMERIC/TEMPORAL/UUID；`partial`/`hash` → TEXT/UUID（UUID 保持 `8-4-4-4-12`）；`encrypt` **仅 TEXT**。
 
@@ -236,7 +236,7 @@ psql client -> gateway:35433 -> target postgresql (:5432 等)
 
 ## 快速开始 · SQL Server（P0 + P1 + P2）
 
-> **诚实边界**：透明 TDS 双工 + 明文观测 + ROW/NBCROW 脱敏（text/guid/numeric/temporal/text·binary-PLP/TEXTPTR/MONEY*/XML/hierarchyid·`0x` UDT/TVP 嵌套单元格）+ `sp_reset_connection` + Login7 deferred 选路；**不是** MySQL/PG 全对等（TVP 整列 / 非安全 CLR / 未知仍 fail-closed；ENCRYPTION 不 peek Login7）。阶段见 [`docs/SQLSERVER_TDS_PLAN.md`](docs/SQLSERVER_TDS_PLAN.md)。
+> **诚实边界**：透明 TDS 双工 + 明文观测 + ROW/NBCROW 脱敏（text/guid/numeric/temporal/text·binary-PLP/TEXTPTR/MONEY*/XML/hierarchyid·`0x` UDT/TVP 嵌套/整列 wholesale）+ `sp_reset_connection` + Login7 deferred 选路；**不是** MySQL/PG 全对等（嵌套未知 type / 嵌套 TVP / 非安全 CLR / 未知仍 fail-closed；ENCRYPTION 不 peek Login7）。阶段见 [`docs/SQLSERVER_TDS_PLAN.md`](docs/SQLSERVER_TDS_PLAN.md)。
 >
 > **管控台 SQL 工作台**：classpath 含 `mssql-jdbc` 时，RUNNING 实例可经 **proxy listenPort** 执行 SQL（与 MySQL/PG 同路径）。
 

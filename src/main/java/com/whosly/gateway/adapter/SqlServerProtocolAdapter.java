@@ -32,12 +32,14 @@ import java.util.UUID;
  * <p><b>Maturity (honest):</b> transparent {@link DuplexRelay} plus cleartext
  * observation (Login7, SQL_BATCH, RPC name, Bulk, ERROR, Attention/DONE_ATTN),
  * gateway-side ERROR+DONE rejects, optional result-set ROW/NBCROW masking
- * (text/guid/numeric/temporal/money/TEXTPTR/varbinary PLP; XML/UDT NULL-only;
- * TVP/unknown fail-closed), {@code sp_reset_connection} pool reset, and
+ * (text/guid/numeric/temporal/money/TEXTPTR/varbinary PLP; XML MS-BINXML;
+ * hierarchyid / {@code 0x} UDT; TVP nested cells + wholesale outer-column
+ * rewrite), {@code sp_reset_connection} pool reset, and
  * <em>deferred Login7 identity routing</em> when {@link RoutingBackendProvider}
  * has rules (bootstrap PreLogin + peek Login7; mismatch → silent PreLogin
- * rebind). Still <em>not</em> MySQL/PostgreSQL full parity — XML/UDT non-null
- * and TVP/unknown remain fail-closed. See {@code docs/SQLSERVER_TDS_PLAN.md}.</p>
+ * rebind). Still <em>not</em> MySQL/PostgreSQL full parity — nested unknown /
+ * nested TVP / unsafe CLR / unknown types remain fail-closed. See
+ * {@code docs/SQLSERVER_TDS_PLAN.md}.</p>
  *
  * <p><b>Handshake / routing:</b> TDS is client-first (PreLogin → Login7).
  * PreLogin carries no user/database, so bootstrap {@link BackendProvider#acquire}

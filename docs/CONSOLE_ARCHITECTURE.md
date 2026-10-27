@@ -21,7 +21,7 @@
 | C7 | Java 17 | 后端编译目标保持 17 |
 | C8 | 鉴权可配置、密钥永不回传 | `open`/`token`/`form`/`oidc`（§17）；RBAC §22；实例 ACL §24；生产仍建议网络隔离 / 反代 |
 
-**仍非目标**：SQL Server 剩余 fail-closed（XML/UDT 非空、TVP/未知）与真库 Docker 冒烟、Oracle wire、外部 Prometheus/PagerDuty、独立 Node 生产部署、按品牌插件市场 UI。SQL Server P2（脱敏/Attention 观测/Login7 deferred 选路/reset）已另见 STATUS。Auth 四模式 + RBAC/ACL **已落地**（非完整 IAM/SCIM）。
+**仍非目标**：SQL Server 剩余 fail-closed（嵌套未知 type / 嵌套 TVP / 非安全 CLR / 未知）与真库 Docker 冒烟、Oracle wire、外部 Prometheus/PagerDuty、独立 Node 生产部署、按品牌插件市场 UI。SQL Server P2（脱敏/Attention 观测/Login7 deferred 选路/reset）已另见 STATUS。Auth 四模式 + RBAC/ACL **已落地**（非完整 IAM/SCIM）。
 
 ---
 

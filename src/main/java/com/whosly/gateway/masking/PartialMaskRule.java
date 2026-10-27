@@ -25,7 +25,9 @@ public final class PartialMaskRule extends AbstractMaskingRule {
 
     private static final Set<ColumnMetadata.Category> SUPPORTED = EnumSet.of(
             ColumnMetadata.Category.TEXT,
-            ColumnMetadata.Category.UUID);
+            ColumnMetadata.Category.UUID,
+            // OTHER: SQL Server TVP wholesale — interceptor broadcasts into nested cells.
+            ColumnMetadata.Category.OTHER);
 
     private final int keepPrefix;
     private final int keepSuffix;

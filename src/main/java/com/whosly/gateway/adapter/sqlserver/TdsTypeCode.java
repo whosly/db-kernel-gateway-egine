@@ -56,7 +56,7 @@ public enum TdsTypeCode {
         TEXTPTR,
         /** Always PLP on the wire; TYPE_INFO carries XML_INFO / UDT_INFO, not USHORTMAXLEN. */
         PLP_META,
-        /** Table-valued parameter TYPE_INFO; nested cells rewritten via {@link TdsTvpCodec}. */
+        /** Table-valued parameter TYPE_INFO; nested cells / wholesale via {@link TdsTvpCodec}. */
         TVP_META,
         UNSUPPORTED
     }

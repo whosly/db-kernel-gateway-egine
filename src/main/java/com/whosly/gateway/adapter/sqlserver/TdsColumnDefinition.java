@@ -11,8 +11,9 @@ import java.util.Optional;
  *
  * <p>{@link #plp} is true when maxlength is {@code 0xFFFF} (MAX / PLP) or the type
  * is XML/UDT. Text/binary PLP, TEXTPTR, XML (MS-BINXML), hierarchyid UDT, and TVP
- * nested cells can be rewritten; generic CLR UDT non-null stays fail-closed unless
- * the rule supplies opaque {@code 0x} hex; unknown types stay fail-closed.</p>
+ * nested cells / wholesale outer-column rules can be rewritten; generic CLR UDT
+ * non-null stays fail-closed unless the rule supplies opaque {@code 0x} hex;
+ * unknown types stay fail-closed.</p>
  */
 public final class TdsColumnDefinition {
 
@@ -182,9 +183,12 @@ public final class TdsColumnDefinition {
      * NULL masks are handled separately for every nullable layout we can encode.
      */
     public boolean supportsNonNullRewrite() {
-        if (type.layout() == TdsTypeCode.WireLayout.UNSUPPORTED
-                || type.layout() == TdsTypeCode.WireLayout.TVP_META) {
+        if (type.layout() == TdsTypeCode.WireLayout.UNSUPPORTED) {
             return false;
+        }
+        if (type.layout() == TdsTypeCode.WireLayout.TVP_META) {
+            // Wholesale: empty-table / broadcast into nested cells (see interceptor).
+            return true;
         }
         if (type == TdsTypeCode.XML) {
             return true; // MS-BINXML via TdsBinXml
@@ -219,9 +223,12 @@ public final class TdsColumnDefinition {
     public boolean supportsNullRewrite() {
         // FIXED types have no NULL marker in ROW (nullable ints use INTN etc.).
         if (type.layout() == TdsTypeCode.WireLayout.FIXED
-                || type.layout() == TdsTypeCode.WireLayout.UNSUPPORTED
-                || type.layout() == TdsTypeCode.WireLayout.TVP_META) {
+                || type.layout() == TdsTypeCode.WireLayout.UNSUPPORTED) {
             return false;
+        }
+        if (type.layout() == TdsTypeCode.WireLayout.TVP_META) {
+            // TVP_NULL (Count=0xFFFF) or empty-table rewrite for wholesale null.
+            return true;
         }
         if (plp || type.layout() == TdsTypeCode.WireLayout.PLP_META) {
             return true; // PLP_NULL

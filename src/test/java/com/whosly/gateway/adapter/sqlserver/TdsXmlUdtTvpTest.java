@@ -141,8 +141,8 @@ class TdsXmlUdtTvpTest {
         assertThat(col.nestedColumns()).hasSize(2);
         assertThat(col.nestedColumns().get(0).name()).isEqualTo("ssn");
         assertThat(col.nestedColumns().get(1).name()).isEqualTo("name");
-        assertThat(col.supportsNonNullRewrite()).isFalse(); // wholesale still denied
-        assertThat(col.supportsNullRewrite()).isFalse();
+        assertThat(col.supportsNonNullRewrite()).isTrue(); // wholesale broadcast / empty-table
+        assertThat(col.supportsNullRewrite()).isTrue();
     }
 
     @Test
@@ -224,7 +224,57 @@ class TdsXmlUdtTvpTest {
     }
 
     @Test
-    void tvpWholesaleRuleDenied() {
+    void tvpWholesaleFixedBroadcastsIntoNestedCells() {
+        byte[] meta = TdsTestFrames.tvpColumnMetaWithNested("tvp", true, "ssn", "name");
+        String[][] rows = {{"111-22-3333", "Alice"}, {"444-55-6666", "Bob"}};
+        byte[] payload = TdsTestFrames.concat(
+                meta, TdsTestFrames.tvpValueRow(rows), TdsTestFrames.doneFinal());
+        byte[] replacement = assertForwardMutated(payload,
+                new FixedValueRule("tvp-fixed", 10, ColumnSelector.named("tvp"), "REDACTED"));
+        byte[] redacted = "REDACTED".getBytes(StandardCharsets.UTF_16LE);
+        assertThat(indexOf(replacement, redacted)).isGreaterThanOrEqualTo(0);
+        assertThat(indexOf(replacement, "111-22-3333".getBytes(StandardCharsets.UTF_16LE))).isEqualTo(-1);
+        assertThat(indexOf(replacement, "Alice".getBytes(StandardCharsets.UTF_16LE))).isEqualTo(-1);
+        assertThat(indexOf(replacement, "Bob".getBytes(StandardCharsets.UTF_16LE))).isEqualTo(-1);
+    }
+
+    @Test
+    void tvpWholesaleNullClearsAllRows() {
+        byte[] meta = TdsTestFrames.tvpColumnMetaWithNested("tvp", true, "ssn", "name");
+        String[][] rows = {{"111-22-3333", "Alice"}};
+        byte[] payload = TdsTestFrames.concat(
+                meta, TdsTestFrames.tvpValueRow(rows), TdsTestFrames.doneFinal());
+        byte[] replacement = assertForwardMutated(payload,
+                new NullingRule("tvp-null", 10, ColumnSelector.named("tvp")));
+        assertThat(indexOf(replacement, "111-22-3333".getBytes(StandardCharsets.UTF_16LE))).isEqualTo(-1);
+        assertThat(indexOf(replacement, "Alice".getBytes(StandardCharsets.UTF_16LE))).isEqualTo(-1);
+        // Empty TVP: meta END + row END immediately after ROW token.
+        assertThat(indexOf(replacement, new byte[]{
+                (byte) TdsTokenType.ROW.getCode(),
+                (byte) TdsTvpCodec.END_TOKEN,
+                (byte) TdsTvpCodec.END_TOKEN
+        })).isGreaterThanOrEqualTo(0);
+    }
+
+    @Test
+    void tvpWholesaleNestedSpecificRuleWins() {
+        byte[] meta = TdsTestFrames.tvpColumnMetaWithNested("tvp", true, "ssn", "name");
+        String[][] rows = {{"111-22-3333", "Alice"}};
+        byte[] payload = TdsTestFrames.concat(
+                meta, TdsTestFrames.tvpValueRow(rows), TdsTestFrames.doneFinal());
+        byte[] replacement = assertForwardMutated(payload,
+                new FixedValueRule("tvp-all", 5, ColumnSelector.named("tvp"), "WHOLE"),
+                new FixedValueRule("ssn-nested", 10, ColumnSelector.named("ssn"), "NESTED"));
+        assertThat(indexOf(replacement, "NESTED".getBytes(StandardCharsets.UTF_16LE)))
+                .isGreaterThanOrEqualTo(0);
+        assertThat(indexOf(replacement, "WHOLE".getBytes(StandardCharsets.UTF_16LE)))
+                .isGreaterThanOrEqualTo(0);
+        assertThat(indexOf(replacement, "111-22-3333".getBytes(StandardCharsets.UTF_16LE))).isEqualTo(-1);
+        assertThat(indexOf(replacement, "Alice".getBytes(StandardCharsets.UTF_16LE))).isEqualTo(-1);
+    }
+
+    @Test
+    void tvpWholesaleDeniedWhenBroadcastCannotEncodeNested() {
         byte[] meta = TdsTestFrames.tvpColumnMetaWithNested("tvp", true, "ssn");
         String[][] rows = {{"111-22-3333"}};
         byte[] payload = TdsTestFrames.concat(
@@ -236,11 +286,12 @@ class TdsXmlUdtTvpTest {
         extractor.inspect(TrafficDirection.TARGET_TO_CLIENT, packet, 0, packet.length);
         assertThat(extractor.currentTdsColumns()).hasSize(1);
 
-        MaskingRule force = new MaskingRule() {
-            @Override public String name() { return "tvp-force"; }
+        // Matches outer TVP (OTHER) but cannot apply to nested TEXT → fail-closed DENY.
+        MaskingRule otherOnly = new MaskingRule() {
+            @Override public String name() { return "tvp-other-only"; }
             @Override public int priority() { return 10; }
             @Override public java.util.Set<ColumnMetadata.Category> supportedCategories() {
-                return java.util.EnumSet.allOf(ColumnMetadata.Category.class);
+                return java.util.EnumSet.of(ColumnMetadata.Category.OTHER);
             }
             @Override public boolean matches(ColumnMetadata column) {
                 return "tvp".equals(column.name());
@@ -249,7 +300,7 @@ class TdsXmlUdtTvpTest {
                 return MaskedValue.ofText("x", StandardCharsets.UTF_8);
             }
         };
-        SqlServerResultSetMaskingInterceptor forced = interceptor(extractor, force);
+        SqlServerResultSetMaskingInterceptor forced = interceptor(extractor, otherOnly);
         TrafficDecision decision = forced.intercept(
                 RawBackedMessage.of(TrafficDirection.TARGET_TO_CLIENT, packet, 0, packet.length));
         assertThat(decision.action()).isEqualTo(TrafficAction.DENY);
@@ -298,13 +349,13 @@ class TdsXmlUdtTvpTest {
         assertThat(TdsHierarchyId.tryParseHexBytes("nope")).isEmpty();
     }
 
-    private static byte[] assertForwardMutated(byte[] payload, MaskingRule rule) {
-        SqlServerSession session = new SqlServerSession("t-" + rule.name());
+    private static byte[] assertForwardMutated(byte[] payload, MaskingRule... rules) {
+        SqlServerSession session = new SqlServerSession("t-" + rules[0].name());
         SqlServerDatabaseEventExtractor extractor =
                 new SqlServerDatabaseEventExtractor("SQLServer", session.getConnectionId(), session);
         byte[] packet = CODEC.packet(TdsPacketType.TABULAR_RESULT.getCode(), payload, 1);
         extractor.inspect(TrafficDirection.TARGET_TO_CLIENT, packet, 0, packet.length);
-        SqlServerResultSetMaskingInterceptor interceptor = interceptor(extractor, rule);
+        SqlServerResultSetMaskingInterceptor interceptor = interceptor(extractor, rules);
         TrafficDecision decision = interceptor.intercept(
                 RawBackedMessage.of(TrafficDirection.TARGET_TO_CLIENT, packet, 0, packet.length));
         assertThat(decision.action()).isEqualTo(TrafficAction.FORWARD);
