@@ -374,6 +374,32 @@ export function listActiveAlerts(refresh = true) {
   return apiGet<import('./types').ActiveAlertsResponse>(`/alerts/active${q}`)
 }
 
+export function listAlertChannels() {
+  return apiGet<import('./types').AlertChannelsResponse>('/alerts/channels')
+}
+
+export function createAlertChannel(payload: import('./types').AlertChannelPayload) {
+  return apiPost<import('./types').AlertChannel>('/alerts/channels', payload)
+}
+
+export function updateAlertChannel(id: string, payload: import('./types').AlertChannelPayload) {
+  return apiPut<import('./types').AlertChannel>(
+    `/alerts/channels/${encodeURIComponent(id)}`,
+    payload,
+  )
+}
+
+export function deleteAlertChannel(id: string) {
+  return apiDelete<ActionResult>(`/alerts/channels/${encodeURIComponent(id)}`)
+}
+
+export function testAlertChannel(id: string) {
+  return apiPost<import('./types').AlertChannelTestResult>(
+    `/alerts/channels/${encodeURIComponent(id)}/test`,
+    {},
+  )
+}
+
 
 export function listInstanceAcl(instanceId: string) {
   return apiGet<{ items: import('./types').InstanceAclBinding[]; total: number }>(

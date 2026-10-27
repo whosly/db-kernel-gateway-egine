@@ -4,6 +4,10 @@ import com.whosly.gateway.adapter.ProtocolAdapter;
 import com.whosly.gateway.adapter.protocol.GatewayRuntimeMetrics;
 import com.whosly.gateway.console.GatewayInstanceRegistry;
 import com.whosly.gateway.console.observe.AlertEvaluationService;
+import com.whosly.gateway.console.observe.AlertNotificationService;
+import com.whosly.gateway.console.persist.AlertChannelStore;
+import com.whosly.gateway.console.security.ConsoleSecretCipher;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.whosly.gateway.console.observe.MetricsHistorySampler;
 import com.whosly.gateway.console.persist.AlertThresholdStore;
 import com.whosly.gateway.console.persist.ConsoleAuditStore;
@@ -62,7 +66,10 @@ class ConsoleAlertApiTest {
         when(provider.getIfAvailable()).thenReturn(audit);
         AlertEvaluationService service = new AlertEvaluationService(store, sampler, provider);
         sampler.addAfterSampleListener(service::evaluateSafely);
-        api = new ConsoleAlertApiController(service);
+        AlertChannelStore channels = new AlertChannelStore(jdbc);
+        AlertNotificationService notifications = new AlertNotificationService(
+                channels, ConsoleSecretCipher.fromBase64MasterKey(null), new ObjectMapper(), provider);
+        api = new ConsoleAlertApiController(service, notifications);
     }
 
     @Test
@@ -94,5 +101,23 @@ class ConsoleAlertApiTest {
 
         assertThat(api.deleteThreshold(id).get("ok")).isEqualTo(true);
         assertThatThrownBy(() -> api.getThreshold(id)).isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void channelCrudAndTest() {
+        Map<String, Object> cfg = new LinkedHashMap<>();
+        cfg.put("url", "http://127.0.0.1:9/nope");
+        cfg.put("timeoutMs", 1000);
+        var created = api.createChannel(new ConsoleAlertApiController.AlertChannelBody(
+                "bad-hook", "WEBHOOK", true, "INFO", 60, cfg));
+        assertThat(created.getStatusCode().value()).isEqualTo(201);
+        String id = String.valueOf(created.getBody().get("id"));
+        assertThat(api.listChannels().get("total")).isEqualTo(1);
+        assertThat(api.getChannel(id).get("type")).isEqualTo("WEBHOOK");
+        Map<String, Object> test = api.testChannel(id);
+        assertThat(test.get("ok")).isEqualTo(false);
+        assertThat(api.deleteChannel(id).get("ok")).isEqualTo(true);
+        assertThatThrownBy(() -> api.getChannel(id))
+                .isInstanceOf(IllegalArgumentException.class);
     }
 }

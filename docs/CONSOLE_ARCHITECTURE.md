@@ -145,6 +145,8 @@ UNBOUND      ← 仅兼容保留；creatable 配置实例不应再出现
 | GET/POST… | `/auth/*` | 挂在 `/console/api/v1/auth` |
 | GET/POST… | `/alerts/thresholds` | 告警阈值 CRUD（H2） |
 | GET | `/alerts/active` · `/alerts` | 当前触发（sampler 评估） |
+| GET/POST… | `/alerts/channels` | 通知通道 CRUD（WEBHOOK/EMAIL，H2） |
+| POST | `/alerts/channels/{id}/test` | 通道自检 |
 
 **契约规则**
 
@@ -898,7 +900,7 @@ GET /console/api/audit/status
 | **管控台完备（本轮）** | 编辑 · 克隆 · 导入 · 筛选 · 批量 | ✅ |
 | **SQL 工作台（经代理）** | JDBC → listenPort；脱敏可验证；h2 例外直连 | ✅ |
 | 完整 SQL IDE / 鉴权 SSO / RBAC / ACL / 主题 | 见 §16–§26 | ✅ 已落地 |
-| 外部 Prometheus / PagerDuty | Micrometer scrape · 外部告警栈 | **仍不做**（进程内告警见 §21） |
+| 外部 Prometheus / PagerDuty | Micrometer scrape · 外部告警栈 | **仍不做**（进程内告警 + webhook/email 见 §21） |
 
 ### 15.9 自检清单（作者）
 
@@ -1196,7 +1198,8 @@ GET /console/api/v1/audit/traffic?limit=50&before=&source=auto|ring|spool|jdbc&p
 ## 21. 管控台告警阈值（进程内 · 非 Prometheus）
 
 > 作者自检通过后实现。运维可在控制面配置阈值，并在管控台查看当前触发态。  
-> **不做** Prometheus remote / PagerDuty / 外部告警栈。
+> **不做** Prometheus remote / PagerDuty / Alertmanager。
+> **已做** 通用 HTTP webhook + SMTP 邮箱通道（控制台配置，上升沿外发）。
 
 ### 21.1 目标
 
@@ -1221,12 +1224,15 @@ GET /console/api/v1/audit/traffic?limit=50&before=&source=auto|ring|spool|jdbc&p
 | DELETE | `/alerts/thresholds/{id}` | `{ ok, id }` |
 | GET | `/alerts/active` | 当前触发 `{ items, total, evaluatedAt, note }` |
 | GET | `/alerts` | 同 `/alerts/active`（别名） |
+| GET/POST | `/alerts/channels` | 通道列表/创建 |
+| GET/PUT/DELETE | `/alerts/channels/{id}` | 单通道 |
+| POST | `/alerts/channels/{id}/test` | 自检投递 |
 
 比较符：`GT` / `GTE` / `LT` / `LTE` / `EQ`。严重级别：`INFO` / `WARN` / `CRITICAL`。
 
 ### 21.3 UI
 
-- 侧栏 **告警** 页：阈值列表 / 新建编辑 / 当前触发。
+- 侧栏 **告警** 页：阈值列表 / 新建编辑 / 当前触发 / **通知通道（Webhook·邮箱）**。
 - 总览：活跃告警徽章（链到告警页）。
 
 ### 21.4 自检清单（作者）
@@ -1237,7 +1243,7 @@ GET /console/api/v1/audit/traffic?limit=50&before=&source=auto|ring|spool|jdbc&p
 - [x] UI 中文；API 仅 `/console/api/v1`
 - [x] 单测 + `mvn test` + `npm run build` 绿；非 Prometheus
 
-**结论：§21 已实现（进程内告警；非 Prometheus / 非 PagerDuty）。**
+**结论：§21 已实现（进程内告警 + webhook/email 外发；非 Prometheus / 非 PagerDuty）。**
 
 
 ---
@@ -1272,7 +1278,7 @@ GET /console/api/v1/audit/traffic?limit=50&before=&source=auto|ring|spool|jdbc&p
 | `security:keys` | 脱敏密钥 PUT/DELETE/verify |
 | `audit:read` | 管控操作审计 / 流量 spool / 审计状态 |
 | `alerts:read` | 告警阈值读 + 当前触发 |
-| `alerts:write` | 告警阈值 CRUD |
+| `alerts:write` | 告警阈值 / 通知通道 CRUD + 自检 |
 | `risk:write` | 风控策略 PUT |
 | `metrics:read` | 指标历史（与 instances:read 同级只读） |
 | `schema:read` | schema catalog / columns |

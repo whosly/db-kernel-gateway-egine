@@ -7,6 +7,7 @@ import jakarta.annotation.PostConstruct;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
@@ -24,6 +25,7 @@ import java.util.concurrent.CopyOnWriteArrayList;
 /**
  * In-process alert evaluation against {@link MetricsHistorySampler} rings.
  * Not Prometheus / PagerDuty — lab control-plane only.
+ * Rising-edge fires optional {@link AlertNotificationService} webhook/email channels.
  */
 @Service
 public class AlertEvaluationService {
@@ -48,6 +50,7 @@ public class AlertEvaluationService {
     private final AlertThresholdStore store;
     private final MetricsHistorySampler sampler;
     private final ConsoleAuditService auditService;
+    private final AlertNotificationService notificationService;
 
     /** thresholdId → current active alert view (in-memory; rebuilt on evaluate). */
     private final ConcurrentHashMap<String, Map<String, Object>> active = new ConcurrentHashMap<>();
@@ -56,9 +59,19 @@ public class AlertEvaluationService {
     public AlertEvaluationService(AlertThresholdStore store,
                                   MetricsHistorySampler sampler,
                                   ObjectProvider<ConsoleAuditService> auditProvider) {
+        this(store, sampler, auditProvider, null);
+    }
+
+    @Autowired
+    public AlertEvaluationService(AlertThresholdStore store,
+                                  MetricsHistorySampler sampler,
+                                  ObjectProvider<ConsoleAuditService> auditProvider,
+                                  ObjectProvider<AlertNotificationService> notificationProvider) {
         this.store = Objects.requireNonNull(store, "store");
         this.sampler = Objects.requireNonNull(sampler, "sampler");
         this.auditService = auditProvider != null ? auditProvider.getIfAvailable() : null;
+        this.notificationService = notificationProvider != null
+                ? notificationProvider.getIfAvailable() : null;
     }
 
     @PostConstruct
@@ -87,6 +100,7 @@ public class AlertEvaluationService {
             if (resolved == null) {
                 continue;
             }
+            boolean wasFiring = rule.lastFiring();
             boolean isFiring = compare(rule.comparator(), resolved.value(), rule.thresholdValue());
             Instant firedAt = isFiring ? now : rule.lastFiredAt();
             store.updateEvalState(rule.id(), isFiring, resolved.value(), isFiring ? now : null);
@@ -94,6 +108,13 @@ public class AlertEvaluationService {
                 Map<String, Object> alert = toActiveView(rule, resolved, now);
                 firing.add(alert);
                 next.put(rule.id(), alert);
+                if (notificationService != null) {
+                    try {
+                        notificationService.notifyIfNeeded(alert, !wasFiring);
+                    } catch (RuntimeException ex) {
+                        log.debug("Alert notify skipped: {}", ex.toString());
+                    }
+                }
             }
         }
         active.clear();
@@ -118,7 +139,8 @@ public class AlertEvaluationService {
         body.put("total", items.size());
         body.put("evaluatedAt", lastEvaluatedAt != null ? lastEvaluatedAt.toString() : null);
         body.put("note", "进程内评估（MetricsHistorySampler tick + 本接口懒评估）；"
-                + "H2 持久化阈值与 last_fired；重启后需再采样才刷新当前触发态；非 Prometheus / 非 PagerDuty");
+                + "H2 持久化阈值与 last_fired；上升沿可外发 webhook/email 通道；"
+                + "重启后需再采样才刷新当前触发态；非 Prometheus / 非 PagerDuty");
         return body;
     }
 

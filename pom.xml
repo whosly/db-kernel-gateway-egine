@@ -82,6 +82,12 @@
             <artifactId>spring-boot-starter-jdbc</artifactId>
         </dependency>
 
+        <!-- Alert email channel (Jakarta Mail); SMTP config is per-channel in H2, not spring.mail.* -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-mail</artifactId>
+        </dependency>
+
         <!-- Alibaba Druid SQL Parser -->
         <dependency>
             <groupId>com.alibaba</groupId>

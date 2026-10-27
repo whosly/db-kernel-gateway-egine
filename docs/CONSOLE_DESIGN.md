@@ -127,7 +127,7 @@ gateway:
 2. **网关实例** — 实例卡网格；**网关代理 / 透明代理**徽章；启停；抽屉（脱敏 / ACL / 会话…）
 3. **SQL 工作台** — 经代理 listenPort 的 MaxGUI-lite IDE
 4. **类型目录** — catalog 表
-5. **告警** — 进程内阈值
+5. **告警** — 进程内阈值 + webhook/email 通道
 6. **运维** — 配置摘要 / 审计 / 密钥 / 风控
 
 前端：`console-ui/`（Vue 3 + TS + Vite，`base: '/console/'`）；`mvn package` 经
@@ -171,6 +171,6 @@ console/GatewayInstanceRegistry.java  # 管控台视图 / 启停委托
 
 - SQL Server 深度能力（脱敏 / Attention cancel / 深 token / Login7 路由）——保持 P0 + P1（ERROR 观测/拒绝已落地；脱敏等仍 P2）
 - Oracle wire
-- 外部 Prometheus / PagerDuty
+- 外部 Prometheus / PagerDuty / Alertmanager（通用 webhook + SMTP 已做）
 - 按 DB 品牌的独立页面或 API
 - 真 Testcontainers 多实例 live 证明（单测已覆盖独立启停；`-Pintegration-testcontainers` 仍为 stub）

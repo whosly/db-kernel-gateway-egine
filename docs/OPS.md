@@ -53,6 +53,19 @@
 - UI：侧栏「告警」；总览有触发徽章
 - **诚实**：H2 持久化阈值与 `last_fired`；**不是** Prometheus / Alertmanager / PagerDuty
 
+## 告警通知通道（Webhook + 邮箱）
+
+阈值**上升沿**（以及冷却到期后的持续触发）可外发到已启用通道；表 `gateway_alert_channel`。
+
+| 通道 | 配置要点 | 自检 |
+|---|---|---|
+| **WEBHOOK** | `config.url`（http/s）、可选 `authHeader`、`timeoutMs`、`headers`；POST JSON：`{ event, source, alert, sentAt }` | `POST /console/api/v1/alerts/channels/{id}/test` |
+| **EMAIL** | `smtpHost` / `smtpPort` / `from` / `to[]`；可选 `username`/`password`、`startTls`/`ssl`、`subjectPrefix`；Jakarta Mail 动态 Session（**不是** `spring.mail.*`） | 同上 |
+
+API：`GET/POST /alerts/channels`、`GET/PUT/DELETE /alerts/channels/{id}`、`POST …/test`。权限同阈值（`alerts:read` / `alerts:write`）。SMTP 密码与 Webhook `Authorization` 落库时可经 `ConsoleSecretCipher`（`enc:v1:`）密封；API/UI 回读脱敏。
+
+**仍不做**：PagerDuty / Alertmanager / Prometheus Alerting 专用出口。
+
 ## 集成测试（P2-6 跳过策略）
 
 | 命令 | 行为 |

@@ -243,7 +243,7 @@ function sourceLabel(s?: string) {
           <code>application-audit-jdbc-h2-template.yml</code>）。详见 <code>docs/OPS.md</code>。
         </li>
         <li>指标趋势：进程内环（总览页火花图）；不强制外部 Prometheus。</li>
-        <li>告警阈值：侧栏「告警」或 <code>/console/api/v1/alerts/*</code>；进程内评估，非 PagerDuty。</li>
+        <li>告警阈值 / 通道：侧栏「告警」或 <code>/console/api/v1/alerts/*</code>；进程内评估 + webhook/email 外发，非 PagerDuty。</li>
       </ul>
     </div>
 

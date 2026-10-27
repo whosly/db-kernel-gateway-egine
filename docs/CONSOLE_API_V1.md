@@ -100,6 +100,8 @@
 | GET | `/metrics/history` | `/metrics/history` | 时序对象 |
 | GET/POST… | — | `/alerts/thresholds` | 告警阈值 CRUD `{ items, total }` |
 | GET | — | `/alerts/active` · `/alerts` | 当前触发（进程内评估） |
+| GET/POST… | — | `/alerts/channels` | 通知通道 CRUD（WEBHOOK/EMAIL）`{ items, total }` |
+| POST | — | `/alerts/channels/{id}/test` | 通道自检投递 `{ ok, message, … }` |
 | GET/PUT/DELETE | `/security/masking-key` | 同 | 富状态：`configured`/`activeKeyId`/`source`/`previousKeyIds`/`encryptRulesCanBind`/`encryptRulesWithoutKey`；PUT body 可含 `previousKeyId`/`keepPrevious` |
 | POST | — | **`/security/masking-key/verify`** | `{ ok: true, keyId, message }`（不回传密钥/密文） |
 | GET | `/security/secret-encryption` | 同 | 状态对象 |

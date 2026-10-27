@@ -2,14 +2,19 @@
 import { computed, inject, ref } from 'vue'
 import type { ConfirmFn } from '../composables/useConfirm'
 import {
+  createAlertChannel,
   createAlertThreshold,
+  deleteAlertChannel,
   deleteAlertThreshold,
   listActiveAlerts,
+  listAlertChannels,
   listAlertThresholds,
   listInstances,
+  testAlertChannel,
+  updateAlertChannel,
   updateAlertThreshold,
 } from '../api/consoleApi'
-import type { ActiveAlert, AlertThreshold, GatewayInstance } from '../api/types'
+import type { ActiveAlert, AlertChannel, AlertThreshold, GatewayInstance } from '../api/types'
 import { usePolling } from '../composables/usePolling'
 import { usePermissions, Perm } from '../composables/usePermissions'
 
@@ -18,11 +23,14 @@ const askConfirm = inject<ConfirmFn>('confirm', async () => false)
 
 const thresholds = ref<AlertThreshold[]>([])
 const active = ref<ActiveAlert[]>([])
+const channels = ref<AlertChannel[]>([])
 const metricKeys = ref<string[]>([])
 const comparators = ref<string[]>(['GT', 'GTE', 'LT', 'LTE', 'EQ'])
 const severities = ref<string[]>(['INFO', 'WARN', 'CRITICAL'])
+const channelTypes = ref<string[]>(['WEBHOOK', 'EMAIL'])
 const instances = ref<GatewayInstance[]>([])
 const note = ref<string | null>(null)
+const channelNote = ref<string | null>(null)
 const evaluatedAt = ref<string | null>(null)
 const error = ref<string | null>(null)
 const msg = ref<string | null>(null)
@@ -38,6 +46,27 @@ const form = ref({
   instanceId: '',
   enabled: true,
   severity: 'WARN',
+})
+
+const editingChannelId = ref<string | null>(null)
+const channelForm = ref({
+  name: '',
+  type: 'WEBHOOK',
+  enabled: true,
+  minSeverity: 'WARN',
+  cooldownSeconds: 300,
+  url: '',
+  authHeader: '',
+  timeoutMs: 8000,
+  smtpHost: '',
+  smtpPort: 587,
+  username: '',
+  password: '',
+  from: '',
+  to: '',
+  startTls: true,
+  ssl: false,
+  subjectPrefix: '[db-gateway-alert]',
 })
 
 const metricLabels: Record<string, string> = {
@@ -68,6 +97,29 @@ function resetForm() {
   }
 }
 
+function resetChannelForm() {
+  editingChannelId.value = null
+  channelForm.value = {
+    name: '',
+    type: 'WEBHOOK',
+    enabled: true,
+    minSeverity: 'WARN',
+    cooldownSeconds: 300,
+    url: '',
+    authHeader: '',
+    timeoutMs: 8000,
+    smtpHost: '',
+    smtpPort: 587,
+    username: '',
+    password: '',
+    from: '',
+    to: '',
+    startTls: true,
+    ssl: false,
+    subjectPrefix: '[db-gateway-alert]',
+  }
+}
+
 function editRow(t: AlertThreshold) {
   editingId.value = t.id
   form.value = {
@@ -82,12 +134,37 @@ function editRow(t: AlertThreshold) {
   }
 }
 
+function editChannel(c: AlertChannel) {
+  editingChannelId.value = c.id
+  const cfg = c.config || {}
+  channelForm.value = {
+    name: c.name || '',
+    type: String(c.type || 'WEBHOOK'),
+    enabled: !!c.enabled,
+    minSeverity: c.minSeverity || 'WARN',
+    cooldownSeconds: c.cooldownSeconds ?? 300,
+    url: String(cfg.url || ''),
+    authHeader: '',
+    timeoutMs: Number(cfg.timeoutMs ?? 8000),
+    smtpHost: String(cfg.smtpHost || ''),
+    smtpPort: Number(cfg.smtpPort ?? 587),
+    username: String(cfg.username || ''),
+    password: '',
+    from: String(cfg.from || ''),
+    to: Array.isArray(cfg.to) ? (cfg.to as string[]).join(', ') : String(cfg.to || ''),
+    startTls: cfg.startTls !== false,
+    ssl: !!cfg.ssl,
+    subjectPrefix: String(cfg.subjectPrefix || '[db-gateway-alert]'),
+  }
+}
+
 async function load() {
   try {
-    const [thr, act, inst] = await Promise.all([
+    const [thr, act, inst, ch] = await Promise.all([
       listAlertThresholds(),
       listActiveAlerts(true),
       listInstances(),
+      listAlertChannels(),
     ])
     thresholds.value = thr.items || []
     metricKeys.value = thr.metricKeys || metricKeys.value
@@ -97,6 +174,9 @@ async function load() {
     active.value = act.items || []
     evaluatedAt.value = act.evaluatedAt || null
     instances.value = inst.items || []
+    channels.value = ch.items || []
+    channelTypes.value = ch.types || channelTypes.value
+    channelNote.value = ch.note || null
     error.value = null
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e)
@@ -137,6 +217,57 @@ async function save() {
   }
 }
 
+function buildChannelPayload() {
+  const f = channelForm.value
+  const config: Record<string, unknown> = {}
+  if (f.type === 'EMAIL') {
+    config.smtpHost = f.smtpHost.trim()
+    config.smtpPort = Number(f.smtpPort) || 587
+    config.from = f.from.trim()
+    config.to = f.to.split(/[,;\s]+/).map((s) => s.trim()).filter(Boolean)
+    config.username = f.username.trim() || undefined
+    if (f.password.trim()) config.password = f.password.trim()
+    config.startTls = !!f.startTls
+    config.ssl = !!f.ssl
+    config.subjectPrefix = f.subjectPrefix.trim() || '[db-gateway-alert]'
+  } else {
+    config.url = f.url.trim()
+    config.method = 'POST'
+    config.timeoutMs = Number(f.timeoutMs) || 8000
+    if (f.authHeader.trim()) config.authHeader = f.authHeader.trim()
+  }
+  return {
+    name: f.name.trim() || undefined,
+    type: f.type,
+    enabled: f.enabled,
+    minSeverity: f.minSeverity,
+    cooldownSeconds: Number(f.cooldownSeconds) || 0,
+    config,
+  }
+}
+
+async function saveChannel() {
+  if (!has(Perm.ALERTS_WRITE)) { msg.value = '需要 alerts:write'; return }
+  busy.value = true
+  msg.value = null
+  try {
+    const payload = buildChannelPayload()
+    if (editingChannelId.value) {
+      await updateAlertChannel(editingChannelId.value, payload)
+      msg.value = '通道已更新'
+    } else {
+      await createAlertChannel(payload)
+      msg.value = '通道已创建'
+    }
+    resetChannelForm()
+    await load()
+  } catch (e) {
+    msg.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    busy.value = false
+  }
+}
+
 async function remove(id: string) {
   if (!has(Perm.ALERTS_WRITE)) { msg.value = '需要 alerts:write'; return }
   const ok = await askConfirm({
@@ -152,6 +283,42 @@ async function remove(id: string) {
     if (editingId.value === id) resetForm()
     await load()
     msg.value = '已删除'
+  } catch (e) {
+    msg.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    busy.value = false
+  }
+}
+
+async function removeChannel(id: string) {
+  if (!has(Perm.ALERTS_WRITE)) { msg.value = '需要 alerts:write'; return }
+  const ok = await askConfirm({
+    title: '删除告警通道',
+    message: '删除该通知通道？',
+    danger: true,
+    confirmLabel: '删除',
+  })
+  if (!ok) return
+  busy.value = true
+  try {
+    await deleteAlertChannel(id)
+    if (editingChannelId.value === id) resetChannelForm()
+    await load()
+    msg.value = '通道已删除'
+  } catch (e) {
+    msg.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    busy.value = false
+  }
+}
+
+async function runChannelTest(id: string) {
+  if (!has(Perm.ALERTS_WRITE)) { msg.value = '需要 alerts:write'; return }
+  busy.value = true
+  try {
+    const r = await testAlertChannel(id)
+    msg.value = r.ok ? `自检成功：${r.message || 'ok'}` : `自检失败：${r.message || 'error'}`
+    await load()
   } catch (e) {
     msg.value = e instanceof Error ? e.message : String(e)
   } finally {
@@ -178,7 +345,7 @@ function sevClass(s?: string) {
         <span class="muted tiny" v-if="evaluatedAt">评估于 {{ evaluatedAt }}</span>
       </div>
       <p class="muted tiny">
-        {{ note || '进程内评估；非 Prometheus / 非 PagerDuty。重启后需再采样刷新触发态。' }}
+        {{ note || '进程内评估；阈值上升沿可外发 webhook / 邮箱；非 Prometheus / 非 PagerDuty。' }}
       </p>
     </div>
 
@@ -319,6 +486,145 @@ function sevClass(s?: string) {
         </p>
       </div>
     </div>
+
+    <div class="grid">
+      <div class="panel">
+        <h3>通知通道</h3>
+        <p class="muted tiny">{{ channelNote || 'WEBHOOK=HTTP JSON；EMAIL=SMTP；阈值上升沿触发，冷却期内不重复。' }}</p>
+        <table v-if="channels.length" class="tbl">
+          <thead>
+            <tr>
+              <th>启用</th>
+              <th>名称</th>
+              <th>类型</th>
+              <th>最低级别</th>
+              <th>冷却</th>
+              <th>上次投递</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="c in channels" :key="c.id" :class="{ dim: !c.enabled }">
+              <td>{{ c.enabled ? '是' : '否' }}</td>
+              <td>{{ c.name }}</td>
+              <td class="mono">{{ c.type }}</td>
+              <td><span class="pill" :class="sevClass(c.minSeverity)">{{ c.minSeverity }}</span></td>
+              <td>{{ c.cooldownSeconds }}s</td>
+              <td class="tiny">
+                <span v-if="c.lastOk === true" class="ok-dot">成功</span>
+                <span v-else-if="c.lastOk === false" class="hot-dot">失败</span>
+                <span v-else>—</span>
+                <div v-if="c.lastSentAt">{{ c.lastSentAt }}</div>
+                <div v-if="c.lastError" class="err">{{ c.lastError }}</div>
+              </td>
+              <td class="row">
+                <button type="button" @click="editChannel(c)">编辑</button>
+                <button type="button" :disabled="busy || !has(Perm.ALERTS_WRITE)" @click="runChannelTest(c.id)">自检</button>
+                <button type="button" @click="removeChannel(c.id)">删</button>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+        <p v-else class="muted">尚未配置通知通道。右侧可新建 Webhook 或邮箱。</p>
+      </div>
+
+      <div class="panel">
+        <h3>{{ editingChannelId ? '编辑通道' : '新建通道' }}</h3>
+        <form class="form" @submit.prevent="saveChannel">
+          <label>
+            名称
+            <input v-model="channelForm.name" placeholder="ops-webhook / ops-mail" />
+          </label>
+          <label>
+            类型
+            <select v-model="channelForm.type">
+              <option v-for="t in channelTypes" :key="t" :value="t">{{ t }}</option>
+            </select>
+          </label>
+          <div class="row2">
+            <label>
+              最低级别
+              <select v-model="channelForm.minSeverity">
+                <option v-for="s in severities" :key="s" :value="s">{{ s }}</option>
+              </select>
+            </label>
+            <label>
+              冷却秒数
+              <input v-model.number="channelForm.cooldownSeconds" type="number" min="0" />
+            </label>
+          </div>
+
+          <template v-if="channelForm.type === 'WEBHOOK'">
+            <label>
+              Webhook URL
+              <input v-model="channelForm.url" placeholder="https://hooks.example/alert" required />
+            </label>
+            <label>
+              Authorization（可选；留空则保留原值）
+              <input v-model="channelForm.authHeader" placeholder="Bearer …" autocomplete="off" />
+            </label>
+            <label>
+              超时毫秒
+              <input v-model.number="channelForm.timeoutMs" type="number" min="1000" />
+            </label>
+          </template>
+
+          <template v-else>
+            <label>
+              SMTP Host
+              <input v-model="channelForm.smtpHost" placeholder="smtp.example.com" required />
+            </label>
+            <div class="row2">
+              <label>
+                端口
+                <input v-model.number="channelForm.smtpPort" type="number" min="1" />
+              </label>
+              <label>
+                发件人 From
+                <input v-model="channelForm.from" placeholder="alerts@example.com" required />
+              </label>
+            </div>
+            <label>
+              收件人 To（逗号分隔）
+              <input v-model="channelForm.to" placeholder="ops@example.com" required />
+            </label>
+            <div class="row2">
+              <label>
+                SMTP 用户名
+                <input v-model="channelForm.username" autocomplete="off" />
+              </label>
+              <label>
+                SMTP 密码（留空保留原值）
+                <input v-model="channelForm.password" type="password" autocomplete="new-password" />
+              </label>
+            </div>
+            <label>
+              主题前缀
+              <input v-model="channelForm.subjectPrefix" />
+            </label>
+            <label class="check">
+              <input v-model="channelForm.startTls" type="checkbox" />
+              STARTTLS
+            </label>
+            <label class="check">
+              <input v-model="channelForm.ssl" type="checkbox" />
+              SSL（smtps）
+            </label>
+          </template>
+
+          <label class="check">
+            <input v-model="channelForm.enabled" type="checkbox" />
+            启用
+          </label>
+          <div class="row">
+            <button type="submit" class="primary" :disabled="busy || !has(Perm.ALERTS_WRITE)">
+              {{ editingChannelId ? '保存通道' : '创建通道' }}
+            </button>
+            <button v-if="editingChannelId" type="button" :disabled="busy" @click="resetChannelForm">取消</button>
+          </div>
+        </form>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -368,6 +674,7 @@ function sevClass(s?: string) {
 .sev-warn { background: var(--sev-warn-bg); color: var(--sev-warn-fg); }
 .sev-info { background: var(--sev-info-bg); color: var(--sev-info-fg); }
 .hot-dot { color: var(--danger); font-weight: 600; }
+.ok-dot { color: var(--success, #16a34a); font-weight: 600; }
 .msg { margin-top: 0.5rem; }
 code { font-size: 0.85em; }
 </style>

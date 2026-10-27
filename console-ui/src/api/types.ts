@@ -550,3 +550,45 @@ export interface ActiveAlertsResponse {
   note?: string
 }
 
+
+export interface AlertChannel {
+  id: string
+  name: string
+  type: 'WEBHOOK' | 'EMAIL' | string
+  enabled: boolean
+  minSeverity: string
+  cooldownSeconds: number
+  config: Record<string, unknown>
+  lastSentAt?: string | null
+  lastOk?: boolean | null
+  lastError?: string | null
+  lastStatusCode?: number | null
+  createdAt?: string | null
+  updatedAt?: string | null
+}
+
+export interface AlertChannelPayload {
+  name?: string
+  type: string
+  enabled?: boolean
+  minSeverity?: string
+  cooldownSeconds?: number
+  config: Record<string, unknown>
+}
+
+export interface AlertChannelsResponse {
+  items: AlertChannel[]
+  total: number
+  types?: string[]
+  severities?: string[]
+  note?: string
+}
+
+export interface AlertChannelTestResult {
+  ok: boolean
+  channelId: string
+  type?: string
+  message?: string
+  statusCode?: number | null
+  sentAt?: string
+}
