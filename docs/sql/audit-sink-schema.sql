@@ -8,6 +8,20 @@
 -- 不要把这个表建在被代理的那个数据库实例上：审计与被审计的数据混在一起，
 -- 既污染业务库，也让代理自身的语义纠缠不清（规则 §8.5）。
 
+
+-- ---------------------------------------------------------------------------
+-- H2（实验室独立文件库；网关 destination=jdbc 时会 CREATE TABLE IF NOT EXISTS）
+-- 推荐 URL：jdbc:h2:file:./data/gateway-audit-sink;MODE=PostgreSQL;AUTO_SERVER=FALSE;DB_CLOSE_DELAY=-1
+-- 勿与管控台 spring.datasource（gateway-console）混用同一文件；更勿写入被代理业务库。
+-- ---------------------------------------------------------------------------
+-- CREATE TABLE IF NOT EXISTS gateway_audit_record (
+--     session_id      VARCHAR(128) NOT NULL,
+--     record_sequence BIGINT       NOT NULL,
+--     payload         CLOB         NOT NULL,
+--     recorded_at     TIMESTAMP    NOT NULL DEFAULT CURRENT_TIMESTAMP,
+--     PRIMARY KEY (session_id, record_sequence)
+-- );
+
 -- ---------------------------------------------------------------------------
 -- MySQL
 -- ---------------------------------------------------------------------------

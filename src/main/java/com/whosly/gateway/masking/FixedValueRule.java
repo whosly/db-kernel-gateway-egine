@@ -2,19 +2,29 @@ package com.whosly.gateway.masking;
 
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
+import java.util.EnumSet;
 import java.util.Objects;
 import java.util.Set;
 
 /**
- * Replaces the value with a constant such as {@code REDACTED}.
+ * Replaces the value with a constant such as {@code REDACTED} or {@code 0}.
  *
- * <p>Text columns only: a constant string is not a valid value for a numeric,
- * temporal or boolean column, and the engine would reject such a rule anyway.</p>
+ * <p>Claims text, numeric, temporal and uuid columns. The constant must be a
+ * value the column's wire encoder can represent (for example {@code 0} for a
+ * numeric column, {@code 1970-01-01} for a date, a canonical uuid string for
+ * uuid). Invalid constants fail closed when the protocol layer encodes them.</p>
  *
  * @author yueny09@163.com codealy
  * @since 2026-07-02
  */
 public final class FixedValueRule extends AbstractMaskingRule {
+
+    private static final Set<ColumnMetadata.Category> SUPPORTED = EnumSet.of(
+            ColumnMetadata.Category.TEXT,
+            ColumnMetadata.Category.NUMERIC,
+            ColumnMetadata.Category.TEMPORAL,
+            ColumnMetadata.Category.UUID,
+            ColumnMetadata.Category.BINARY);
 
     private final String fixedValue;
     private final Charset charset;
@@ -35,12 +45,12 @@ public final class FixedValueRule extends AbstractMaskingRule {
 
     @Override
     public Set<ColumnMetadata.Category> supportedCategories() {
-        return Set.of(ColumnMetadata.Category.TEXT);
+        return SUPPORTED;
     }
 
     @Override
     public boolean matches(ColumnMetadata column) {
-        return column.category() == ColumnMetadata.Category.TEXT && targets(column);
+        return SUPPORTED.contains(column.category()) && targets(column);
     }
 
     @Override

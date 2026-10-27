@@ -83,6 +83,7 @@
 | 方法 | 旧路径 | 新路径 | 成功体 |
 |---|---|---|---|
 | POST | `/instances/{id}/sql/execute` | **`/instances/{id}/sql/executions`** | 执行结果对象 |
+| GET | —（新增） | **`/instances/{id}/sql/executions`** | 进行中的工作台执行 `{ instanceId, items, total }`（`instances:read`；非代理会话） |
 | POST | `/instances/{id}/sql/cancel` | **`/instances/{id}/sql/executions/cancel`** | 取消结果（body 含 `executionId`） |
 | POST | `/sql/executions/{executionId}/cancel` | `/sql/executions/{executionId}/cancel` | 取消结果 |
 | GET/DELETE | `/sql/history` | `/sql/history` | GET → `{ items, total }`；DELETE → `{ ok, deleted }` |
@@ -115,10 +116,26 @@
 
 OIDC 入口仍为 Spring 标准 `/oauth2/authorization/{registrationId}`（非 console api 版本树）。
 
-`GET /auth/me` 响应：`{ authenticated, username, roles[], permissions[], mode }`。  
-细粒度 RBAC（VIEWER / OPERATOR / ADMIN → 权限串）见 [`CONSOLE_ARCHITECTURE.md`](CONSOLE_ARCHITECTURE.md) §22；`open` 模式返回 ADMIN 全权限且不强制。
+`GET /auth/me` 响应：`{ authenticated, username, roles[], permissions[], mode, instanceAclRestricted?, instanceAccess? }`。  
+细粒度 RBAC（VIEWER / OPERATOR / ADMIN → 权限串）见 [`CONSOLE_ARCHITECTURE.md`](CONSOLE_ARCHITECTURE.md) §22；实例 ACL 见 §24 / 下文 1.x；`open` 模式返回 ADMIN 全权限且不强制。
 
 ---
+
+
+
+### 1.x 实例 ACL（§24）
+
+| 方法 | 路径 | 权限 | 成功体 |
+|---|---|---|---|
+| GET | `/instances/{id}/acl` | `acl:manage` | `{ items, total }` binding 对象 |
+| PUT | `/instances/{id}/acl` | `acl:manage` | 全量替换 → `{ items, total }`；body `{ items:[{principalType,principal,permissions[]}] }` |
+| POST | `/instances/{id}/acl/bindings` | `acl:manage` | upsert 单条 binding |
+| DELETE | `/instances/{id}/acl/bindings/{bindingId}` | `acl:manage` | `{ ok, message }` |
+| GET | `/acl/bindings` | `acl:manage` | 全量 `{ items, total }` |
+
+`GET /auth/me` 附加：`instanceAclRestricted`（bool）、`instanceAccess`（`{ [instanceId]: string[] }`，仅 restricted 时有内容）。
+
+实例域操作强制：`@consoleAuthz.canAccessInstance(#id, '…')`（全局权限 ∩ 实例 ACL；ADMIN 绕过；open 全开）。
 
 ## 2. JSON 约定
 

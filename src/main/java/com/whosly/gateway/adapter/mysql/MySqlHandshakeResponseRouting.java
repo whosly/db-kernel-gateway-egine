@@ -9,16 +9,16 @@ import java.util.Objects;
  * Parses client identity from a MySQL Handshake Response 41 payload into a
  * protocol-agnostic {@link RoutingContext}.
  *
- * <p>MySQL is server-first: the backend (or a forged greeting — forbidden by the
- * transparency rules) must speak before the client sends this packet. The adapter
- * therefore cannot call {@code acquire(context)} with a non-empty context for the
- * initial connect without breaking transparent auth. This parser still centralizes
- * identity extraction so:</p>
+ * <p>MySQL is server-first: the backend must speak before the client sends this
+ * packet (forging a greeting is forbidden). First-connect identity routing uses
+ * {@link MySqlDeferredIdentityRouter} (bootstrap {@code acquire(empty)}, then
+ * match-path HR replay or AuthSwitch rebind). This parser centralizes identity
+ * extraction so:</p>
  * <ul>
- *   <li>observation ({@link MySQLDatabaseEventExtractor}) and future deferred-connect
- *       designs share one implementation;</li>
- *   <li>Oracle / SQL Server adapters can mirror the same {@link RoutingContext} fill
- *       pattern;</li>
+ *   <li>observation ({@link MySQLDatabaseEventExtractor}) and deferred routing
+ *       share one wire layout;</li>
+ *   <li>Oracle / SQL Server adapters can mirror the same {@link RoutingContext}
+ *       fill pattern;</li>
  *   <li>unit tests prove username / database are recoverable from wire bytes.</li>
  * </ul>
  *

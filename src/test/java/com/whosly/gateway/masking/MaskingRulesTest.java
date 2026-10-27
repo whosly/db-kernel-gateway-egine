@@ -25,15 +25,45 @@ class MaskingRulesTest {
     }
 
     @Test
-    void fixedValueRuleOnlyClaimsTextColumns() {
-        FixedValueRule rule = new FixedValueRule("fixed-phone", 5, ColumnSelector.named("phone"), "REDACTED");
+    void fixedValueRuleClaimsTextNumericTemporalAndUuid() {
+        FixedValueRule rule = new FixedValueRule("fixed-phone", 5, ColumnSelector.named("phone"), "0");
         ColumnMetadata numeric = new ColumnMetadata("phone", Optional.empty(), "int4",
                 ColumnMetadata.Category.NUMERIC, ColumnMetadata.ValueFormat.TEXT, true);
+        ColumnMetadata temporal = new ColumnMetadata("phone", Optional.empty(), "date",
+                ColumnMetadata.Category.TEMPORAL, ColumnMetadata.ValueFormat.TEXT, true);
+        ColumnMetadata uuid = new ColumnMetadata("phone", Optional.empty(), "uuid",
+                ColumnMetadata.Category.UUID, ColumnMetadata.ValueFormat.TEXT, true);
+        ColumnMetadata bool = new ColumnMetadata("phone", Optional.empty(), "bool",
+                ColumnMetadata.Category.BOOLEAN, ColumnMetadata.ValueFormat.TEXT, true);
 
         assertThat(rule.matches(ColumnMetadata.text("phone"))).isTrue();
-        assertThat(rule.matches(numeric)).isFalse();
-        assertThat(rule.mask(ColumnMetadata.text("phone"),
-                MaskedValue.ofText("13800000000", UTF8)).asText(UTF8)).isEqualTo("REDACTED");
+        assertThat(rule.matches(numeric)).isTrue();
+        assertThat(rule.matches(temporal)).isTrue();
+        assertThat(rule.matches(uuid)).isTrue();
+        assertThat(rule.matches(bool)).isFalse();
+        assertThat(rule.mask(numeric, MaskedValue.ofText("13800000000", UTF8)).asText(UTF8)).isEqualTo("0");
+    }
+
+    @Test
+    void partialAndHashRulesClaimUuidWhileKeepingAParseableShape() {
+        ColumnMetadata uuid = new ColumnMetadata("id", Optional.empty(), "uuid",
+                ColumnMetadata.Category.UUID, ColumnMetadata.ValueFormat.TEXT, true);
+        PartialMaskRule partial = new PartialMaskRule("partial-id", 5, ColumnSelector.named("id"), 4, 4);
+        HashingRule hash = new HashingRule("hash-id", 5, ColumnSelector.named("id"), 16, "pepper");
+
+        assertThat(partial.matches(uuid)).isTrue();
+        assertThat(hash.matches(uuid)).isTrue();
+        // keepPrefix=4 keepSuffix=4 on 32 hex digits → 550e + 24 zeros + 0000, hyphens restored.
+        String masked = partial.mask(uuid,
+                MaskedValue.ofText("550e8400-e29b-41d4-a716-446655440000", UTF8)).asText(UTF8);
+        assertThat(masked).isEqualTo("550e0000-0000-0000-0000-000000000000");
+        String hashed = hash.mask(uuid,
+                MaskedValue.ofText("550e8400-e29b-41d4-a716-446655440000", UTF8))
+                .asText(StandardCharsets.US_ASCII);
+        assertThat(java.util.UUID.fromString(hashed)).isNotNull();
+        assertThat(hashed).isEqualTo(hash.mask(uuid,
+                MaskedValue.ofText("550e8400-e29b-41d4-a716-446655440000", UTF8))
+                .asText(StandardCharsets.US_ASCII));
     }
 
     @Test

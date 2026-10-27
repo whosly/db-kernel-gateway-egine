@@ -84,7 +84,7 @@ class ConsoleRiskPolicyApiTest {
 
         console = new ConsoleApiController(
                 catalog, registry, adapter, new GatewayRuntimeMetrics(), gatewayConfig,
-                audit, null, null, null, null, runtime, risk, null, null, null, null, null, null);
+                audit, null, null, null, null, runtime, risk, null, null, null, null, null, null, null, null);
     }
 
     @Test
@@ -102,5 +102,15 @@ class ConsoleRiskPolicyApiTest {
 
         Map<String, Object> again = console.getRiskPolicy();
         assertThat(again.get("deniedStatementKeywords")).isEqualTo(List.of("drop table"));
+    }
+
+    @Test
+    void auditOperationsUsesItemsTotalEnvelope() {
+        console.putRiskPolicy(new ConsoleApiModels.RiskPolicyBody(
+                true, List.of(), List.of("drop table")));
+        Map<String, Object> body = console.listAudit(50, null);
+        assertThat(body).containsKeys("items", "total");
+        assertThat(body).doesNotContainKey("count");
+        assertThat(body.get("total")).isEqualTo(((List<?>) body.get("items")).size());
     }
 }

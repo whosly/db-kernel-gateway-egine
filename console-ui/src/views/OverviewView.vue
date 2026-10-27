@@ -79,8 +79,11 @@ async function onStop(id: string) {
 </script>
 
 <template>
-  <div>
+  <div class="overview">
     <p v-if="error" class="err">加载失败：{{ error }}</p>
+    <div v-if="!data && !error" class="skel-row" aria-hidden="true">
+      <div v-for="n in 6" :key="n" class="skeleton skel" />
+    </div>
     <div
       v-if="activeAlerts.length"
       class="alert-banner"
@@ -126,8 +129,15 @@ async function onStop(id: string) {
         <pre class="code">{{ JSON.stringify(data?.legacyMetrics || {}, null, 2) }}</pre>
       </div>
     </div>
-    <h3>实例</h3>
-    <div class="card-grid">
+    <h3 class="page-section-title">实例</h3>
+    <div v-if="data && !(data.instances || []).length" class="empty-state">
+      <strong>暂无实例</strong>
+      <p>前往「网关实例」新建或导入，即可在此总览运行状态。</p>
+      <div class="cta">
+        <button class="primary" type="button" @click="router.push('/instances')">管理实例</button>
+      </div>
+    </div>
+    <div v-else class="card-grid">
       <InstanceCard
         v-for="inst in data?.instances || []"
         :key="inst.id"
@@ -141,36 +151,50 @@ async function onStop(id: string) {
 </template>
 
 <style scoped>
-.row { display: flex; gap: 1rem; flex-wrap: wrap; margin-bottom: 1.25rem; }
+.overview { display: flex; flex-direction: column; gap: 0.25rem; }
+.row { display: flex; gap: 0.85rem; flex-wrap: wrap; margin-bottom: 1.15rem; }
 .panel {
   background: var(--bg-card);
   border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 1rem;
+  border-radius: var(--radius-lg);
+  padding: 1rem 1.1rem;
   min-width: 240px;
+  box-shadow: var(--shadow-sm);
 }
-.grow { flex: 1; }
-h3 { margin: 0 0 0.75rem; font-size: 1rem; }
-.muted { color: var(--text-muted); font-size: 0.9rem; }
-.tiny { font-size: 0.75rem; }
+.grow { flex: 1; min-width: 280px; }
+h3 { margin: 0 0 0.75rem; font-size: 0.95rem; font-weight: 650; letter-spacing: -0.01em; }
+.muted { color: var(--text-muted); font-size: 0.85rem; }
+.tiny { font-size: 0.72rem; }
 .code {
-  background: var(--bg);
-  border-radius: 8px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
   padding: 0.75rem;
-  font-size: 0.8rem;
+  font-size: 0.75rem;
   overflow: auto;
+  max-height: 160px;
+  font-family: var(--font-mono);
 }
 .err { color: var(--danger); }
-.sparks { display: grid; gap: 0.65rem; }
-.spark-label { font-size: 0.8rem; color: var(--text-muted); margin-bottom: 0.2rem; }
+.sparks { display: grid; gap: 0.7rem; }
+.spark-label { font-size: 0.75rem; color: var(--text-muted); margin-bottom: 0.2rem; font-weight: 600; }
 .alert-banner {
   display: flex; gap: 0.75rem; align-items: baseline; flex-wrap: wrap;
-  background: rgba(239, 68, 68, 0.12);
-  border: 1px solid #ef4444;
-  border-radius: 10px;
-  padding: 0.65rem 0.9rem;
-  margin-bottom: 0.85rem;
+  background: var(--danger-soft);
+  border: 1px solid color-mix(in srgb, var(--danger) 45%, var(--border));
+  border-radius: var(--radius-lg);
+  padding: 0.7rem 0.95rem;
+  margin-bottom: 0.9rem;
   cursor: pointer;
+  transition: background var(--dur) var(--ease);
 }
-.alert-banner:hover { background: rgba(239, 68, 68, 0.18); }
+.alert-banner:hover { background: color-mix(in srgb, var(--danger) 22%, transparent); }
+.alert-banner:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--accent-ring); }
+.skel-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(148px, 1fr));
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+.skel { height: 72px; }
 </style>

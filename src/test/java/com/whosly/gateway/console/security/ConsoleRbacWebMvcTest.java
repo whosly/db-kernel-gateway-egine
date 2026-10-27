@@ -9,6 +9,7 @@ import com.whosly.gateway.controller.console.ConsoleSecurityApiController;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -32,7 +33,14 @@ class ConsoleRbacWebMvcTest {
     private final ConsoleApiController api = Mockito.mock(ConsoleApiController.class);
     private final ConsoleSecurityApiController securityApi = new ConsoleSecurityApiController(api);
     private final ConsoleInstanceApiController instanceApi = new ConsoleInstanceApiController(api);
-    private final ConsoleAuthz authz = new ConsoleAuthz(AuthMode.FORM);
+    @SuppressWarnings("unchecked")
+    private final ConsoleAuthz authz = createAuthz();
+
+    private static ConsoleAuthz createAuthz() {
+        ObjectProvider<InstanceAclService> op = Mockito.mock(ObjectProvider.class);
+        Mockito.when(op.getIfAvailable()).thenReturn(null);
+        return new ConsoleAuthz(AuthMode.FORM, op);
+    }
 
     @AfterEach
     void clear() {

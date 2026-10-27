@@ -63,6 +63,33 @@ final class IntegrationTestConfig {
         return properties.getProperty("integration.postgresql.database", "postgres");
     }
 
+
+    String sqlServerHost() {
+        return properties.getProperty("integration.sqlserver.host", "localhost");
+    }
+
+    int sqlServerPort() {
+        return intProperty("integration.sqlserver.port", 11433);
+    }
+
+    String sqlServerUsername() {
+        return properties.getProperty("integration.sqlserver.username", "sa");
+    }
+
+    String sqlServerPassword() {
+        return properties.getProperty("integration.sqlserver.password", "");
+    }
+
+    String sqlServerDatabase() {
+        return properties.getProperty("integration.sqlserver.database", "master");
+    }
+
+    /** True when a non-empty SA/lab password is configured for SQL Server smoke. */
+    boolean sqlServerConfigured() {
+        String password = sqlServerPassword();
+        return password != null && !password.isBlank();
+    }
+
     private int intProperty(String name, int defaultValue) {
         return Integer.parseInt(properties.getProperty(name, Integer.toString(defaultValue)));
     }

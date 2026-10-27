@@ -20,14 +20,21 @@ public class ConsoleSqlApiController {
     }
 
     @PostMapping("/instances/{id}/sql/executions")
-    @PreAuthorize("@consoleAuthz.has('" + SQL_EXECUTE + "')")
+    @PreAuthorize("@consoleAuthz.canAccessInstance(#id, '" + SQL_EXECUTE + "')")
     public Map<String, Object> executeSql(@PathVariable("id") String id,
                                           @RequestBody SqlExecuteBody body) {
         return api.executeSql(id, body);
     }
 
+    /** In-flight console SQL executions (工作台执行中), not wire proxy sessions. */
+    @GetMapping("/instances/{id}/sql/executions")
+    @PreAuthorize("@consoleAuthz.canAccessInstance(#id, '" + INSTANCES_READ + "')")
+    public Map<String, Object> listSqlExecutions(@PathVariable("id") String id) {
+        return api.listSqlExecutions(id);
+    }
+
     @PostMapping("/instances/{id}/sql/executions/cancel")
-    @PreAuthorize("@consoleAuthz.has('" + SQL_EXECUTE + "')")
+    @PreAuthorize("@consoleAuthz.canAccessInstance(#id, '" + SQL_EXECUTE + "')")
     public Map<String, Object> cancelSql(@PathVariable("id") String id,
                                          @RequestBody(required = false) SqlCancelBody body) {
         return api.cancelSql(id, body);
@@ -40,13 +47,13 @@ public class ConsoleSqlApiController {
     }
 
     @GetMapping("/instances/{id}/schema/catalog")
-    @PreAuthorize("@consoleAuthz.has('" + SCHEMA_READ + "')")
+    @PreAuthorize("@consoleAuthz.canAccessInstance(#id, '" + SCHEMA_READ + "')")
     public Map<String, Object> schemaCatalog(@PathVariable("id") String id) {
         return api.schemaCatalog(id);
     }
 
     @GetMapping("/instances/{id}/schema/columns")
-    @PreAuthorize("@consoleAuthz.has('" + SCHEMA_READ + "')")
+    @PreAuthorize("@consoleAuthz.canAccessInstance(#id, '" + SCHEMA_READ + "')")
     public Map<String, Object> schemaColumns(
             @PathVariable("id") String id,
             @RequestParam(value = "table", required = false) String table,

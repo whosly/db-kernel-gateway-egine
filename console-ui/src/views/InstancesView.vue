@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { computed, inject, reactive, ref } from 'vue'
+import { computed, inject, onMounted, onUnmounted, reactive, ref } from 'vue'
+import type { ConfirmFn } from '../composables/useConfirm'
 import InstanceCard from '../components/InstanceCard.vue'
 import InstanceDrawer from '../components/InstanceDrawer.vue'
 import {
@@ -29,6 +30,7 @@ import { usePolling } from '../composables/usePolling'
 import { usePermissions, Perm } from '../composables/usePermissions'
 
 const toast = inject<(m: string) => void>('toast', () => {})
+const askConfirm = inject<ConfirmFn>('confirm', async () => false)
 const { has } = usePermissions()
 const instances = ref<GatewayInstance[]>([])
 const catalog = ref<CatalogEntry[]>([])
@@ -103,6 +105,17 @@ const filtered = computed(() => {
   })
   return list
 })
+
+const filtersActive = computed(
+  () => !!(filterQ.value.trim() || filterStatus.value || filterDbType.value),
+)
+
+function clearFilters() {
+  filterQ.value = ''
+  filterStatus.value = ''
+  filterDbType.value = ''
+  sortBy.value = 'name'
+}
 
 async function load() {
   try {
@@ -197,7 +210,13 @@ async function onStop(id: string) {
 }
 async function onDelete() {
   if (!selected.value) return
-  if (!confirm(`确认删除实例「${selected.value.name}」？此操作不可恢复。`)) return
+  const ok = await askConfirm({
+    title: '删除实例',
+    message: `确认删除实例「${selected.value.name}」？此操作不可恢复。`,
+    danger: true,
+    confirmLabel: '删除',
+  })
+  if (!ok) return
   try {
     const r = await deleteInstance(selected.value.id)
     toast(r.message || '已删除')
@@ -247,7 +266,15 @@ async function onBulk(action: 'start' | 'stop') {
     toast('请先勾选实例')
     return
   }
-  if (action === 'stop' && !confirm(`确认批量停止 ${ids.length} 个实例？`)) return
+  if (action === 'stop') {
+    const ok = await askConfirm({
+      title: '批量停止',
+      message: `确认批量停止 ${ids.length} 个实例？`,
+      danger: true,
+      confirmLabel: '停止',
+    })
+    if (!ok) return
+  }
   try {
     const r = await bulkInstances(action, ids)
     toast(`批量${action === 'start' ? '启动' : '停止'}：成功 ${r.okCount}，失败 ${r.failCount}`)
@@ -256,6 +283,15 @@ async function onBulk(action: 'start' | 'stop') {
     toast(e instanceof Error ? e.message : String(e))
   }
 }
+
+
+function onGlobalKey(e: KeyboardEvent) {
+  if (e.key === 'Escape' && showCreate.value) {
+    showCreate.value = false
+  }
+}
+onMounted(() => window.addEventListener('keydown', onGlobalKey))
+onUnmounted(() => window.removeEventListener('keydown', onGlobalKey))
 
 async function onImportFile(ev: Event) {
   const input = ev.target as HTMLInputElement
@@ -320,13 +356,29 @@ async function onImportFile(ev: Event) {
       <button type="button" :disabled="!selectedIds.size || !has(Perm.INSTANCES_START_STOP)" @click="onBulk('start')">批量启动</button>
       <button type="button" :disabled="!selectedIds.size || !has(Perm.INSTANCES_START_STOP)" @click="onBulk('stop')">批量停止</button>
       <span class="muted tiny">已选 {{ selectedIds.size }}</span>
+      <span class="muted tiny filter-count">显示 {{ filtered.length }} / {{ instances.length }}</span>
+      <button
+        v-if="filtersActive"
+        type="button"
+        class="ghost"
+        @click="clearFilters"
+      >清除筛选</button>
     </div>
 
     <p v-if="error" class="err">{{ error }}</p>
 
-    <div v-if="!filtered.length" class="empty">
-      <p v-if="!instances.length">暂无网关实例。点击「新建实例」或「导入 JSON」开始。</p>
-      <p v-else>无匹配结果。请调整搜索或筛选条件。</p>
+    <div v-if="!filtered.length" class="empty-state">
+      <strong v-if="!instances.length">暂无网关实例</strong>
+      <strong v-else>无匹配结果</strong>
+      <p v-if="!instances.length">点击「新建实例」或「导入 JSON」开始管理监听实例。</p>
+      <p v-else>请调整搜索或筛选条件。</p>
+      <div v-if="!instances.length" class="cta">
+        <button class="primary" type="button" :disabled="!has(Perm.INSTANCES_WRITE)" @click="openCreate">新建实例</button>
+        <button type="button" :disabled="!has(Perm.INSTANCES_WRITE)" @click="importInput?.click()">导入 JSON</button>
+      </div>
+      <div v-else class="cta">
+        <button type="button" class="ghost" @click="clearFilters">清除筛选</button>
+      </div>
     </div>
 
     <div v-else class="card-grid">
@@ -359,9 +411,9 @@ async function onImportFile(ev: Event) {
     />
 
     <div v-if="showCreate" class="overlay" @click.self="showCreate = false">
-      <form class="dialog" @submit.prevent="submitCreate">
+      <form class="dialog" role="dialog" aria-modal="true" aria-labelledby="create-inst-title" @submit.prevent="submitCreate">
         <header>
-          <h2>新建网关实例</h2>
+          <h2 id="create-inst-title">新建网关实例</h2>
           <button type="button" @click="showCreate = false">关闭</button>
         </header>
         <p class="muted">提交后写入控制面 H2，并绑定 ProtocolAdapter；enabled 时自动启动监听。</p>
@@ -444,44 +496,49 @@ async function onImportFile(ev: Event) {
 </template>
 
 <style scoped>
-.toolbar { display: flex; justify-content: space-between; gap: 1rem; align-items: flex-start; margin-bottom: 0.75rem; flex-wrap: wrap; }
-.actions { display: flex; flex-wrap: wrap; gap: 0.5rem; }
-.lead { color: var(--text-muted); margin: 0; max-width: 48rem; }
+.toolbar { display: flex; justify-content: space-between; gap: 1rem; align-items: flex-start; margin-bottom: 0.85rem; flex-wrap: wrap; }
+.actions { display: flex; flex-wrap: wrap; gap: 0.45rem; }
+.lead { color: var(--text-muted); margin: 0; max-width: 48rem; line-height: 1.5; }
 .filters {
-  display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center;
-  margin-bottom: 1rem; padding: 0.65rem 0.75rem;
-  background: var(--bg-elevated); border: 1px solid var(--border); border-radius: var(--radius);
+  display: flex; flex-wrap: wrap; gap: 0.45rem; align-items: center;
+  margin-bottom: 1rem; padding: 0.7rem 0.8rem;
+  background: var(--bg-elevated); border: 1px solid var(--border); border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
 }
 .search { min-width: 12rem; flex: 1; }
 .err { color: var(--danger); }
-.empty {
-  padding: 2.5rem 1rem; text-align: center; color: var(--text-muted);
-  border: 1px dashed var(--border); border-radius: var(--radius);
-}
 .card-wrap { position: relative; display: flex; flex-direction: column; gap: 0.35rem; }
-.sel { position: absolute; top: 0.65rem; left: 0.65rem; z-index: 2; }
-.card-extra { display: flex; gap: 0.35rem; padding: 0 0.25rem; }
+.sel {
+  position: absolute; top: 0.75rem; left: 0.75rem; z-index: 2;
+  background: color-mix(in srgb, var(--bg-card) 85%, transparent);
+  border-radius: 4px; padding: 0.1rem;
+}
+.card-extra { display: flex; gap: 0.35rem; padding: 0 0.15rem; }
 .overlay {
-  position: fixed; inset: 0; background: rgba(0,0,0,0.5);
+  position: fixed; inset: 0; background: var(--bg-overlay);
   display: grid; place-items: center; z-index: 45; padding: 1rem;
+  backdrop-filter: blur(3px);
 }
 .dialog {
   width: min(640px, 100%);
   background: var(--bg-elevated);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 1.25rem;
-  box-shadow: var(--shadow);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-xl);
+  padding: 1.25rem 1.3rem;
+  box-shadow: var(--shadow-lg);
+  max-height: min(90vh, 900px);
+  overflow: auto;
 }
-.dialog header { display: flex; justify-content: space-between; align-items: center; }
-.dialog h2 { margin: 0; }
+.dialog header { display: flex; justify-content: space-between; align-items: center; gap: 0.75rem; }
+.dialog h2 { margin: 0; font-size: 1.1rem; letter-spacing: -0.02em; }
 .muted { color: var(--text-muted); font-size: 0.85rem; }
-.tiny { font-size: 0.75rem; }
-.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem 1rem; margin-top: 0.75rem; }
+.tiny { font-size: 0.72rem; }
+.grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0.55rem 0.9rem; margin-top: 0.75rem; }
 .check { display: flex; align-items: center; gap: 0.5rem; margin: 0.75rem 0 1rem; color: var(--text-muted); }
 .check.inline { margin: 0; }
 .check input { width: auto; }
 footer { display: flex; justify-content: flex-end; gap: 0.5rem; }
 .mode-hint { margin: 0.35rem 0 0; display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; }
-@media (max-width: 640px) { .grid2 { grid-template-columns: 1fr; } }
+.filter-count { margin-left: auto; }
+@media (max-width: 640px) { .grid2 { grid-template-columns: 1fr; } .filter-count { margin-left: 0; } }
 </style>

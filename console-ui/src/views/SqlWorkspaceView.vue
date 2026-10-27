@@ -21,6 +21,7 @@ import type {
   SqlSnippet,
   SqlStatementResult,
 } from '../api/types'
+import SqlSessionsPanel from '../components/SqlSessionsPanel.vue'
 
 const { has } = usePermissions()
 const toast = inject<(m: string) => void>('toast', () => {})
@@ -82,7 +83,7 @@ const expandedTables = ref<
 const history = ref<SqlHistoryEntry[]>([])
 const snippets = ref<SqlSnippet[]>([])
 const snippetName = ref('')
-const sidePanel = ref<'tree' | 'history' | 'snippets'>('tree')
+const sidePanel = ref<'tree' | 'history' | 'snippets' | 'sessions'>('tree')
 
 const selected = computed(() => instances.value.find((i) => i.id === instanceId.value) || null)
 
@@ -301,6 +302,11 @@ async function cancelRunning() {
   }
 }
 
+/** Panel cancelled our own in-flight run → unblock the editor too. */
+function onPanelCancelled(executionId: string) {
+  if (executionId === currentExecutionId.value) abortController?.abort()
+}
+
 function runExplain() {
   const db = (selected.value?.dbType || '').toLowerCase()
   const sql = (activeTab.value?.sql || '').trim().replace(/;$/, '')
@@ -318,7 +324,12 @@ function runExplain() {
 function onKey(e: KeyboardEvent) {
   if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
     e.preventDefault()
-    run()
+    const ta = e.target as HTMLTextAreaElement | null
+    const selected =
+      ta && typeof ta.selectionStart === 'number' && ta.selectionStart !== ta.selectionEnd
+        ? ta.value.slice(ta.selectionStart, ta.selectionEnd).trim()
+        : ''
+    run(selected || undefined)
   }
 }
 
@@ -415,7 +426,7 @@ onMounted(async () => {
   <div class="sql-ide">
     <p class="lead">
       SQL IDE 挂在<strong>网关实例</strong>上：执行经<strong>代理 listenPort</strong>（脱敏/观测/风控生效）；
-      左侧对象树为<strong>直连目标 JDBC 元数据</strong>。多语句（;）· 取消（尽力而为）· 多 Tab · 历史 · 片段 · 导出 · EXPLAIN。
+      左侧对象树为<strong>直连目标 JDBC 元数据</strong>；「会话」页区分<strong>工作台执行中</strong>与<strong>代理会话</strong>。多语句（;）· 取消（尽力而为）· 多 Tab · 历史 · 片段 · 导出 · EXPLAIN。
     </p>
 
     <div class="bar">
@@ -435,13 +446,13 @@ onMounted(async () => {
         <input v-model.number="maxRows" type="number" min="1" max="1000" />
       </label>
       <button class="primary" :disabled="running || !instanceId || !has(Perm.SQL_EXECUTE)" :title="!has(Perm.SQL_EXECUTE) ? '需要 sql:execute' : ''" @click="run()">
-        {{ running ? '执行中…' : '运行 (Ctrl/⌘+Enter)' }}
+        {{ running ? '执行中…' : '运行 (Ctrl/⌘+Enter · 选区优先)' }}
       </button>
       <button
         v-if="running"
         type="button"
         class="danger-btn"
-        :disabled="!currentExecutionId"
+        :disabled="!currentExecutionId || !has(Perm.SQL_EXECUTE)"
         @click="cancelRunning"
       >
         取消
@@ -467,9 +478,19 @@ onMounted(async () => {
           <button type="button" :class="{ on: sidePanel === 'tree' }" @click="sidePanel = 'tree'">对象树</button>
           <button type="button" :class="{ on: sidePanel === 'history' }" @click="sidePanel = 'history'">历史</button>
           <button type="button" :class="{ on: sidePanel === 'snippets' }" @click="sidePanel = 'snippets'">片段</button>
+          <button type="button" :class="{ on: sidePanel === 'sessions' }" @click="sidePanel = 'sessions'">会话</button>
         </div>
 
-        <div v-if="sidePanel === 'tree'" class="panel">
+        <div v-if="sidePanel === 'sessions'" class="panel">
+          <SqlSessionsPanel
+            :instance-id="instanceId"
+            :instance-running="selected?.status === 'RUNNING'"
+            :local-execution-id="currentExecutionId"
+            @cancelled="onPanelCancelled"
+          />
+        </div>
+
+        <div v-else-if="sidePanel === 'tree'" class="panel">
           <div class="panel-head">
             <span>Schema</span>
             <button class="link" type="button" :disabled="!instanceId || catalogLoading" @click="loadCatalog">
@@ -477,8 +498,15 @@ onMounted(async () => {
             </button>
           </div>
           <p v-if="catalogError" class="err tiny">{{ catalogError }}</p>
-          <p v-else-if="!catalog" class="muted tiny">选择实例后加载对象树</p>
-          <ul v-else class="tree">
+          <div v-else-if="!catalog" class="empty-mini">
+            <strong>尚未加载对象树</strong>
+            <p class="muted tiny">选择网关实例后自动加载；也可手动刷新。</p>
+          </div>
+          <div v-else-if="catalog && !(catalog.tables || []).length" class="empty-mini">
+            <strong>无表对象</strong>
+            <p class="muted tiny">目标库可能为空，或元数据不可见（权限/驱动限制）。</p>
+          </div>
+          <ul v-else-if="catalog && (catalog.tables || []).length" class="tree">
             <li v-for="(tables, schema) in tablesBySchema" :key="String(schema)">
               <button
                 class="tree-node"
@@ -639,78 +667,111 @@ onMounted(async () => {
 </template>
 
 <style scoped>
-.lead { color: var(--text-muted); max-width: 56rem; }
+.sql-ide { display: flex; flex-direction: column; gap: 0.15rem; }
+.lead { color: var(--text-muted); max-width: 56rem; line-height: 1.55; margin: 0 0 0.5rem; }
 .bar {
-  display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: flex-end;
-  margin: 1rem 0; padding: 0.75rem;
-  background: var(--bg-elevated); border: 1px solid var(--border); border-radius: var(--radius);
+  display: flex; flex-wrap: wrap; gap: 0.65rem; align-items: flex-end;
+  margin: 0.65rem 0 0.5rem; padding: 0.75rem 0.85rem;
+  background: var(--bg-elevated); border: 1px solid var(--border); border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
 }
-.bar label { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.8rem; color: var(--text-muted); }
+.bar label { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.75rem; color: var(--text-muted); font-weight: 600; }
 .bar select { min-width: 18rem; }
 .bar input[type='number'] { width: 6rem; }
-.ide-grid { display: grid; grid-template-columns: 260px 1fr; gap: 0.75rem; min-height: 28rem; }
+.ide-grid { display: grid; grid-template-columns: 280px 1fr; gap: 0.75rem; min-height: 28rem; }
 @media (max-width: 960px) { .ide-grid { grid-template-columns: 1fr; } }
 .side {
-  border: 1px solid var(--border); border-radius: var(--radius);
-  background: var(--bg-elevated); display: flex; flex-direction: column; max-height: 70vh;
+  border: 1px solid var(--border); border-radius: var(--radius-lg);
+  background: var(--bg-card); display: flex; flex-direction: column; max-height: 72vh;
+  box-shadow: var(--shadow-sm); overflow: hidden;
 }
-.side-tabs { display: flex; border-bottom: 1px solid var(--border); }
+.side-tabs { display: flex; border-bottom: 1px solid var(--border); background: var(--bg-elevated); }
 .side-tabs button {
-  flex: 1; padding: 0.45rem; background: transparent; border: 0; color: var(--text-muted); cursor: pointer;
+  flex: 1; padding: 0.5rem 0.35rem; background: transparent; border: 0; border-radius: 0;
+  color: var(--text-muted); cursor: pointer; font-size: 0.75rem; font-weight: 600;
 }
-.side-tabs button.on { color: var(--text); background: var(--accent-soft, rgba(59,130,246,.15)); }
-.panel { padding: 0.5rem; overflow: auto; flex: 1; }
-.panel-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.35rem; }
+.side-tabs button.on {
+  color: var(--text); background: var(--accent-soft);
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+.panel { padding: 0.55rem 0.6rem; overflow: auto; flex: 1; }
+.panel-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.4rem; font-size: 0.8rem; font-weight: 600; }
 .tree, .cols, .list { list-style: none; padding: 0; margin: 0; }
 .tree ul { list-style: none; padding-left: 0.85rem; margin: 0; }
 .tree-node, .tree-link, .list-item, .link {
   background: none; border: 0; color: var(--text); cursor: pointer; text-align: left;
+  border-radius: var(--radius-xs);
 }
-.tree-node, .tree-link { padding: 0.15rem 0; font-size: 0.82rem; }
+.tree-node, .tree-link { padding: 0.18rem 0.2rem; font-size: 0.8rem; }
 .tree-row { display: flex; gap: 0.15rem; align-items: center; }
-.tree-link:hover, .list-item:hover { color: var(--accent, #3b82f6); }
-.list-item { display: flex; flex-direction: column; gap: 0.15rem; width: 100%; padding: 0.35rem 0; }
+.tree-link:hover, .list-item:hover { color: var(--accent-hover); background: var(--accent-soft); }
+.list-item { display: flex; flex-direction: column; gap: 0.15rem; width: 100%; padding: 0.4rem 0.35rem; }
 .sql-preview {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 0.72rem; color: var(--text-muted);
-  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 220px;
+  font-family: var(--font-mono);
+  font-size: 0.7rem; color: var(--text-muted);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 240px;
 }
 .snippet-save { display: flex; gap: 0.35rem; margin-bottom: 0.5rem; }
 .snippet-save input { flex: 1; }
 .snippet-row { display: flex; gap: 0.25rem; align-items: flex-start; }
-.tabs { display: flex; flex-wrap: wrap; gap: 0.25rem; margin-bottom: 0.35rem; }
-.tab {
-  padding: 0.35rem 0.65rem; border: 1px solid var(--border); border-radius: 6px 6px 0 0;
-  background: var(--bg-elevated); color: var(--text-muted); cursor: pointer;
+.main {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-card);
+  padding: 0.65rem 0.75rem 0.85rem;
+  box-shadow: var(--shadow-sm);
+  min-width: 0;
 }
-.tab.on { background: var(--bg-card); color: var(--text); border-bottom-color: var(--bg-card); }
+.tabs { display: flex; flex-wrap: wrap; gap: 0.25rem; margin-bottom: 0.4rem; }
+.tab {
+  padding: 0.38rem 0.7rem; border: 1px solid var(--border); border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  background: var(--bg-elevated); color: var(--text-muted); cursor: pointer; font-size: 0.78rem;
+}
+.tab.on { background: var(--bg-input); color: var(--text); border-bottom-color: var(--bg-input); box-shadow: inset 0 2px 0 var(--accent); }
 .tab .x { margin-left: 0.35rem; opacity: 0.6; }
 .tab.add { min-width: 2rem; }
 .editor {
-  width: 100%; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  font-size: 0.9rem; line-height: 1.45; padding: 0.75rem;
-  background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius);
-  color: var(--text); resize: vertical;
+  width: 100%; font-family: var(--font-mono);
+  font-size: 0.875rem; line-height: 1.5; padding: 0.8rem 0.85rem;
+  background: var(--bg-input); border: 1px solid var(--border); border-radius: var(--radius);
+  color: var(--text); resize: vertical; min-height: 12rem;
 }
-.err { color: var(--danger, #ef4444); margin-top: 0.5rem; }
-.meta { margin: 0.5rem 0; }
-.result { margin-top: 1rem; }
-.result-head { display: flex; flex-wrap: wrap; gap: 0.75rem; margin-bottom: 0.5rem; font-size: 0.85rem; }
-.warn { color: #f59e0b; }
-.ok-tag { color: #10b981; font-size: 0.8rem; }
-.table-wrap { overflow: auto; max-height: 28rem; border: 1px solid var(--border); border-radius: var(--radius); }
-table { border-collapse: collapse; width: 100%; font-size: 0.85rem; }
-th, td { border-bottom: 1px solid var(--border); padding: 0.4rem 0.6rem; text-align: left; white-space: nowrap; }
-th { background: var(--bg-elevated); position: sticky; top: 0; }
-.null { color: var(--text-muted); font-style: italic; }
+.editor:focus { outline: none; border-color: var(--border-focus); box-shadow: 0 0 0 3px var(--accent-ring); }
+.err { color: var(--danger); margin-top: 0.5rem; }
+.meta { margin: 0.35rem 0 0.5rem; font-size: 0.8rem; }
+.result { margin-top: 0.85rem; }
+.result-head { display: flex; flex-wrap: wrap; gap: 0.65rem; margin-bottom: 0.5rem; font-size: 0.8rem; align-items: center; }
+.warn { color: var(--warn); }
+.ok-tag { color: var(--ok); font-size: 0.78rem; font-weight: 600; }
+.table-wrap {
+  overflow: auto; max-height: 28rem;
+  border: 1px solid var(--border); border-radius: var(--radius);
+  background: var(--bg-input);
+}
+table { border-collapse: collapse; width: 100%; font-size: 0.8rem; }
+th, td { border-bottom: 1px solid var(--border); padding: 0.42rem 0.65rem; text-align: left; white-space: nowrap; }
+th {
+  background: var(--bg-elevated); position: sticky; top: 0; z-index: 1;
+  color: var(--text-muted); font-size: 0.72rem; font-weight: 650;
+}
+.null { color: var(--text-faint); font-style: italic; }
 .muted { color: var(--text-muted); }
-.tiny { font-size: 0.75rem; }
-.link.danger { color: var(--danger, #ef4444); }
+.tiny { font-size: 0.72rem; }
+.link.danger { color: var(--danger); }
 .danger-btn {
-  background: var(--danger, #ef4444); color: #fff; border: 0; border-radius: 6px;
-  padding: 0.45rem 0.85rem; cursor: pointer;
+  background: var(--danger); color: #fff; border: 0; border-radius: var(--radius-sm);
+  padding: 0.45rem 0.85rem; cursor: pointer; font-weight: 600;
 }
 .danger-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 .result-tabs { display: flex; flex-wrap: wrap; gap: 0.25rem; margin: 0.5rem 0; }
-.tab-err { color: var(--danger, #ef4444) !important; }
+.tab-err { color: var(--danger) !important; }
+.empty-mini {
+  padding: 0.85rem 0.5rem;
+  text-align: center;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  margin: 0.35rem 0;
+}
+.empty-mini strong { display: block; font-size: 0.8rem; color: var(--text-secondary); margin-bottom: 0.25rem; }
+
 </style>

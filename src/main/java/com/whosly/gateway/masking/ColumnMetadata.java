@@ -41,6 +41,8 @@ public record ColumnMetadata(
         TEMPORAL,
         BOOLEAN,
         BINARY,
+        /** PostgreSQL {@code uuid} and similar fixed-shape identifiers. */
+        UUID,
         OTHER
     }
 

@@ -76,16 +76,39 @@ class MySQLBinaryValuesTest {
     }
 
     @Test
-    void refusesTypesWhoseBinaryLayoutIsNotReproduced() {
-        assertThatThrownBy(() -> MySQLBinaryValues.encode(column("price", "decimal"), text("0")))
+    void writesDecimalAsLengthEncodedAscii() {
+        // NEWDECIMAL on the wire is ASCII text, not packed BCD.
+        assertThat(MySQLBinaryValues.encode(column("price", "decimal"), text("0")))
+                .containsExactly(0x01, '0');
+        assertThat(MySQLBinaryValues.encode(column("price", "decimal"), text("12.50")))
+                .containsExactly(0x05, '1', '2', '.', '5', '0');
+        assertThatThrownBy(() -> MySQLBinaryValues.encode(column("price", "decimal"), text("***")))
                 .isInstanceOf(MaskingException.class)
-                .hasMessageContaining("Packed decimal");
-        for (String typeName : new String[]{"datetime", "timestamp", "date", "time", "geometry"}) {
-            assertThatThrownBy(() -> MySQLBinaryValues.encode(column("column", typeName), text("0")))
-                    .as("binary %s", typeName)
-                    .isInstanceOf(MaskingException.class)
-                    .hasMessageContaining("cannot carry a non-null masked value");
-        }
+                .hasMessageContaining("not a decimal literal");
+    }
+
+    @Test
+    void writesDateTimeAndTimeBinaryValues() {
+        assertThat(MySQLBinaryValues.encode(column("d", "date"), text("2010-10-17")))
+                .containsExactly(4, 0xDA, 0x07, 0x0A, 0x11);
+        assertThat(MySQLBinaryValues.encode(column("dt", "datetime"), text("2010-10-17 19:27:30")))
+                .containsExactly(7, 0xDA, 0x07, 0x0A, 0x11, 0x13, 0x1B, 0x1E);
+        assertThat(MySQLBinaryValues.encode(column("ts", "timestamp"), text("2010-10-17T19:27:30.000001")))
+                .containsExactly(11, 0xDA, 0x07, 0x0A, 0x11, 0x13, 0x1B, 0x1E, 0x01, 0x00, 0x00, 0x00);
+        assertThat(MySQLBinaryValues.encode(column("t", "time"), text("19:27:30")))
+                .containsExactly(8, 0, 0, 0, 0, 0, 0x13, 0x1B, 0x1E);
+        assertThat(MySQLBinaryValues.encode(column("t", "time"), text("-120 19:27:30.000001")))
+                .containsExactly(12, 1, 0x78, 0, 0, 0, 0x13, 0x1B, 0x1E, 1, 0, 0, 0);
+    }
+
+    @Test
+    void refusesGeometryAndMalformedTemporalMasks() {
+        assertThatThrownBy(() -> MySQLBinaryValues.encode(column("g", "geometry"), text("0")))
+                .isInstanceOf(MaskingException.class)
+                .hasMessageContaining("cannot carry a non-null masked value");
+        assertThatThrownBy(() -> MySQLBinaryValues.encode(column("d", "date"), text("not-a-date")))
+                .isInstanceOf(MaskingException.class)
+                .hasMessageContaining("not a date");
     }
 
     @Test

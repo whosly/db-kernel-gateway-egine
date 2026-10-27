@@ -10,6 +10,8 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * The type table of MySQL's binary protocol: how wide each type is on the wire, and
@@ -47,12 +49,10 @@ public final class MySQLBinaryValues {
     /**
      * Types carried as a length-encoded string.
      *
-     * <p>{@code decimal} is here because a packed-decimal value is length-prefixed like
-     * a string; its contents are not reproducible, so it can be read but not rewritten.
-     * {@code bit} is length-prefixed like a blob and <em>can</em> be rewritten as raw
-     * length-encoded bytes. The row parser still verifies that it consumed the payload
-     * exactly, which is what keeps this reading of the layout checkable rather than
-     * assumed.</p>
+     * <p>{@code decimal}/{@code NEWDECIMAL} is ASCII text on the wire (not the
+     * on-disk packed BCD), so a masked decimal string rewrites like varchar.
+     * {@code bit} is length-prefixed like a blob and can be rewritten as raw
+     * length-encoded bytes.</p>
      */
     private static final Set<String> LENGTH_ENCODED_TYPES = Set.of(
             "varchar", "varbinary_or_varchar", "binary_or_char", "tinyblob", "mediumblob",
@@ -61,6 +61,18 @@ public final class MySQLBinaryValues {
     /** Types prefixed by one byte giving the length of what follows. */
     private static final Set<String> LENGTH_BYTE_PREFIXED_TYPES = Set.of(
             "date", "datetime", "timestamp", "time");
+
+    private static final Pattern DECIMAL_PATTERN =
+            Pattern.compile("^[+-]?(?:\\d+(?:\\.\\d*)?|\\.\\d+)$");
+
+    private static final Pattern DATE_PATTERN =
+            Pattern.compile("^(\\d{4})-(\\d{2})-(\\d{2})$");
+
+    private static final Pattern DATETIME_PATTERN = Pattern.compile(
+            "^(\\d{4})-(\\d{2})-(\\d{2})(?:[ T](\\d{2}):(\\d{2}):(\\d{2})(?:\\.(\\d{1,6}))?)?$");
+
+    private static final Pattern TIME_PATTERN = Pattern.compile(
+            "^(-)?(?:(\\d+) )?(\\d{1,3}):(\\d{2}):(\\d{2})(?:\\.(\\d{1,6}))?$");
 
     private MySQLBinaryValues() {
     }
@@ -127,11 +139,11 @@ public final class MySQLBinaryValues {
 
         String typeName = column.typeName();
         if (LENGTH_ENCODED_TYPES.contains(typeName)) {
+            byte[] masked = value.bytes();
             if ("decimal".equals(typeName)) {
-                throw new MaskingException("Packed decimal values cannot be rewritten: column " + column.name());
+                masked = encodeDecimalText(masked, column.name());
             }
             ByteArrayOutputStream encoded = new ByteArrayOutputStream();
-            byte[] masked = value.bytes();
             MySQLTextRow.writeLength(encoded, masked.length);
             encoded.writeBytes(masked);
             return encoded.toByteArray();
@@ -144,8 +156,160 @@ public final class MySQLBinaryValues {
         if (floatingPoint != null) {
             return encodeFloatingPoint(floatingPoint, value.bytes(), column.name());
         }
+        if ("date".equals(typeName)) {
+            return encodeDate(value.bytes(), column.name());
+        }
+        if ("datetime".equals(typeName) || "timestamp".equals(typeName)) {
+            return encodeDateTime(value.bytes(), column.name());
+        }
+        if ("time".equals(typeName)) {
+            return encodeTime(value.bytes(), column.name());
+        }
         throw new MaskingException("Binary values of type " + typeName
                 + " cannot carry a non-null masked value: column " + column.name());
+    }
+
+    /**
+     * NEWDECIMAL on the wire is ASCII (not packed BCD). Reject masks that are not
+     * a decimal literal so a text rule cannot push {@code ****} into a numeric column.
+     */
+    private static byte[] encodeDecimalText(byte[] masked, String columnName) {
+        String text = new String(masked, StandardCharsets.US_ASCII).trim();
+        if (!DECIMAL_PATTERN.matcher(text).matches()) {
+            throw new MaskingException("Masked value is not a decimal literal, so it cannot be written to column "
+                    + columnName);
+        }
+        return text.getBytes(StandardCharsets.US_ASCII);
+    }
+
+    private static byte[] encodeDate(byte[] masked, String columnName) {
+        String text = new String(masked, StandardCharsets.US_ASCII).trim();
+        Matcher matcher = DATE_PATTERN.matcher(text);
+        if (!matcher.matches()) {
+            throw new MaskingException("Masked value is not a date, so it cannot be written to column "
+                    + columnName);
+        }
+        int year = Integer.parseInt(matcher.group(1));
+        int month = Integer.parseInt(matcher.group(2));
+        int day = Integer.parseInt(matcher.group(3));
+        if (year == 0 && month == 0 && day == 0) {
+            return new byte[]{0};
+        }
+        return new byte[]{
+                4,
+                (byte) (year & 0xFF), (byte) ((year >> 8) & 0xFF),
+                (byte) month,
+                (byte) day
+        };
+    }
+
+    private static byte[] encodeDateTime(byte[] masked, String columnName) {
+        String text = new String(masked, StandardCharsets.US_ASCII).trim();
+        Matcher matcher = DATETIME_PATTERN.matcher(text);
+        if (!matcher.matches()) {
+            throw new MaskingException("Masked value is not a datetime, so it cannot be written to column "
+                    + columnName);
+        }
+        int year = Integer.parseInt(matcher.group(1));
+        int month = Integer.parseInt(matcher.group(2));
+        int day = Integer.parseInt(matcher.group(3));
+        int hour = groupOrZero(matcher, 4);
+        int minute = groupOrZero(matcher, 5);
+        int second = groupOrZero(matcher, 6);
+        int micro = parseMicros(matcher.group(7));
+        if (year == 0 && month == 0 && day == 0 && hour == 0 && minute == 0 && second == 0 && micro == 0) {
+            return new byte[]{0};
+        }
+        if (hour == 0 && minute == 0 && second == 0 && micro == 0) {
+            return new byte[]{
+                    4,
+                    (byte) (year & 0xFF), (byte) ((year >> 8) & 0xFF),
+                    (byte) month,
+                    (byte) day
+            };
+        }
+        if (micro == 0) {
+            return new byte[]{
+                    7,
+                    (byte) (year & 0xFF), (byte) ((year >> 8) & 0xFF),
+                    (byte) month,
+                    (byte) day,
+                    (byte) hour,
+                    (byte) minute,
+                    (byte) second
+            };
+        }
+        byte[] encoded = new byte[12];
+        encoded[0] = 11;
+        encoded[1] = (byte) (year & 0xFF);
+        encoded[2] = (byte) ((year >> 8) & 0xFF);
+        encoded[3] = (byte) month;
+        encoded[4] = (byte) day;
+        encoded[5] = (byte) hour;
+        encoded[6] = (byte) minute;
+        encoded[7] = (byte) second;
+        encoded[8] = (byte) (micro & 0xFF);
+        encoded[9] = (byte) ((micro >> 8) & 0xFF);
+        encoded[10] = (byte) ((micro >> 16) & 0xFF);
+        encoded[11] = (byte) ((micro >> 24) & 0xFF);
+        return encoded;
+    }
+
+    private static byte[] encodeTime(byte[] masked, String columnName) {
+        String text = new String(masked, StandardCharsets.US_ASCII).trim();
+        Matcher matcher = TIME_PATTERN.matcher(text);
+        if (!matcher.matches()) {
+            throw new MaskingException("Masked value is not a time, so it cannot be written to column "
+                    + columnName);
+        }
+        boolean negative = matcher.group(1) != null;
+        int days = matcher.group(2) == null ? 0 : Integer.parseInt(matcher.group(2));
+        int hour = Integer.parseInt(matcher.group(3));
+        int minute = Integer.parseInt(matcher.group(4));
+        int second = Integer.parseInt(matcher.group(5));
+        int micro = parseMicros(matcher.group(6));
+        if (!negative && days == 0 && hour == 0 && minute == 0 && second == 0 && micro == 0) {
+            return new byte[]{0};
+        }
+        if (micro == 0) {
+            return new byte[]{
+                    8,
+                    (byte) (negative ? 1 : 0),
+                    (byte) (days & 0xFF), (byte) ((days >> 8) & 0xFF),
+                    (byte) ((days >> 16) & 0xFF), (byte) ((days >> 24) & 0xFF),
+                    (byte) hour,
+                    (byte) minute,
+                    (byte) second
+            };
+        }
+        byte[] encoded = new byte[13];
+        encoded[0] = 12;
+        encoded[1] = (byte) (negative ? 1 : 0);
+        encoded[2] = (byte) (days & 0xFF);
+        encoded[3] = (byte) ((days >> 8) & 0xFF);
+        encoded[4] = (byte) ((days >> 16) & 0xFF);
+        encoded[5] = (byte) ((days >> 24) & 0xFF);
+        encoded[6] = (byte) hour;
+        encoded[7] = (byte) minute;
+        encoded[8] = (byte) second;
+        encoded[9] = (byte) (micro & 0xFF);
+        encoded[10] = (byte) ((micro >> 8) & 0xFF);
+        encoded[11] = (byte) ((micro >> 16) & 0xFF);
+        encoded[12] = (byte) ((micro >> 24) & 0xFF);
+        return encoded;
+    }
+
+    private static int groupOrZero(Matcher matcher, int group) {
+        String value = matcher.group(group);
+        return value == null ? 0 : Integer.parseInt(value);
+    }
+
+    private static int parseMicros(String fraction) {
+        if (fraction == null || fraction.isEmpty()) {
+            return 0;
+        }
+        String padded = (fraction + "000000").substring(0, 6);
+        return Integer.parseInt(padded);
     }
 
     private static byte[] encodeInteger(String typeName, int width, byte[] masked, String columnName) {

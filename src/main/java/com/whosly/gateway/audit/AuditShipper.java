@@ -5,6 +5,7 @@ import org.slf4j.LoggerFactory;
 
 import java.nio.ByteBuffer;
 import java.nio.file.Files;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -12,6 +13,8 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.atomic.AtomicReference;
 
 /** Periodically ships spool records to a final destination. */
 public final class AuditShipper implements AutoCloseable {
@@ -24,6 +27,9 @@ public final class AuditShipper implements AutoCloseable {
     private final int batchSize;
     private final long intervalMillis;
     private final AtomicBoolean running = new AtomicBoolean(false);
+    private final AtomicLong totalShipped = new AtomicLong();
+    private final AtomicReference<Instant> lastShipAt = new AtomicReference<>();
+    private final AtomicReference<String> lastError = new AtomicReference<>();
     private final ScheduledExecutorService scheduler =
             Executors.newSingleThreadScheduledExecutor(r -> {
                 Thread t = new Thread(r, "audit-shipper");
@@ -49,10 +55,35 @@ public final class AuditShipper implements AutoCloseable {
         return running.get() && !scheduler.isShutdown();
     }
 
+    public AuditDestination destination() {
+        return destination;
+    }
+
+    public long totalShipped() {
+        return totalShipped.get();
+    }
+
+    public Instant lastShipAt() {
+        return lastShipAt.get();
+    }
+
+    public String lastError() {
+        return lastError.get();
+    }
+
+    public long shippingOffset() {
+        try {
+            return offset.get();
+        } catch (Exception e) {
+            return -1L;
+        }
+    }
+
     private void shipSafely() {
         try {
             shipOnce();
         } catch (Exception e) {
+            lastError.set(e.getClass().getSimpleName() + ": " + safeMsg(e));
             log.warn("Audit shipper cycle failed: {}", e.toString());
         }
     }
@@ -83,6 +114,18 @@ public final class AuditShipper implements AutoCloseable {
         }
         destination.writeBatch(batch);
         offset.set(start + batch.size());
+        totalShipped.addAndGet(batch.size());
+        lastShipAt.set(Instant.now());
+        lastError.set(null);
+    }
+
+    private static String safeMsg(Throwable e) {
+        String m = e.getMessage();
+        if (m == null) {
+            return "";
+        }
+        m = m.replaceAll("(?i)password=[^\\s,;]+", "password=***");
+        return m.length() > 160 ? m.substring(0, 160) + "…" : m;
     }
 
     @Override
@@ -92,6 +135,7 @@ public final class AuditShipper implements AutoCloseable {
         try {
             shipOnce();
         } catch (Exception e) {
+            lastError.set(e.getClass().getSimpleName() + ": " + safeMsg(e));
             log.debug("Final audit ship failed: {}", e.toString());
         }
     }

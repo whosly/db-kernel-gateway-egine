@@ -7,6 +7,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Repository;
 
 import java.sql.ResultSet;
@@ -56,6 +57,7 @@ public class ConsoleInstanceStore implements PersistedInstanceStore {
     private final ConsoleSecretCipher cipher;
     private final RowMapper<PersistedInstance> rowMapper;
 
+    @Autowired
     public ConsoleInstanceStore(JdbcTemplate jdbc, ConsoleSecretCipher cipher) {
         this.jdbc = Objects.requireNonNull(jdbc, "jdbc");
         this.cipher = Objects.requireNonNull(cipher, "cipher");

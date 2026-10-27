@@ -14,7 +14,7 @@
 | 5 | （可选）审计 | `gateway.audit.enabled=true`；生产建议独立盘与 `destination` |
 | 6 | （可选）明文强制 | 需审计时设 `gateway.require-cleartext-inspection=true`（或随审计默认） |
 | 6b | （可选）TLS 终止 | `gateway.tls.enabled=true` + `keystore-path`（PKCS12/JKS）；客户端从首字节 TLS；密码用环境变量 |
-| 6c | （可选）后端连接池 | `gateway.pool.enabled=true`；可选 `gateway.pool.reset-mode=protocol`（MySQL COM_RESET_CONNECTION / PG DISCARD ALL）；默认 `none` |
+| 6c | （可选）后端连接池 | `gateway.pool.enabled=true`；可选 `gateway.pool.reset-mode=protocol`（MySQL COM_RESET_CONNECTION / PG DISCARD ALL / SQL Server sp_reset_connection）；默认 `none` |
 | 6d | （可选）按库/用户路由 | `gateway.routing.enabled=true` + `rules`（`match-database` / `match-username` + `endpoints`）；**PG** cleartext Startup 首连生效；**MySQL** 首连仍 fallback（server-first）；未命中回退 `target`/`backend-endpoints`；默认关 |
 | 7 | （可选）风控拒绝清单 | `gateway.risk.denied-operations` / `denied-statement-keywords` |
 | 8 | （可选）交互 CLI | 仅调试：`gateway.cli.interactive=true`（会读 `System.in`） |
@@ -73,7 +73,7 @@
 
 ## SQL Server 本地实验室（可选）
 
-> 计划与阶段见 [`SQLSERVER_TDS_PLAN.md`](SQLSERVER_TDS_PLAN.md)。P0 透明中继 + P1-lite 明文 Login7/SQL_BATCH 观测；**勿**把生产 SA 密码写入已提交文件。
+> 计划与阶段见 [`SQLSERVER_TDS_PLAN.md`](SQLSERVER_TDS_PLAN.md)。P0 透明中继 + P1 观测/拒绝 + P2 partial（ROW 脱敏 text/guid、RPC/Bulk 观测、`sp_reset_connection`）；**勿**把生产 SA 密码写入已提交文件。
 >
 > 管控台 SQL 工作台：实例 RUNNING 后，JDBC 经网关 **31433**（或实例 listenPort）执行；依赖 `mssql-jdbc`（默认已打包）。
 
@@ -86,7 +86,17 @@
 | 本地 Docker 示例 SA | `Aa123456.`（含末尾点号；与本机 MySQL/PG lab 习惯一致） |
 | 生产 | 另行配置；环境变量 / 密钥管理，**不**提交 git |
 
-若 SA 复杂度策略拒绝 `Aa123456.`，可改用 `Aa123456!` 并只改本地 `application-dev.yml`。本仓库执行环境默认 **不**自动 `docker run`。
+若 SA 复杂度策略拒绝 `Aa123456.`，可改用 `Aa123456!` 并只改本地 `application-dev.yml`。本仓库执行环境默认 **不**自动 `docker run`（本环境无 `docker`/`podman`）。
+
+```bash
+# 可选真库（宿主 11433）
+docker compose --profile sqlserver up -d
+# 集成冒烟（需 integration-test-local.properties）：
+#   integration.enabled=true
+#   integration.sqlserver.password=Aa123456.
+mvn -Pintegration-test test -Dtest=SqlServerGatewayIntegrationTest
+```
+
 
 
 ## 管控台鉴权与 HTTPS（实验室）
@@ -125,6 +135,15 @@ mvn spring-boot:run -Dspring-boot.run.profiles=dev
 ```
 
 相关文件：`docker-compose.keycloak.yml`、`deploy/keycloak/realm-gateway.json`、`deploy/keycloak/README.md`、`application-oidc-keycloak-template.yml`。
+
+自动化：`ConsoleOidcKeycloakLabArtifactsTest`（默认 `mvn test`）校验 realm/compose/模板；有 Docker 时：
+
+```bash
+docker compose -f docker-compose.keycloak.yml up -d
+mvn -Pintegration-test test -Dtest=ConsoleOidcKeycloakBrowserE2EIntegrationTest
+```
+
+该 E2E 覆盖 OIDC discovery、lab password grant（`console-admin`）与 authorize 登录页；完整人工点选管控台「使用 SSO 登录」仍按上面浏览器步骤。无 Docker 的环境会 `assumeTrue` skip（不失败）。
 
 **STATUS**：实验室 Compose + 文档就绪；真联调在有 Docker 的机器上。本环境若无 Docker，仅验证配置 / beans / 单测。
 
@@ -169,15 +188,33 @@ mvn spring-boot:run -Dspring-boot.run.profiles=dev
 
 协议代理客户端 TLS 终止仍用 `gateway.tls.*`，与管控台 HTTPS 无关。
 
-## 管控台浏览流量审计（spool / 环）
+## 管控台浏览流量审计（spool / 环 / JDBC）
 
-- 状态（非密钥）：`GET /console/api/audit/status`
-- **内容浏览**：`GET /console/api/audit/spool?limit=50&source=auto|ring|spool|jdbc`
+- 状态（非密钥）：`GET /console/api/v1/audit/status`
+  - `destination=jdbc` 时额外返回 `jdbcRowCount` / `jdbcLastShipAt` / `shipOffset` / `shipLastError`（**无密码**）
+- **内容浏览**：`GET /console/api/v1/audit/traffic?limit=50&source=auto|ring|spool|jdbc`
   - lab 默认：`source=ring` 或 `auto` 回退到进程内最近语句（重启丢失）
   - 开启 `gateway.audit.enabled=true` 后可读本地 spool 分段；**不**推进 ship offset
-  - `destination=jdbc` 且配置了 `gateway.audit.jdbc.url` 时可只读审计表（须已建表，见 `docs/sql/audit-sink-schema.sql`）
-- 管控操作审计仍用：`GET /console/api/audit`（H2，与流量 spool 分离）
-- UI：运维页「审计」Tabs
+  - `destination=jdbc` 且配置了 `gateway.audit.jdbc.url` 时可只读审计表
+- 管控操作审计仍用：`GET /console/api/v1/audit/operations`（H2，与流量 spool 分离）
+- UI：运维页「审计」Tabs；destination=jdbc 时状态区展示 sink 行数 / 最近搬运
+
+## 审计 JDBC sink 一路径（实验室 H2，无 Docker）
+
+> 审计库必须与**被代理业务库**分离；也建议与管控台 `gateway-console` H2 **分文件**。
+
+1. 复制模板片段：`src/main/resources/application-audit-jdbc-h2-template.yml` 合并进本地 `application-dev.yml`（gitignore），或启动时：
+   ```bash
+   mvn spring-boot:run -Dspring-boot.run.profiles=dev \
+     -Dspring-boot.run.arguments=--spring.config.additional-location=optional:classpath:/application-audit-jdbc-h2-template.yml
+   ```
+2. 关键配置要点：`gateway.audit.enabled=true`、`destination=jdbc`、`jdbc.url=jdbc:h2:file:./data/gateway-audit-sink;…`
+3. 启动后网关对 H2 **自动 `CREATE TABLE IF NOT EXISTS`**（见 `JdbcAuditDestination.ensureSchema`；DDL 亦载于 `docs/sql/audit-sink-schema.sql`）。
+4. 产生流量：启动实例后用 SQL 工作台经代理口执行，或任意客户端连 listenPort。
+5. 验证：
+   - `GET /console/api/v1/audit/status` → `shipperRunning=true`，`jdbcRowCount` 增长
+   - 管控台 **运维 → 流量 / spool 审计 → 来源 JDBC sink**
+6. **诚实边界**：默认 `mvn test` 用内存/临时 H2 断言行数（`JdbcAuditDestinationTest`）；生产 MySQL/PG sink 需自备库；**不是**把审计写入业务库。
 
 ## 列加密（脱敏密钥）
 

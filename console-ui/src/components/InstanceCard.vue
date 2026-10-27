@@ -35,13 +35,22 @@ async function probe() {
 </script>
 
 <template>
-  <article class="card" @click="$emit('open')">
+  <article
+    class="card interactive-card"
+    role="button"
+    tabindex="0"
+    @click="$emit('open')"
+    @keydown.enter="$emit('open')"
+  >
     <header>
-      <div>
+      <div class="titles">
         <h3>{{ instance.name }}</h3>
-        <div class="id">{{ instance.id }}</div>
+        <div class="id mono">{{ instance.id }}</div>
       </div>
-      <span class="badge" :class="'status-' + instance.status">{{ instance.status }}</span>
+      <span class="badge" :class="'status-' + instance.status">
+        <span class="status-dot" />
+        {{ instance.status }}
+      </span>
     </header>
     <div class="meta">
       <span class="badge">{{ instance.dbType }}</span>
@@ -52,7 +61,7 @@ async function probe() {
         :title="instance.proxyMode || ''"
       >{{ instance.proxyModeLabel }}</span>
       <span class="badge">{{ instance.source === 'console' ? '管控台' : 'YAML' }}</span>
-      <span class="port">{{ instance.listenHost }}:{{ instance.listenPort }}</span>
+      <span class="port mono">{{ instance.listenHost }}:{{ instance.listenPort }}</span>
       <span
         v-if="instance.status === 'RUNNING'"
         class="badge"
@@ -63,7 +72,7 @@ async function probe() {
         :class="health.ok ? 'ok' : 'bad'"
       >{{ health.ok ? '后端可达' : '后端不可达' }}</span>
     </div>
-    <p class="msg">{{ instance.message }}</p>
+    <p class="msg">{{ instance.message || '—' }}</p>
     <footer @click.stop>
       <button
         class="primary"
@@ -89,19 +98,60 @@ async function probe() {
 .card {
   background: var(--bg-card);
   border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 1rem;
+  border-radius: var(--radius-lg);
+  padding: 1rem 1.05rem 0.95rem;
   cursor: pointer;
-  transition: border-color 0.15s;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  box-shadow: var(--shadow-sm);
 }
-.card:hover { border-color: var(--accent); }
-header { display: flex; justify-content: space-between; gap: 0.5rem; }
-h3 { margin: 0; font-size: 1.05rem; }
-.id { color: var(--text-muted); font-size: 0.75rem; margin-top: 0.15rem; }
-.meta { display: flex; flex-wrap: wrap; gap: 0.4rem; margin: 0.75rem 0; align-items: center; }
-.port { color: var(--text-muted); font-size: 0.85rem; }
-.msg { color: var(--text-muted); font-size: 0.85rem; min-height: 2.4em; }
-footer { display: flex; gap: 0.5rem; flex-wrap: wrap; }
-.badge.ok { background: #1b5e20; color: #c8e6c9; }
-.badge.bad { background: #b71c1c; color: #ffcdd2; }
+header {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.65rem;
+  align-items: flex-start;
+}
+h3 {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+.id {
+  color: var(--text-faint);
+  font-size: 0.72rem;
+  margin-top: 0.2rem;
+}
+.meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  align-items: center;
+}
+.port {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+.msg {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+  min-height: 2.2em;
+  margin: 0;
+  line-height: 1.4;
+}
+footer {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  margin-top: auto;
+  padding-top: 0.25rem;
+}
+.status-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  display: inline-block;
+}
 </style>

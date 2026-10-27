@@ -17,6 +17,7 @@ export const Perm = {
   METRICS_READ: 'metrics:read',
   SCHEMA_READ: 'schema:read',
   CONFIG_READ: 'config:read',
+  ACL_MANAGE: 'acl:manage',
 } as const
 
 export type Permission = (typeof Perm)[keyof typeof Perm]

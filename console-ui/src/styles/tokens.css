@@ -1,18 +1,150 @@
-:root {
-  --bg: #0f1419;
-  --bg-elevated: #1a2332;
-  --bg-card: #1e2a3a;
-  --border: #2d3a4d;
-  --text: #e7ecf3;
-  --text-muted: #8b9bb4;
-  --accent: #3b82f6;
-  --accent-soft: rgba(59, 130, 246, 0.15);
-  --ok: #22c55e;
-  --warn: #eab308;
-  --danger: #ef4444;
-  --info: #38bdf8;
-  --radius: 10px;
-  --shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
-  --font: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
-  --sidebar-w: 220px;
+/* 管控台设计令牌 · 浅色默认 + 深色可选（data-theme） */
+
+:root,
+[data-theme="light"] {
+  color-scheme: light;
+
+  /* Surfaces */
+  --bg: #f4f6fa;
+  --bg-elevated: #ffffff;
+  --bg-card: #ffffff;
+  --bg-hover: #eef2f7;
+  --bg-input: #ffffff;
+  --bg-overlay: rgba(15, 23, 42, 0.45);
+  --bg-sidebar: #f8fafc;
+  --bg-topbar: rgba(255, 255, 255, 0.86);
+
+  /* Borders & dividers */
+  --border: #e2e8f0;
+  --border-strong: #cbd5e1;
+  --border-focus: #3b82f6;
+
+  /* Text */
+  --text: #0f172a;
+  --text-secondary: #334155;
+  --text-muted: #64748b;
+  --text-faint: #94a3b8;
+
+  /* Brand / accent */
+  --accent: #2563eb;
+  --accent-hover: #3b82f6;
+  --accent-pressed: #1d4ed8;
+  --accent-soft: rgba(37, 99, 235, 0.1);
+  --accent-ring: rgba(37, 99, 235, 0.28);
+
+  /* Semantic */
+  --ok: #059669;
+  --ok-soft: rgba(5, 150, 105, 0.12);
+  --warn: #d97706;
+  --warn-soft: rgba(217, 119, 6, 0.12);
+  --danger: #dc2626;
+  --danger-soft: rgba(220, 38, 38, 0.1);
+  --info: #0284c7;
+  --info-soft: rgba(2, 132, 199, 0.1);
+
+  /* Severity chips (alerts) */
+  --sev-crit-bg: #fef2f2;
+  --sev-crit-fg: #991b1b;
+  --sev-warn-bg: #fffbeb;
+  --sev-warn-fg: #92400e;
+  --sev-info-bg: #eff6ff;
+  --sev-info-fg: #1e40af;
+
+  /* Shape */
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-pill: 999px;
+
+  /* Elevation */
+  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.06);
+  --shadow: 0 8px 24px rgba(15, 23, 42, 0.08);
+  --shadow-lg: 0 18px 40px rgba(15, 23, 42, 0.12);
+  --shadow-drawer: -12px 0 40px rgba(15, 23, 42, 0.12);
+
+  /* Ambient (body) */
+  --ambient-1: rgba(37, 99, 235, 0.06);
+  --ambient-2: rgba(5, 150, 105, 0.04);
+
+  /* Typography */
+  --font: "Inter", "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "Cascadia Code", "Menlo", "Consolas", monospace;
+  --fs-xs: 0.72rem;
+  --fs-sm: 0.8125rem;
+  --fs: 0.875rem;
+  --fs-md: 0.9375rem;
+  --fs-lg: 1.125rem;
+  --fs-xl: 1.35rem;
+  --lh: 1.5;
+
+  /* Layout */
+  --sidebar-w: 232px;
+  --topbar-h: 52px;
+  --content-max: 1440px;
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.25rem;
+  --space-6: 1.5rem;
+  --space-8: 2rem;
+
+  /* Motion */
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --dur: 150ms;
+  --dur-slow: 220ms;
+}
+
+[data-theme="dark"] {
+  color-scheme: dark;
+
+  --bg: #0b0f14;
+  --bg-elevated: #111821;
+  --bg-card: #151d28;
+  --bg-hover: #1a2433;
+  --bg-input: #0e141c;
+  --bg-overlay: rgba(4, 8, 14, 0.62);
+  --bg-sidebar: #0e141c;
+  --bg-topbar: rgba(11, 15, 20, 0.78);
+
+  --border: #243041;
+  --border-strong: #334155;
+  --border-focus: #5b8def;
+
+  --text: #e8eef7;
+  --text-secondary: #c2cddc;
+  --text-muted: #8b9bb0;
+  --text-faint: #64748b;
+
+  --accent: #4f8cff;
+  --accent-hover: #6ba0ff;
+  --accent-pressed: #3b74e0;
+  --accent-soft: rgba(79, 140, 255, 0.14);
+  --accent-ring: rgba(79, 140, 255, 0.35);
+
+  --ok: #34d399;
+  --ok-soft: rgba(52, 211, 153, 0.14);
+  --warn: #fbbf24;
+  --warn-soft: rgba(251, 191, 36, 0.14);
+  --danger: #f87171;
+  --danger-soft: rgba(248, 113, 113, 0.14);
+  --info: #67e8f9;
+  --info-soft: rgba(103, 232, 249, 0.12);
+
+  --sev-crit-bg: #7f1d1d;
+  --sev-crit-fg: #fecaca;
+  --sev-warn-bg: #78350f;
+  --sev-warn-fg: #fde68a;
+  --sev-info-bg: #1e3a5f;
+  --sev-info-fg: #bfdbfe;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.28);
+  --shadow: 0 8px 28px rgba(0, 0, 0, 0.38);
+  --shadow-lg: 0 18px 48px rgba(0, 0, 0, 0.5);
+  --shadow-drawer: -12px 0 40px rgba(0, 0, 0, 0.45);
+
+  --ambient-1: rgba(79, 140, 255, 0.07);
+  --ambient-2: rgba(52, 211, 153, 0.04);
 }

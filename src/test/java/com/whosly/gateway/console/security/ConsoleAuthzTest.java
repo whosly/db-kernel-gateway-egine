@@ -5,11 +5,22 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.beans.factory.ObjectProvider;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 import static com.whosly.gateway.console.security.ConsolePermission.*;
 import static org.assertj.core.api.Assertions.assertThat;
 
 class ConsoleAuthzTest {
+
+    @SuppressWarnings("unchecked")
+    private static ConsoleAuthz authz(AuthMode mode) {
+        ObjectProvider<InstanceAclService> op = mock(ObjectProvider.class);
+        when(op.getIfAvailable()).thenReturn(null);
+        return new ConsoleAuthz(mode, op);
+    }
+
 
     @AfterEach
     void clear() {
@@ -18,7 +29,7 @@ class ConsoleAuthzTest {
 
     @Test
     void openModeAlwaysGrants() {
-        ConsoleAuthz authz = new ConsoleAuthz(AuthMode.OPEN);
+        ConsoleAuthz authz = authz(AuthMode.OPEN);
         SecurityContextHolder.clearContext();
         assertThat(authz.has(SECURITY_KEYS)).isTrue();
         assertThat(authz.has(INSTANCES_DELETE)).isTrue();
@@ -26,7 +37,7 @@ class ConsoleAuthzTest {
 
     @Test
     void viewerCannotPutKeysOrDeleteInstance() {
-        ConsoleAuthz authz = new ConsoleAuthz(AuthMode.FORM);
+        ConsoleAuthz authz = authz(AuthMode.FORM);
         SecurityContextHolder.getContext().setAuthentication(
                 new UsernamePasswordAuthenticationToken(
                         "viewer", "N/A",
@@ -39,7 +50,7 @@ class ConsoleAuthzTest {
 
     @Test
     void operatorCanStartButNotKeys() {
-        ConsoleAuthz authz = new ConsoleAuthz(AuthMode.FORM);
+        ConsoleAuthz authz = authz(AuthMode.FORM);
         SecurityContextHolder.getContext().setAuthentication(
                 new UsernamePasswordAuthenticationToken(
                         "operator", "N/A",
@@ -52,7 +63,7 @@ class ConsoleAuthzTest {
 
     @Test
     void adminCanKeys() {
-        ConsoleAuthz authz = new ConsoleAuthz(AuthMode.FORM);
+        ConsoleAuthz authz = authz(AuthMode.FORM);
         SecurityContextHolder.getContext().setAuthentication(
                 new UsernamePasswordAuthenticationToken(
                         "admin", "N/A",

@@ -59,11 +59,136 @@ class SqlServerDatabaseEventExtractorTest {
     }
 
     @Test
-    void ignoresTargetToClientDirection() {
+    void observesErrorTokenFromTargetTabularResult() {
+        SqlServerSession session = new SqlServerSession("sqlserver-test-3");
+        SqlServerDatabaseEventExtractor extractor =
+                new SqlServerDatabaseEventExtractor("SQLServer", session.getConnectionId(), session);
+
+        byte[] error = TdsErrorToken.encode(208, 1, 16, "Invalid object name 'nope'", "mssql");
+        byte[] done = TdsDoneToken.encodeErrorFinal();
+        byte[] payload = new byte[error.length + done.length];
+        System.arraycopy(error, 0, payload, 0, error.length);
+        System.arraycopy(done, 0, payload, error.length, done.length);
+        byte[] packet = CODEC.packet(TdsPacketType.TABULAR_RESULT.getCode(), payload, 1);
+
+        List<DatabaseTrafficEvent> events =
+                extractor.inspect(TrafficDirection.TARGET_TO_CLIENT, packet, 0, packet.length);
+
+        assertThat(events).hasSize(1);
+        assertThat(events.get(0).getOperation()).isEqualTo("ERROR");
+        assertThat(events.get(0).getStatement()).contains("208").contains("Invalid object name");
+        assertThat(events.get(0).getAttribute("number")).contains("208");
+        assertThat(events.get(0).getAttribute("class")).contains("16");
+        assertThat(events.get(0).getAttribute("server")).contains("mssql");
+        assertThat(session.getLastErrorNumber()).contains(208);
+        assertThat(session.getLastErrorMessage()).contains("Invalid object name 'nope'");
+    }
+
+    @Test
+    void ignoresNonTabularTargetPackets() {
         SqlServerDatabaseEventExtractor extractor =
                 new SqlServerDatabaseEventExtractor("SQLServer", "s", new SqlServerSession("s"));
-        byte[] packet = CODEC.packet(TdsPacketType.TABULAR_RESULT.getCode(), new byte[]{1, 2}, 1);
+        byte[] packet = CODEC.packet(TdsPacketType.PRELOGIN.getCode(), new byte[]{1, 2}, 1);
         assertThat(extractor.inspect(TrafficDirection.TARGET_TO_CLIENT, packet, 0, packet.length))
                 .isEmpty();
     }
+
+    @Test
+    void observesAttentionAndDoneAttnAckOnSameSession() {
+        SqlServerSession session = new SqlServerSession("sqlserver-attn-1");
+        SqlServerDatabaseEventExtractor extractor =
+                new SqlServerDatabaseEventExtractor("SQLServer", session.getConnectionId(), session);
+
+        byte[] attention = CODEC.packet(TdsPacketType.ATTENTION.getCode(), new byte[0], 1);
+        List<DatabaseTrafficEvent> attnEvents =
+                extractor.inspect(TrafficDirection.CLIENT_TO_TARGET, attention, 0, attention.length);
+
+        assertThat(attnEvents).hasSize(1);
+        assertThat(attnEvents.get(0).getOperation()).isEqualTo("ATTENTION");
+        assertThat(attnEvents.get(0).getAttribute("sameConnection")).contains("true");
+        assertThat(session.isAttentionRequested()).isTrue();
+        assertThat(session.isAttentionAcknowledged()).isFalse();
+
+        byte[] doneAttn = TdsDoneToken.encodeAttentionAck();
+        byte[] tabular = CODEC.packet(TdsPacketType.TABULAR_RESULT.getCode(), doneAttn, 1);
+        List<DatabaseTrafficEvent> ackEvents =
+                extractor.inspect(TrafficDirection.TARGET_TO_CLIENT, tabular, 0, tabular.length);
+
+        assertThat(ackEvents).hasSize(1);
+        assertThat(ackEvents.get(0).getOperation()).isEqualTo("ATTENTION_ACK");
+        assertThat(ackEvents.get(0).getStatement()).isEqualTo("DONE_ATTN");
+        assertThat(session.isAttentionRequested()).isFalse();
+        assertThat(session.isAttentionAcknowledged()).isTrue();
+        assertThat(session.getAttribute("last.attention.ack")).contains("true");
+    }
+
+    @Test
+    void login7EventCarriesRoutingHintWithoutDrivingAcquire() {
+        SqlServerSession session = new SqlServerSession("sqlserver-hint-1");
+        SqlServerDatabaseEventExtractor extractor =
+                new SqlServerDatabaseEventExtractor("SQLServer", session.getConnectionId(), session);
+
+        byte[] loginPayload = Login7ObservationTest.buildLogin7Payload("routeuser", "routedb", "app", "host");
+        byte[] packet = CODEC.packet(TdsPacketType.TDS7_LOGIN.getCode(), loginPayload, 1);
+        List<DatabaseTrafficEvent> events =
+                extractor.inspect(TrafficDirection.CLIENT_TO_TARGET, packet, 0, packet.length);
+
+        assertThat(events).hasSize(1);
+        assertThat(events.get(0).getAttribute("routingHint")).isPresent();
+        assertThat(events.get(0).getAttribute("routingHint").get()).contains("routeuser").contains("routedb");
+        assertThat(session.getAttribute("routing.hint")).isPresent();
+        // Would-be acquire context only — transparent probe stays empty (PreLogin first).
+        assertThat(SqlServerLogin7Routing.fromLogin7Payload(loginPayload).username()).contains("routeuser");
+    }
+
+    @Test
+    void observesRpcNameAsEvent() {
+        SqlServerSession session = new SqlServerSession("sqlserver-rpc-1");
+        SqlServerDatabaseEventExtractor extractor =
+                new SqlServerDatabaseEventExtractor("SQLServer", session.getConnectionId(), session);
+        byte[] name = "sp_who".getBytes(StandardCharsets.UTF_16LE);
+        ByteBuffer payload = ByteBuffer.allocate(4 + 2 + name.length + 2).order(ByteOrder.LITTLE_ENDIAN);
+        payload.putInt(4);
+        payload.putShort((short) (name.length / 2));
+        payload.put(name);
+        payload.putShort((short) 0);
+        byte[] packet = CODEC.packet(TdsPacketType.RPC.getCode(), payload.array(), 1);
+        List<DatabaseTrafficEvent> events =
+                extractor.inspect(TrafficDirection.CLIENT_TO_TARGET, packet, 0, packet.length);
+        assertThat(events).hasSize(1);
+        assertThat(events.get(0).getOperation()).isEqualTo("RPC");
+        assertThat(events.get(0).getStatement()).isEqualTo("sp_who");
+        assertThat(events.get(0).getAttribute("name")).contains("sp_who");
+    }
+
+    @Test
+    void observesBulkLoadAsEvent() {
+        SqlServerSession session = new SqlServerSession("sqlserver-bulk-1");
+        SqlServerDatabaseEventExtractor extractor =
+                new SqlServerDatabaseEventExtractor("SQLServer", session.getConnectionId(), session);
+        byte[] packet = CODEC.packet(TdsPacketType.BULK_LOAD.getCode(), new byte[]{1, 2, 3, 4}, 1);
+        List<DatabaseTrafficEvent> events =
+                extractor.inspect(TrafficDirection.CLIENT_TO_TARGET, packet, 0, packet.length);
+        assertThat(events).hasSize(1);
+        assertThat(events.get(0).getOperation()).isEqualTo("BULK_LOAD");
+        assertThat(events.get(0).getAttribute("payloadBytes")).contains("4");
+    }
+
+    @Test
+    void tracksColMetadataAndRowFlagsForMasking() {
+        SqlServerSession session = new SqlServerSession("sqlserver-meta-1");
+        SqlServerDatabaseEventExtractor extractor =
+                new SqlServerDatabaseEventExtractor("SQLServer", session.getConnectionId(), session);
+        byte[] payload = TdsTestFrames.concat(
+                TdsTestFrames.nvarcharColumnMeta("email", 40, true),
+                TdsTestFrames.nvarcharRow("a@b.c"),
+                TdsTestFrames.doneFinal());
+        byte[] packet = CODEC.packet(TdsPacketType.TABULAR_RESULT.getCode(), payload, 1);
+        extractor.inspect(TrafficDirection.TARGET_TO_CLIENT, packet, 0, packet.length);
+        assertThat(extractor.currentTdsColumns()).hasSize(1);
+        assertThat(extractor.currentTdsColumns().get(0).name()).isEqualTo("email");
+        assertThat(extractor.lastTargetMessageContainedRow()).isTrue();
+        assertThat(extractor.lastTargetMessageContainedNbcRow()).isFalse();
+    }
+
 }

@@ -49,9 +49,9 @@ class PostgreSQLColumnMetadataTest {
                 .isEqualTo(ColumnMetadata.Category.NUMERIC);
         assertThat(PostgreSQLColumnMetadata.categoryOf(PostgreSQLTypeOid.JSONB.getOid()))
                 .isEqualTo(ColumnMetadata.Category.TEXT);
-        // A uuid is text on the wire but not free-form: a text rule must not claim it.
+        // uuid has its own category so free-form text rules do not claim it.
         assertThat(PostgreSQLColumnMetadata.categoryOf(PostgreSQLTypeOid.UUID.getOid()))
-                .isEqualTo(ColumnMetadata.Category.OTHER);
+                .isEqualTo(ColumnMetadata.Category.UUID);
         assertThat(PostgreSQLColumnMetadata.categoryOf(PostgreSQLTypeOid.TEXT_ARRAY.getOid()))
                 .isEqualTo(ColumnMetadata.Category.OTHER);
     }

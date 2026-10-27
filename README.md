@@ -1,6 +1,6 @@
 # 数据库内核网关引擎
 
-基于 **Java 17** 的透明数据库协议网关：客户端连网关端口，网关把 **MySQL / PostgreSQL** wire 流量转发到真实目标库，并在**明文阶段**提供 SQL 观测、可选审计留痕与结果集脱敏等扩展点。第三协议 **SQL Server（TDS）** 为 **P0 透明中继 + P1-lite 明文观测**（Login7/SQL_BATCH；见 [`docs/SQLSERVER_TDS_PLAN.md`](docs/SQLSERVER_TDS_PLAN.md)），**不是**与 MySQL/PostgreSQL 对等的完整观测/脱敏/cancel 实现。
+基于 **Java 17** 的透明数据库协议网关：客户端连网关端口，网关把 **MySQL / PostgreSQL** wire 流量转发到真实目标库，并在**明文阶段**提供 SQL 观测、可选审计留痕与结果集脱敏等扩展点。第三协议 **SQL Server（TDS）** 为 **P0 透明中继 + P1 观测/拒绝 + P2**（ROW/NBCROW 脱敏含 text/guid/numeric/temporal/text·binary-PLP/TEXTPTR/MONEY*/**XML MS-BINXML**/hierarchyid·`0x` UDT；TVP 元数据可解析、单元格仍 DENY；RPC/Bulk 观测、`sp_reset_connection`、**Login7 deferred 身份选路**；见 [`docs/SQLSERVER_TDS_PLAN.md`](docs/SQLSERVER_TDS_PLAN.md)），**不是**与 MySQL/PostgreSQL 全对等（TVP 单元格 / 非安全 CLR / 未知仍 fail-closed；ENCRYPTION 路径不看 Login7）。
 
 > 网关不伪造握手能力、不校验也不保存客户端明文密码；认证与结果由目标库完成。  
 > 能力边界以本 README「功能清单」与 [`docs/STATUS_AND_GAPS.md`](docs/STATUS_AND_GAPS.md) 为准——规划中的能力不会写成「已实现」。
@@ -14,7 +14,7 @@
 - [配置说明](#配置说明)
 - [快速开始 · MySQL](#快速开始--mysql)
 - [快速开始 · PostgreSQL](#快速开始--postgresql)
-- [快速开始 · SQL Server（P0）](#快速开始--sql-serverp0)
+- [快速开始 · SQL Server（P0 + P1 + P2）](#快速开始--sql-serverp0--p1--p2)
 - [构建与测试](#构建与测试)
 - [演示](#演示)
 - [审计与脱敏](#审计与脱敏)
@@ -27,7 +27,7 @@
 
 | 项 | 本分支（`future/database-wire-protocol-foundation`） |
 |---|---|
-| 默认单元测试 | **436** 条全绿（JDK 17；`pom` 排除 `*IntegrationTest`；以 STATUS §1 为准） |
+| 默认单元测试 | **694** 条全绿（JDK 17；`pom` 排除 `*IntegrationTest`；以 STATUS §1 为准） |
 | 真库集成 `-Pintegration-test` | **14 / 14** 全绿（2026-09-24，本地 Docker MySQL `:13308` + PostgreSQL `:5432`） |
 | JDK / 编译 | `pom` 目标 **17**；虚拟线程经 `VirtualThreadExecutors` **反射**在 JDK 21+ 启用，JDK 17 回退平台线程池（STATUS P0-1） |
 | 核心数据路径 | 透明代理、查询/结果、预处理、错误透传、脱敏 happy path、PG `COPY` — **已在集成中 live-proven** |
@@ -59,18 +59,18 @@
 | 大包重组 / 流式识别 | **已实现** | MySQL 大包；`LOAD DATA LOCAL` / PG `COPY` 期间不解析命令 |
 | PG `COPY` 流转发 | **已实现** | 集成 live-proven |
 | 结果集脱敏（happy path） | **已接线·默认关** | 无 `MaskingRule` 时逐字节透明；有规则时 fail-closed 改写；文本/常见二进制 happy path 集成 live-proven |
-| 结果集脱敏（类型边界） | **部分** | decimal/时间/`geometry`/未知类型等非空改写常拒绝；MySQL `bit` 与 PG 整数/bool/浮点二进制可改写；见 STATUS §4.2 |
+| 结果集脱敏（类型边界） | **部分** | MySQL：`bit`/`decimal`/date/time/datetime/timestamp；PG：int/bool/float/`numeric`/date/time/timestamp/timestamptz/`uuid`；SQL Server：ROW/NBCROW text/guid/numeric/temporal/text·binary-PLP/TEXTPTR/MONEY*/XML(BINXML)/hierarchyid·`0x` UDT；geometry/interval/money/timetz/非安全 CLR/TVP 单元格/未知仍拒绝；见 STATUS §4.2 |
 | 审计 spool / JDBC 搬运 | **已接线·默认关** | fail-closed；P0-3 专用单测已补；真库 JDBC 验收仍属集成 |
 | 连接上限 / CIDR / idle | **已实现** | `max-connections`、`allowed-client-cidrs`、`idle-timeout-seconds` |
-| 后端 failover / 路由 | **部分** | `backend-endpoints` 顺序 failover；可选 `gateway.routing.*` 按库名/用户/权重（默认关；协议无关） |
+| 后端 failover / 路由 | **部分** | `backend-endpoints` 顺序 failover；可选 `gateway.routing.*` 按库名/用户/权重（默认关）；PG 首包 peek；MySQL deferred AuthSwitch 换绑；SQL Server Login7 deferred 静默 PreLogin 换绑（ENCRYPTION 停 bootstrap） |
 | PG Cancel | **部分** | `CancelRequest` 与 `BackendKeyData` **仅关联索引**；**不代发** cancel；MySQL `COM_PROCESS_KILL` 透传 |
 | 风控策略 | **部分** | `DenyListDatabaseRiskPolicy` 可配置拒绝清单；空配置默认 `allowAll()` |
 | TLS / 压缩 | **部分** | 默认 opaque / 可选拒绝；**可选 TLS 终止**（`gateway.tls.*`，协议无关）；压缩后仍 opaque |
 | NIO 事件驱动 | **未实现** | 阻塞 socket + 每连接线程（可选虚拟线程） |
-| 连接池化 | **已接线·默认关** | `gateway.pool.enabled`；`reset-mode=none\|protocol`；protocol=MySQL `COM_RESET_CONNECTION` / PG `DISCARD ALL` |
+| 连接池化 | **已接线·默认关** | `gateway.pool.enabled`；`reset-mode=none|protocol`；protocol=MySQL `COM_RESET_CONNECTION` / PG `DISCARD ALL` / SQL Server `sp_reset_connection` |
 | Actuator / HTTP 指标出口 | **已接线·内存计数** | `/gateway/metrics` + `/actuator/gateway`；无远程 Micrometer |
 | 非交互启动 | **已实现** | `Application` 自动 start；`gateway.cli.interactive` 默认 false |
-| SQL Server（TDS）透明中继 | **部分（P0 + P1-lite）** | `SqlServerProtocolAdapter` 注册 `sqlserver`/`mssql`；双工字节转发 + TDS framing；**明文** Login7/SQL_BATCH 观测（非路由）。**无** 脱敏 / Attention cancel / 深 token / 协议 reset / 真库集成证明。计划：[`docs/SQLSERVER_TDS_PLAN.md`](docs/SQLSERVER_TDS_PLAN.md) |
+| SQL Server（TDS）透明中继 | **部分（P0+P1+P2）** | 双工 + Login7/SQL_BATCH/ERROR/Attention/RPC/Bulk 观测 + 网关 ERROR+DONE；**ROW/NBCROW 脱敏**（text/guid/numeric/temporal + text/binary PLP + TEXTPTR + MONEY*；**XML MS-BINXML**；**hierarchyid/`0x` UDT**；TVP 元数据可解析、单元格仍 fail-closed）；**`sp_reset_connection`**；**Login7 deferred 选路**。Compose `sqlserver` profile + integration harness（无 Docker skip）。计划：[`docs/SQLSERVER_TDS_PLAN.md`](docs/SQLSERVER_TDS_PLAN.md) |
 | Oracle | **未实现** | stub：`gateway.proxy-db-type=oracle` 启动失败并提示 |
 
 > 主流代理在数据平面上也不靠「跨线程共享可变协议状态」保证正确——本仓库同样让每条连接的协议状态在任一时刻只属于一个执行体。
@@ -78,9 +78,11 @@
 ### 结果集脱敏边界（摘要）
 
 - **一列一规则**；未命中列保持原值；元数据不全或无法表示改写值 → **拒绝结果集**。
-- MySQL：文本行 + 预处理二进制行（长度前缀类型、常见整数/浮点、`bit`）；`decimal`/时间/`geometry`/未知类型的非空改写拒绝。
-- PostgreSQL：文本格式 + 可复现二进制（`text`/`bytea`/`json(b)`、`int2/4/8`、`bool`、`float4/8`）；`numeric`/时间/`uuid`/未知 OID 的非空改写拒绝；置 NULL 对任意类型可用。
+- MySQL：文本行 + 预处理二进制行（长度前缀类型、常见整数/浮点、`bit`、**decimal** ASCII、**date/time/datetime/timestamp**）；`geometry`/未知类型的非空改写拒绝。
+- PostgreSQL：文本格式 + 可复现二进制（`text`/`bytea`/`json(b)`、`int2/4/8`、`bool`、`float4/8`、**numeric**、**date/time/timestamp/timestamptz**、**uuid**）；`interval`/`money`/`timetz`/未知 OID 的非空改写拒绝；置 NULL 对任意类型可用。
+- SQL Server（TDS）：**ROW/NBCROW**；**nvarchar/nchar/varchar/char**（含 MAX/PLP）、**uniqueidentifier**、**INT*/FLOAT*/BIT*/DECIMALN/NUMERICN**、**DATEN/TIMEN/DATETIME2N/DATETIMEOFFSETN/DATETIM***、**MONEY*/MONEY4/MONEYN**、**TEXT/NTEXT/IMAGE（TEXTPTR）**、**VARBINARY/BINARY（含 MAX）**、**XML（MS-BINXML）**、**UDT hierarchyid / `0x` hex**；**TVP 单元格**、非安全 CLR、未知仍拒绝。
 - `NullingRule` **只匹配可空列**：MySQL 字面量列常为 `NOT NULL`，置 NULL 规则不会生效——需固定值/哈希/加密等。
+- 规则策略 ↔ 列类别：`null` 全类别；`fixed` → TEXT/NUMERIC/TEMPORAL/UUID；`partial`/`hash` → TEXT/UUID（UUID 保持 `8-4-4-4-12`）；`encrypt` **仅 TEXT**。
 
 细节以代码为准；排期缺口见 STATUS（P1-5）。
 
@@ -93,7 +95,7 @@
 4. 设置 `gateway.proxy-db-type=mydb`。池/TLS/路由等治理由基类继承，无需改 `PooledBackendProvider` / `RoutingBackendProvider`。
 5. 身份感知路由：在 `acquire` 前填充 `RoutingContext`（database/username）；未填充时走默认 failover 列表。
 
-内置：`mysql`、`postgresql`（别名 `postgres`）、`sqlserver`（别名 `mssql`，**P0 中继 + P1-lite 观测**）。预留 stub：`oracle` — 选择后启动失败并提示未实现。SQL Server 阶段见 [`docs/SQLSERVER_TDS_PLAN.md`](docs/SQLSERVER_TDS_PLAN.md)。
+内置：`mysql`、`postgresql`（别名 `postgres`）、`sqlserver`（别名 `mssql`，**P0+P1+P2**）。预留 stub：`oracle` — 选择后启动失败并提示未实现。SQL Server 阶段见 [`docs/SQLSERVER_TDS_PLAN.md`](docs/SQLSERVER_TDS_PLAN.md)。
 
 ### 启用协议 reset
 
@@ -118,7 +120,7 @@ gateway:
         endpoints: hostR:3306
 ```
 
-组合顺序：**Routing → Pool → Failover/Fixed**。`routing.enabled=false`（默认）时行为与仅 failover 相同。Oracle / SQL Server 适配器填充同一 `RoutingContext` 即可复用。
+组合顺序：**Routing → Pool → Failover/Fixed**。`routing.enabled=false`（默认）时行为与仅 failover 相同。PostgreSQL 首包 peek；MySQL / SQL Server 在有规则时走 deferred 身份选路（填充同一 `RoutingContext`）。
 
 
 ## 端口速查
@@ -232,9 +234,9 @@ psql client -> gateway:35433 -> target postgresql (:5432 等)
 ![PostgreSQL gateway flow](assets/postgresql-gateway-flow.gif)
 
 
-## 快速开始 · SQL Server（P0 + P1-lite 观测）
+## 快速开始 · SQL Server（P0 + P1 + P2）
 
-> **诚实边界**：可启动的透明 TDS 双工中继 + **明文** Login7/SQL_BATCH 观测；**不是** MySQL/PG 对等产品（无结果集脱敏、无 Attention/cancel、无深 token、无协议 reset、Login7 不参与路由）。阶段见 [`docs/SQLSERVER_TDS_PLAN.md`](docs/SQLSERVER_TDS_PLAN.md)。
+> **诚实边界**：透明 TDS 双工 + 明文观测 + ROW/NBCROW 脱敏（text/guid/numeric/temporal/text·binary-PLP/TEXTPTR/MONEY*/XML/hierarchyid·`0x` UDT）+ `sp_reset_connection` + Login7 deferred 选路；**不是** MySQL/PG 全对等（TVP 单元格 / 非安全 CLR / 未知仍 fail-closed；ENCRYPTION 不 peek Login7）。阶段见 [`docs/SQLSERVER_TDS_PLAN.md`](docs/SQLSERVER_TDS_PLAN.md)。
 >
 > **管控台 SQL 工作台**：classpath 含 `mssql-jdbc` 时，RUNNING 实例可经 **proxy listenPort** 执行 SQL（与 MySQL/PG 同路径）。
 
@@ -378,7 +380,7 @@ mvn -Pintegration-test test
 |---|---|
 | UI | [http://localhost:8080/console](http://localhost:8080/console)（`server.port` 可改） |
 | 类型目录 API | `GET /console/api/v1/databases` |
-| 实例 API | `GET/POST /console/api/v1/instances`（`?status=&dbType=&q=`）；`PUT /instances/{id}`；`/status|metrics|start|stop`；`POST …/clone`；`POST …/import`；`POST …/bulk` |
+| 实例 API | `GET/POST /console/api/v1/instances`（`?status=&dbType=&q=`）；`PUT /instances/{id}`；`/status|metrics|start|stop`；`POST …/clone`；`POST …/import`；`POST …/bulk-actions` |
 | 会话 | `GET …/instances/{id}/sessions`；`DELETE …/sessions/{connectionId}`（关客户端腿） |
 | 健康探测 | `POST|GET …/instances/{id}/health-check`（TCP + 可选 JDBC，~3s） |
 | 导出 / 导入 | `GET …/instances/export`、`GET …/config/export`（无密码）；`POST …/instances/import` |
@@ -388,15 +390,18 @@ mvn -Pintegration-test test
 | 最近语句 | `GET …/instances/{id}/recent-statements`（内存环，重启丢失） |
 | 脱敏规则 API | `GET/POST/PUT/DELETE /console/api/v1/instances/{id}/masking-rules`（协议无关） |
 | 列提示 | `GET /console/api/v1/instances/{id}/schema/columns?table=`（JDBC metadata；失败 502） |
-| 安全 | `GET/PUT/DELETE /console/api/v1/security/masking-key`；`GET /console/api/v1/audit`（`action`/`limit`） |
+| 安全 | `GET/PUT/DELETE /console/api/v1/security/masking-key`；管控操作审计 `GET /console/api/v1/audit/operations`（`action`/`limit` → `{ items, total }`） |
 | 审计状态 | `GET /console/api/v1/audit/status`（非密钥：enabled/destination/spoolDir/…） |
-| 流量审计内容 | `GET /console/api/v1/audit/spool`（别名 `/audit/records`；ring/spool/可选 jdbc；分页 `before`） |
+| 流量审计内容 | `GET /console/api/v1/audit/traffic`（ring/spool/可选 jdbc；分页 `before`） |
+| 告警阈值 | `GET/POST… /console/api/v1/alerts/thresholds`；当前触发 `GET …/alerts/active`（进程内，非 Prometheus） |
+| 实例 ACL | `GET/PUT …/instances/{id}/acl`；绑定 CRUD；`acl:manage`（ADMIN）；见 CONSOLE_ARCHITECTURE §24 |
+| UI 主题 | 浅色默认；顶栏可切浅色 / 深色 / 跟随系统 |
 | 指标时序 | `GET /console/api/v1/metrics/history?instanceId=&limit=`（进程内环；总览火花图） |
 | 风控 | `GET/PUT /console/api/v1/risk-policy`（H2 覆盖 + 热挂；空=allow-all） |
 | 连接池 | 实例 `metrics`/`status` 含 `pool.{enabled,idleCount,maxIdle}` |
 | 控制面加密 | `gateway.console.secret-key-base64`（32 字节 AES Base64）→ 密码/密钥 `enc:v1:`；缺省实验室明文；生产 `require-secret-encryption=true` 缺钥拒写（503） |
 | 可选 API Token | `gateway.console.api-token`（读写）；`gateway.console.read-token`（仅 GET）；`Authorization: Bearer` 或 `X-Console-Token` |
-| 设计 | [`docs/CONSOLE_ARCHITECTURE.md`](docs/CONSOLE_ARCHITECTURE.md) §11–§15 · [`CONSOLE_DESIGN.md`](docs/CONSOLE_DESIGN.md) |
+| 设计 | [`docs/CONSOLE_ARCHITECTURE.md`](docs/CONSOLE_ARCHITECTURE.md) §11–§26 · [`CONSOLE_API_V1.md`](docs/CONSOLE_API_V1.md) · [`CONSOLE_DESIGN.md`](docs/CONSOLE_DESIGN.md) |
 
 一等实体是 **网关实例**（监听端口 + `dbType` 标签），不是按 MySQL/PG 分拆的控制台。管控台以 `proxyMode`/`proxyModeLabel` 标注能力：**网关代理**（MySQL/PG 协议网关）vs **透明代理**（SQL Server 字节中继）；启停仍走既有 ProtocolAdapter。  
 类型目录（`gateway.catalog`）与实例注册表（`gateway.instances`）分离。  

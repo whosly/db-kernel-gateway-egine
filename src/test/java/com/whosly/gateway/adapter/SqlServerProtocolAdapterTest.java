@@ -1,6 +1,10 @@
 package com.whosly.gateway.adapter;
 
-import com.whosly.gateway.adapter.protocol.BackendSessionReset;
+import com.whosly.gateway.adapter.sqlserver.SqlServerBackendSessionReset;
+import com.whosly.gateway.adapter.protocol.GatewayErrorMapping;
+import com.whosly.gateway.adapter.sqlserver.TdsErrorToken;
+import com.whosly.gateway.adapter.sqlserver.TdsPacketStatus;
+import com.whosly.gateway.adapter.sqlserver.TdsPacketType;
 import org.junit.jupiter.api.Test;
 
 import java.io.InputStream;
@@ -80,12 +84,30 @@ class SqlServerProtocolAdapterTest {
     }
 
     @Test
+    void rejectClientConnectionWritesTdsErrorAndDone() throws Exception {
+        try (SocketPair pair = SocketPair.open()) {
+            SqlServerProtocolAdapter adapter = new SqlServerProtocolAdapter();
+            adapter.rejectClientConnection(pair.serverSide);
+
+            // Read TDS header (8) then remaining payload.
+            byte[] header = readFully(pair.clientSide.getInputStream(), 8);
+            assertThat(header[0] & 0xFF).isEqualTo(TdsPacketType.TABULAR_RESULT.getCode());
+            assertThat(header[1] & 0xFF).isEqualTo(TdsPacketStatus.EOM);
+            int packetLen = ((header[2] & 0xFF) << 8) | (header[3] & 0xFF);
+            byte[] payload = readFully(pair.clientSide.getInputStream(), packetLen - 8);
+            assertThat(TdsErrorToken.tryParse(payload, 0)).isPresent();
+            assertThat(TdsErrorToken.tryParse(payload, 0).get().message())
+                    .isEqualTo(GatewayErrorMapping.RESOURCE_EXHAUSTED.getDescription());
+        }
+    }
+
+    @Test
     void registryResolvesSqlServerAndMssql() {
         ProtocolAdapterRegistry registry = ProtocolAdapterRegistry.withBuiltIns();
         assertThat(registry.create("sqlserver")).isInstanceOf(SqlServerProtocolAdapter.class);
         assertThat(registry.create("mssql")).isInstanceOf(SqlServerProtocolAdapter.class);
-        assertThat(registry.createSessionReset("sqlserver")).isSameAs(BackendSessionReset.NONE);
-        assertThat(registry.createSessionReset("mssql")).isSameAs(BackendSessionReset.NONE);
+        assertThat(registry.createSessionReset("sqlserver")).isInstanceOf(SqlServerBackendSessionReset.class);
+        assertThat(registry.createSessionReset("mssql")).isInstanceOf(SqlServerBackendSessionReset.class);
     }
 
     private static byte[] readFully(InputStream inputStream, int length) throws Exception {

@@ -2,6 +2,7 @@
 import { inject, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { getAuthMode, login } from '../api/consoleApi'
+import ThemeSwitcher from '../components/ThemeSwitcher.vue'
 
 const router = useRouter()
 const refreshAuth = inject<() => Promise<void>>('refreshAuth', async () => {})
@@ -60,53 +61,119 @@ function ssoLogin() {
 
 <template>
   <div class="login">
-    <div class="card">
-      <h1>管控台登录</h1>
-      <p class="muted">{{ hint }}</p>
+    <div class="login-theme">
+      <ThemeSwitcher />
+    </div>
+    <div class="login-card">
+      <div class="brand-row">
+        <div class="mark" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M4 7h16M4 12h16M4 17h10" stroke-linecap="round" />
+            <circle cx="18" cy="17" r="2.5" />
+          </svg>
+        </div>
+        <div>
+          <h1>管控台登录</h1>
+          <p class="sub">数据库网关 · 控制面</p>
+        </div>
+      </div>
+      <p class="hint">{{ hint }}</p>
 
       <template v-if="oidc">
         <button type="button" class="primary sso" @click="ssoLogin">使用 SSO 登录</button>
         <p class="muted tiny">将跳转 {{ ssoLoginUrl }} · 成功后回到 /console/</p>
       </template>
 
-      <form v-else @submit.prevent="submit" class="form">
-        <label>
-          用户名
-          <input v-model="username" autocomplete="username" required />
-        </label>
-        <label>
-          密码
-          <input v-model="password" type="password" autocomplete="current-password" required />
-        </label>
-        <p v-if="error" class="err">{{ error }}</p>
+      <form v-else class="form" @submit.prevent="submit">
+        <div class="field">
+          <label for="login-user">用户名</label>
+          <input id="login-user" v-model="username" autocomplete="username" required />
+        </div>
+        <div class="field">
+          <label for="login-pass">密码</label>
+          <input id="login-pass" v-model="password" type="password" autocomplete="current-password" required />
+        </div>
+        <p v-if="error" class="err" role="alert">{{ error }}</p>
         <button class="primary" :disabled="loading">{{ loading ? '登录中…' : '登录' }}</button>
       </form>
 
-      <p class="muted tiny">mode={{ mode }} · 角色 CONSOLE_ADMIN / CONSOLE_VIEWER</p>
+      <p class="footer-meta muted tiny">mode={{ mode }} · VIEWER / OPERATOR / ADMIN</p>
     </div>
   </div>
 </template>
 
 <style scoped>
 .login {
-  min-height: 100vh; display: grid; place-items: center;
-  background: var(--bg, #0b1220);
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 1.5rem;
+  position: relative;
+  background:
+    radial-gradient(900px 480px at 20% 0%, var(--ambient-1), transparent 55%),
+    radial-gradient(700px 400px at 90% 20%, var(--ambient-2), transparent 50%),
+    var(--bg);
 }
-.card {
-  width: min(24rem, 92vw); display: flex; flex-direction: column; gap: 0.75rem;
-  padding: 1.5rem; border-radius: 12px; border: 1px solid var(--border, #1f2937);
-  background: var(--bg-elevated, #111827);
+.login-theme {
+  position: absolute;
+  top: 1rem;
+  right: 1rem;
 }
-.form { display: flex; flex-direction: column; gap: 0.75rem; }
-label { display: flex; flex-direction: column; gap: 0.25rem; font-size: 0.85rem; color: var(--text-muted); }
-input { padding: 0.5rem 0.65rem; border-radius: 8px; border: 1px solid var(--border); background: var(--bg-card); color: var(--text); }
+.login-card {
+  width: min(26rem, 94vw);
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+  padding: 1.65rem 1.5rem 1.35rem;
+  border-radius: var(--radius-xl);
+  border: 1px solid var(--border);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-lg);
+}
+.brand-row {
+  display: flex;
+  gap: 0.85rem;
+  align-items: center;
+}
+.mark {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  background: linear-gradient(145deg, #4f8cff, #2dd4bf);
+  display: grid;
+  place-items: center;
+  color: #fff;
+  box-shadow: 0 6px 18px rgba(79, 140, 255, 0.35);
+}
+h1 {
+  margin: 0;
+  font-size: 1.2rem;
+  letter-spacing: -0.02em;
+}
+.sub {
+  margin: 0.15rem 0 0;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+.hint {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
 .primary {
-  padding: 0.55rem 0.85rem; border-radius: 8px; border: none;
-  background: #2563eb; color: #fff; font-weight: 600; cursor: pointer;
+  margin-top: 0.35rem;
+  width: 100%;
+  padding: 0.65rem 0.85rem;
 }
-.primary:disabled { opacity: 0.6; cursor: not-allowed; }
 .sso { width: 100%; }
-.err { color: #ef4444; }
+.err { color: var(--danger); margin: 0.25rem 0; font-size: 0.85rem; }
 .muted { color: var(--text-muted); }
 .tiny { font-size: 0.75rem; }
+.footer-meta { margin: 0.25rem 0 0; }
 </style>

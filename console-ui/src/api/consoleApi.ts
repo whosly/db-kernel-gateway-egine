@@ -95,6 +95,13 @@ export function executeSql(
   )
 }
 
+/** In-flight console SQL executions (工作台执行中) for this instance. */
+export function listSqlExecutions(instanceId: string) {
+  return apiGet<{ instanceId?: string; items: import('./types').SqlExecutionRow[]; total: number }>(
+    `/instances/${encodeURIComponent(instanceId)}/sql/executions`,
+  )
+}
+
 export function cancelSql(instanceId: string, executionId: string) {
   return apiPost<SqlCancelResult>(
     `/instances/${encodeURIComponent(instanceId)}/sql/executions/cancel`,
@@ -367,3 +374,39 @@ export function listActiveAlerts(refresh = true) {
   return apiGet<import('./types').ActiveAlertsResponse>(`/alerts/active${q}`)
 }
 
+
+export function listInstanceAcl(instanceId: string) {
+  return apiGet<{ items: import('./types').InstanceAclBinding[]; total: number }>(
+    `/instances/${encodeURIComponent(instanceId)}/acl`,
+  )
+}
+
+export function replaceInstanceAcl(
+  instanceId: string,
+  items: import('./types').InstanceAclBindingPayload[],
+) {
+  return apiPut<{ items: import('./types').InstanceAclBinding[]; total: number }>(
+    `/instances/${encodeURIComponent(instanceId)}/acl`,
+    { items },
+  )
+}
+
+export function upsertInstanceAclBinding(
+  instanceId: string,
+  payload: import('./types').InstanceAclBindingPayload,
+) {
+  return apiPost<import('./types').InstanceAclBinding>(
+    `/instances/${encodeURIComponent(instanceId)}/acl/bindings`,
+    payload,
+  )
+}
+
+export function deleteInstanceAclBinding(instanceId: string, bindingId: string) {
+  return apiDelete<ActionResult>(
+    `/instances/${encodeURIComponent(instanceId)}/acl/bindings/${encodeURIComponent(bindingId)}`,
+  )
+}
+
+export function listAllAclBindings() {
+  return apiGet<{ items: import('./types').InstanceAclBinding[]; total: number }>('/acl/bindings')
+}

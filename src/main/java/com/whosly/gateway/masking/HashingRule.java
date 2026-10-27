@@ -1,17 +1,22 @@
 package com.whosly.gateway.masking;
 
+import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.util.EnumSet;
 import java.util.Objects;
 import java.util.Set;
+import java.util.UUID;
 
 /**
- * Replaces the value with a truncated SHA-256 digest.
+ * Replaces the value with a truncated SHA-256 digest, or a deterministic uuid
+ * derived from that digest.
  *
  * <p>Deterministic, so equal inputs stay equal and masked data can still be
- * grouped or joined. The output is hexadecimal ASCII, which is why the rule is
- * restricted to text columns.</p>
+ * grouped or joined. Text columns receive hexadecimal ASCII; uuid columns
+ * receive a canonical uuid string built from the first 16 digest bytes so the
+ * client's type model still accepts the value.</p>
  *
  * <p>The digest protects nothing if values are guessable: an unsalted digest of a
  * phone number is recoverable by enumeration. Supply a {@code salt} kept in a
@@ -25,6 +30,10 @@ public final class HashingRule extends AbstractMaskingRule {
 
     private static final int FULL_HEX_LENGTH = 64;
 
+    private static final Set<ColumnMetadata.Category> SUPPORTED = EnumSet.of(
+            ColumnMetadata.Category.TEXT,
+            ColumnMetadata.Category.UUID);
+
     private final int hexLength;
     private final byte[] salt;
 
@@ -33,7 +42,7 @@ public final class HashingRule extends AbstractMaskingRule {
     }
 
     /**
-     * @param hexLength number of hexadecimal characters to keep, 1..64
+     * @param hexLength number of hexadecimal characters to keep for text columns, 1..64
      * @param salt      secret prefix mixed into the digest; empty disables it
      */
     public HashingRule(String name, int priority, ColumnSelector selector, int hexLength, String salt) {
@@ -47,12 +56,12 @@ public final class HashingRule extends AbstractMaskingRule {
 
     @Override
     public Set<ColumnMetadata.Category> supportedCategories() {
-        return Set.of(ColumnMetadata.Category.TEXT);
+        return SUPPORTED;
     }
 
     @Override
     public boolean matches(ColumnMetadata column) {
-        return column.category() == ColumnMetadata.Category.TEXT && targets(column);
+        return SUPPORTED.contains(column.category()) && targets(column);
     }
 
     @Override
@@ -69,6 +78,11 @@ public final class HashingRule extends AbstractMaskingRule {
         }
         digest.update(salt);
         byte[] hash = digest.digest(original.bytes());
+        if (column.category() == ColumnMetadata.Category.UUID) {
+            ByteBuffer buffer = ByteBuffer.wrap(hash, 0, 16);
+            String uuid = new UUID(buffer.getLong(), buffer.getLong()).toString();
+            return MaskedValue.ofText(uuid, StandardCharsets.US_ASCII);
+        }
         String hex = java.util.HexFormat.of().formatHex(hash);
         return MaskedValue.ofText(hex.substring(0, hexLength), StandardCharsets.US_ASCII);
     }

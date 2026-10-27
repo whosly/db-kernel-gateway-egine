@@ -275,4 +275,35 @@ class InstanceSqlExecuteServiceTest {
             map.remove(execId);
         }
     }
+
+    @Test
+    void listRunningFiltersByInstanceAndExposesNoSecrets() {
+        String execA = "list-a-" + UUID.randomUUID();
+        String execB = "list-b-" + UUID.randomUUID();
+        @SuppressWarnings("unchecked")
+        var map = (java.util.concurrent.ConcurrentHashMap<String, InstanceSqlExecuteService.RunningExecution>)
+                ReflectionTestUtils.getField(service, "runningById");
+        map.put(execA, new InstanceSqlExecuteService.RunningExecution(
+                execA, "sql-h2", "SELECT 1; SELECT 2", 2, true, 33307, "app", "admin"));
+        map.put(execB, new InstanceSqlExecuteService.RunningExecution(execB, "other-instance"));
+        try {
+            List<Map<String, Object>> items = service.listRunning("sql-h2");
+            assertThat(items).hasSize(1);
+            Map<String, Object> item = items.get(0);
+            assertThat(item.get("executionId")).isEqualTo(execA);
+            assertThat(item.get("statementCount")).isEqualTo(2);
+            assertThat(item.get("proxyPort")).isEqualTo(33307);
+            assertThat(item.get("viaProxy")).isEqualTo(true);
+            assertThat(item.get("initiatedBy")).isEqualTo("admin");
+            assertThat(item.get("cancelRequested")).isEqualTo(false);
+            assertThat(item).doesNotContainKey("password");
+            assertThat(service.listRunning(null)).hasSize(2);
+
+            service.cancel("sql-h2", execA);
+            assertThat(service.listRunning("sql-h2").get(0).get("cancelRequested")).isEqualTo(true);
+        } finally {
+            map.remove(execA);
+            map.remove(execB);
+        }
+    }
 }

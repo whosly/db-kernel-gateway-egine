@@ -248,6 +248,7 @@ public class GatewayConfig implements DisposableBean {
 
     private AuditSpool auditSpool;
     private AuditShipper auditShipper;
+    private JdbcAuditDestination auditJdbcDestination;
 
     @Bean
     public SqlParser sqlParser() {
@@ -325,8 +326,21 @@ public class GatewayConfig implements DisposableBean {
             case "spool" -> {
             }
             case "jdbc" -> {
-                AuditDestination destination = new JdbcAuditDestination(
+                if (auditJdbcUrl == null || auditJdbcUrl.isBlank()) {
+                    throw new IllegalArgumentException(
+                            "gateway.audit.destination=jdbc requires gateway.audit.jdbc.url "
+                                    + "(lab: separate H2 file, not the proxied business DB)");
+                }
+                JdbcAuditDestination destination = new JdbcAuditDestination(
                         auditJdbcUrl, auditJdbcUsername, auditJdbcPassword, auditJdbcTable);
+                try {
+                    destination.ensureSchema();
+                } catch (Exception e) {
+                    throw new IllegalStateException(
+                            "Failed to ensure audit JDBC sink schema (see docs/sql/audit-sink-schema.sql): "
+                                    + e.getMessage(), e);
+                }
+                auditJdbcDestination = destination;
                 auditShipper = new AuditShipper(auditSpool, destination, new AuditShippingOffset(auditOffsetFile()),
                         auditShipBatchSize, auditShipIntervalMillis);
                 auditShipper.start();
@@ -668,6 +682,53 @@ public class GatewayConfig implements DisposableBean {
         } catch (Exception ignored) {
         }
         return null;
+    }
+
+    /** JDBC sink destination when destination=jdbc; null otherwise. */
+    public JdbcAuditDestination getAuditJdbcDestination() {
+        return auditJdbcDestination;
+    }
+
+    public AuditShipper getAuditShipper() {
+        return auditShipper;
+    }
+
+    public java.util.Map<String, Object> auditJdbcStatusSnapshot() {
+        java.util.Map<String, Object> m = new java.util.LinkedHashMap<>();
+        m.put("jdbcConfigured", isAuditJdbcConfigured());
+        m.put("jdbcTable", getAuditJdbcTable());
+        if (auditJdbcDestination != null) {
+            m.put("jdbcDialect", auditJdbcDestination.dialect().name());
+            m.put("jdbcUrlRedacted", auditJdbcDestination.urlRedacted());
+            m.put("jdbcRowsInserted", auditJdbcDestination.rowsInserted());
+            m.put("jdbcRowsSkippedDuplicate", auditJdbcDestination.rowsSkippedDuplicate());
+            Long count = auditJdbcDestination.countRows();
+            m.put("jdbcRowCount", count);
+            var last = auditJdbcDestination.lastShipAt();
+            m.put("jdbcLastShipAt", last != null ? last.toString() : null);
+            m.put("jdbcLastError", auditJdbcDestination.lastError());
+        } else {
+            m.put("jdbcDialect", null);
+            m.put("jdbcUrlRedacted", null);
+            m.put("jdbcRowsInserted", 0);
+            m.put("jdbcRowsSkippedDuplicate", 0);
+            m.put("jdbcRowCount", null);
+            m.put("jdbcLastShipAt", null);
+            m.put("jdbcLastError", isAuditJdbcConfigured() ? null : "jdbc url not set");
+        }
+        if (auditShipper != null) {
+            m.put("shipOffset", auditShipper.shippingOffset());
+            m.put("shipTotalShipped", auditShipper.totalShipped());
+            var shipLast = auditShipper.lastShipAt();
+            m.put("shipLastAt", shipLast != null ? shipLast.toString() : null);
+            m.put("shipLastError", auditShipper.lastError());
+        } else {
+            m.put("shipOffset", null);
+            m.put("shipTotalShipped", 0);
+            m.put("shipLastAt", null);
+            m.put("shipLastError", null);
+        }
+        return m;
     }
 
     public boolean isPoolEnabled() {

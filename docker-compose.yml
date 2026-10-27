@@ -4,6 +4,7 @@
 #   docker compose up -d --build
 # Open http://localhost:8080/console/
 # mysql client → 127.0.0.1:33307 ; psql → 127.0.0.1:35433
+# optional: docker compose --profile sqlserver up -d → host 11433 (SA Aa123456.)
 # Lab passwords only (Aa123456.) — not production-safe.
 
 services:
@@ -83,17 +84,25 @@ services:
       - gateway
 
 
-  # Optional lab stub — TDS P0 transparent proxy only; not deep Login7.
-  # Enable: docker compose --profile sqlserver up -d
-  # sqlserver:
-  #   profiles: ["sqlserver"]
-  #   image: mcr.microsoft.com/mssql/server:2022-latest
-  #   environment:
-  #     ACCEPT_EULA: "Y"
-  #     MSSQL_SA_PASSWORD: ${MSSQL_SA_PASSWORD:-Your_strong_Passw0rd}
-  #   ports:
-  #     - "11433:1433"
-  #   # Wire gateway instance listen 31433 → this service after enabling sqlserver profile YAML.
+  # Optional SQL Server lab (TDS). Enable:
+  #   docker compose --profile sqlserver up -d
+  # Host 11433 → container 1433. Wire gateway listen 31433 → localhost:11433
+  # (application-sqlserver-template.yml / local application-dev.yml).
+  # This environment may lack Docker/podman — unit tests do not require it.
+  sqlserver:
+    profiles: ["sqlserver"]
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: ${MSSQL_SA_PASSWORD:-Aa123456.}
+    ports:
+      - "11433:1433"
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P "$$MSSQL_SA_PASSWORD" -C -Q "SELECT 1" || /opt/mssql-tools/bin/sqlcmd -S localhost -U sa -P "$$MSSQL_SA_PASSWORD" -Q "SELECT 1" || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
 
 volumes:
   mysql_data:

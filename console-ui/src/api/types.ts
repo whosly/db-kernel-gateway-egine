@@ -292,6 +292,22 @@ export interface SessionRow {
   lastActivity?: string | null
 }
 
+/** In-flight console SQL workspace execution (cancel registry) — not a wire proxy session. */
+export interface SqlExecutionRow {
+  executionId: string
+  instanceId: string
+  sqlPreview?: string | null
+  statementCount?: number
+  currentStatementIndex?: number
+  startedAt?: string
+  elapsedMs?: number
+  viaProxy?: boolean
+  proxyPort?: number | null
+  targetUser?: string | null
+  initiatedBy?: string | null
+  cancelRequested?: boolean
+}
+
 export interface HealthCheckResult {
   ok: boolean
   latencyMs: number
@@ -329,6 +345,20 @@ export interface AuditStatus {
   recordsPendingHint?: number | null
   consoleAuditCount?: number
   help?: string
+  /** JDBC sink (destination=jdbc); password never present */
+  jdbcConfigured?: boolean
+  jdbcTable?: string
+  jdbcDialect?: string | null
+  jdbcUrlRedacted?: string | null
+  jdbcRowCount?: number | null
+  jdbcRowsInserted?: number
+  jdbcRowsSkippedDuplicate?: number
+  jdbcLastShipAt?: string | null
+  jdbcLastError?: string | null
+  shipOffset?: number | null
+  shipTotalShipped?: number
+  shipLastAt?: string | null
+  shipLastError?: string | null
 }
 
 export interface TrafficAuditEntry {
@@ -439,6 +469,24 @@ export interface AuthMeResponse {
   roles?: string[]
   permissions?: string[]
   mode?: string
+  instanceAclRestricted?: boolean
+  instanceAccess?: Record<string, string[]>
+}
+
+export interface InstanceAclBinding {
+  id: string
+  principalType: 'user' | 'role' | string
+  principal: string
+  instanceId: string
+  permissions: string[]
+  permissionsCsv?: string
+  updatedAt?: string | null
+}
+
+export interface InstanceAclBindingPayload {
+  principalType: string
+  principal: string
+  permissions: string[]
 }
 
 export interface AlertThreshold {

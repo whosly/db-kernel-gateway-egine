@@ -44,3 +44,9 @@ mvn spring-boot:run -Dspring-boot.run.profiles=dev
 
 若当前环境 **没有 Docker**，只能验证配置模板 / ClientRegistration 单测 / 文档；  
 完整浏览器 SSO 须在有 Docker 的机器上按上述步骤验收。
+
+## 自动化（可选）
+
+- 默认单测：`ConsoleOidcKeycloakLabArtifactsTest`（校验本目录 realm + compose + 模板，**不**要 Docker）。
+- 有 Engine 时：`mvn -Pintegration-test test -Dtest=ConsoleOidcKeycloakBrowserE2EIntegrationTest`
+  （discovery + password grant + authorize HTML；无 Docker 则 skip）。

@@ -4,9 +4,11 @@ import com.whosly.gateway.adapter.mysql.MySQLDatabaseEventExtractor;
 import com.whosly.gateway.adapter.mysql.MySQLFrameCodec;
 import com.whosly.gateway.adapter.mysql.MySQLResultSetMaskingInterceptor;
 import com.whosly.gateway.adapter.mysql.MySQLSession;
+import com.whosly.gateway.adapter.mysql.MySqlDeferredIdentityRouter;
 import com.whosly.gateway.adapter.mysql.MySqlGatewayErrorMapper;
 import com.whosly.gateway.adapter.protocol.BackendProvider;
 import com.whosly.gateway.adapter.protocol.ProbedHandshake;
+import com.whosly.gateway.adapter.protocol.RoutingBackendProvider;
 import com.whosly.gateway.adapter.protocol.RoutingContext;
 import com.whosly.gateway.adapter.protocol.DatabaseTrafficInspector;
 import com.whosly.gateway.adapter.protocol.DuplexRelay;
@@ -29,14 +31,12 @@ import java.util.UUID;
  *
  * <p><b>Routing identity (P1-4):</b> MySQL is server-first — the backend must send
  * the Initial Handshake before the client Handshake Response carries username /
- * database. Forging a greeting to delay {@link BackendProvider#acquire} would
- * violate the transparency rule (never forge handshake / auth). Therefore this
- * adapter acquires with {@link RoutingContext#empty()} and uses the fallback /
- * default endpoint list for the initial connect. {@code match-database} /
- * {@code match-username} rules do <em>not</em> select the first backend for MySQL.
- * Identity is still observed later from Handshake Response (see
- * {@link com.whosly.gateway.adapter.mysql.MySqlHandshakeResponseRouting}) for
- * session attributes / pool release snapshots.</p>
+ * database. Forging a greeting is forbidden. When the backend provider is a
+ * {@link RoutingBackendProvider} with rules, {@link MySqlDeferredIdentityRouter}
+ * forwards the <em>real</em> bootstrap greeting, parses Handshake Response, and
+ * either stays on fallback (transparent) or AuthSwitch-rebinds to the matched
+ * backend. Without routing rules, behaviour is unchanged: {@code acquire(empty)}
+ * then duplex.</p>
  */
 public class MySqlProtocolAdapter extends AbstractProtocolAdapter {
 
@@ -58,8 +58,9 @@ public class MySqlProtocolAdapter extends AbstractProtocolAdapter {
     }
 
     /**
-     * Server-first: no client bytes are available before backend greeting without
-     * forging. Always {@link ProbedHandshake#empty()}.
+     * Server-first: no client bytes before backend greeting without forging.
+     * Identity routing uses {@link MySqlDeferredIdentityRouter} after bootstrap
+     * acquire instead of this probe.
      */
     @Override
     protected ProbedHandshake probeClientForRouting(Socket clientSocket) {
@@ -73,26 +74,47 @@ public class MySqlProtocolAdapter extends AbstractProtocolAdapter {
         registerSession(session, clientSocket);
 
         BackendProvider backendProvider = backendProvider();
-        ProbedHandshake probed = probeClientForRouting(clientSocket);
-        Socket targetSocket;
+        Socket targetSocket = null;
+        byte[] clientPrefix = new byte[0];
+        RoutingContext routed = RoutingContext.empty();
+        boolean authAlreadyComplete = false;
         try {
-            // Intentionally empty context — see class javadoc (server-first limitation).
-            targetSocket = backendProvider.acquire(probed.context());
-        } catch (IOException e) {
-            log.warn("MySQL proxy session {} could not reach target {}:{}: {}",
+            // Bootstrap always empty — server-first; deferred router may rebind.
+            Socket bootstrap = backendProvider.acquire(RoutingContext.empty());
+            targetSocket = bootstrap;
+            if (backendProvider instanceof RoutingBackendProvider routing
+                    && !routing.rules().isEmpty()) {
+                MySqlDeferredIdentityRouter.Result deferred = MySqlDeferredIdentityRouter.route(
+                        clientSocket,
+                        bootstrap,
+                        routing,
+                        socket -> releaseBackend(backendProvider, socket, null));
+                targetSocket = deferred.backendSocket();
+                clientPrefix = deferred.clientToBackendPrefix();
+                routed = deferred.context();
+                authAlreadyComplete = deferred.rebound();
+                applyRoutedIdentity(session, routed);
+            }
+        } catch (IOException | GatewayException e) {
+            log.warn("MySQL proxy session {} could not complete backend route {}:{}: {}",
                     sessionId, targetHost, targetPort, e.getMessage());
             sendGatewayError(clientSocket, e);
             session.close();
             unregisterSession(session);
             closeQuietly(clientSocket);
+            if (targetSocket != null) {
+                releaseBackend(backendProvider, targetSocket, null);
+            }
             return;
         }
 
         try {
-            log.info("MySQL proxy session {} connected {} to target {}:{} (routing={})",
-                    sessionId, clientSocket.getRemoteSocketAddress(), targetHost, targetPort, probed.context());
+            log.info("MySQL proxy session {} connected {} to target {}:{} (routing={}, rebound={})",
+                    sessionId, clientSocket.getRemoteSocketAddress(), targetHost, targetPort,
+                    routed, authAlreadyComplete);
+            // After AuthSwitch rebind, handshake/auth already finished outside the relay.
             MySQLDatabaseEventExtractor extractor =
-                    new MySQLDatabaseEventExtractor(PROTOCOL_NAME, sessionId, false, session);
+                    new MySQLDatabaseEventExtractor(PROTOCOL_NAME, sessionId, authAlreadyComplete, session);
             DatabaseTrafficInspector trafficInspector = new DatabaseTrafficInspector(
                     extractor::inspect,
                     databaseTrafficObserver,
@@ -107,7 +129,7 @@ public class MySqlProtocolAdapter extends AbstractProtocolAdapter {
                             new MySQLResultSetMaskingInterceptor(extractor, maskingEngine))
                     : MessagePipeline.of(trafficInspector);
             new DuplexRelay(sessionId, pipeline, GATEWAY_ERROR_RESPONDER, rewriteLimits)
-                    .relay(clientSocket, targetSocket, probed.replayToBackend());
+                    .relay(clientSocket, targetSocket, clientPrefix);
         } catch (IOException e) {
             log.warn("MySQL proxy session {} closed: {}", sessionId, e.getMessage());
         } finally {
@@ -124,6 +146,18 @@ public class MySqlProtocolAdapter extends AbstractProtocolAdapter {
         log.warn("Rejecting MySQL client connection from {}", clientSocket.getRemoteSocketAddress());
         sendGatewayError(clientSocket, new GatewayException(GatewayErrorMapping.RESOURCE_EXHAUSTED));
         closeQuietly(clientSocket);
+    }
+
+
+    private static void applyRoutedIdentity(MySQLSession session, RoutingContext routed) {
+        if (routed == null || routed.isEmpty()) {
+            return;
+        }
+        routed.username().ifPresent(user -> session.putAttribute("client.user", user));
+        routed.database().ifPresent(db -> {
+            session.putAttribute("client.database", db);
+            session.setCurrentDatabase(db);
+        });
     }
 
     private static void sendGatewayError(Socket clientSocket, Throwable cause) {
